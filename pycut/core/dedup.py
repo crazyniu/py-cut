@@ -722,19 +722,24 @@ def _probe_size(path: Path) -> tuple[int, int]:
 
 
 def _video_duration(path: Path) -> float:
-    """取**视频流**时长（秒），失败返回 0。
+    """取**视频流**时长（秒），读不到返回 0（调用方需走兜底）。
 
-    不能用 `format=duration`：那是容器里最长的一条流的长度。若只改了视频流
-    而音频未同步（例如音轨处理失败、或只做 crop 未变速），format 取的是
-    未变的音频时长，会把视频侧的偏差完全抹平——实测只 setpts/1.05 而音频不变时
-    format=39.77（音频）而 v:0=37.93（视频真实值），Δ 被抹成 1.83s；
-    更极端时 Δ 直接算成 0。时长校验必须反映画面真实时长，故只读视频流。
+    为什么不用 `format=duration`：那是容器里最长一条流的长度。只改视频流而音频
+    未同步时（音轨处理失败、或只做 crop 未变速），format 取的是未变的音频时长，
+    会把视频侧的偏差完全抹平。实测 56.96s 素材只做 `setpts/1.05`、音频 copy：
+    产物 v:0=54.30（真实）、a:0=56.93、format=56.93——用 format 算Δ 只有 0.03s，
+    用视频流算才是 2.66s。偏差被抹到 0.03s 时门禁形同虚设，故只读视频流。
 
-    注意：`stream.duration` **不会**因为 fps 重采样而消失（实测 fps=60/ 30000/1001 /
-    30003/1000 / 24000/1001 四种重采样后该字段均正常给出），所以读不到值的真正
-    原因是**容器/muxer 差异**：实测同一视频写 mp4 有值、写 mkv 则返回 `N/A`。
-    此时才由 `_probe_fallback_duration` 兜底（数帧/帧率 -> format），
-    实测 mkv 场景能从 `N/A` 正确恢复出3.000s。
+    读不到值时**必须**走 `_probe_fallback_duration`、不能拿 0 直接参与门禁：
+    `dur_ok` 判的是 `|dur_dst - dur_src| <= 容差`，dur_dst=0 必然超限，会把整批
+    正常文件全判成「时长不达标」——这是 100% 触发的假失败，比误报更糟（误报能
+    靠人眼复核，确定性误判会让人直接怀疑整个工具）。
+
+    实测哪些容器读不到（ffprobe 9.0.2，同一素材仅换 muxer）：
+        mp4 / mov / mpegts  -> 有值（`-c copy`、带不带音轨都一样）
+        matroska(.mkv) / flv -> `N/A`   <- 会走兜底
+    另外 `stream.duration` **不会**因 fps 重采样而消失（实测 fps=60 / 30000/1001 /
+    30003/1000 / 24000/1001 四种均正常给出），fps 不是字段缺失的原因。
     """
     rc, out, _err = run_cmd(
         [FFPROBE, "-v", "error", "-select_streams", "v:0",
@@ -751,9 +756,9 @@ def _video_duration(path: Path) -> float:
 def _probe_fallback_duration(path: Path) -> float:
     """`_video_duration` 读不到值时的兜底（防御性，正常路径不会走到）。
 
-    存在的理由：`stream=duration` 并非在所有容器上都可靠——实测同一视频
-    写 mp4 有值、写 **mkv 返回 `N/A`**，此时若直接返回 0 会让时长门禁失效。
-    顺序：**先数帧/帧率（最准）-> 再试 stream=duration -> 最后 format**。
+    存在的理由：`stream=duration` 并非在所有容器上都可靠——实测 matroska(.mkv)
+    与 flv 返回 `N/A`（mp4/mov/mpegts 有值），此时若直接返回 0 会让时长门禁
+    假失败。顺序：**先数帧/帧率（最准）-> 再试 stream=duration -> 最后 format**。
     `format=duration` 是容器里最长流的长度，音视频不同步时会给错值
     （实测只做 setpts 时 format 取的是未变的音频时长），只能当最后兜底。
 
