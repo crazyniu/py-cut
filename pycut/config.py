@@ -5,7 +5,34 @@
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# .env 加载（纯标准库，无第三方依赖）
+#   用户只需在 .env 里配置 DEEPSEEK_API_KEY 即可；.env 已被 git 忽略。
+#   真实 shell 环境变量优先于 .env；.env 只补充未设置的变量。
+# ---------------------------------------------------------------------------
+def _load_dotenv() -> None:
+    env_path = PROJECT_ROOT / ".env"
+    if not env_path.is_file():
+        return
+    try:
+        with open(env_path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip()
+                if not k:
+                    continue
+                v = v.strip("\"'")            # 去掉可能的引号包裹
+                os.environ.setdefault(k, v)   # 不覆盖已存在的真实环境变量
+    except OSError:
+        pass
+
 
 # ---------------------------------------------------------------------------
 # 外部工具（ffmpeg-full 由 homebrew 安装，含 videotoolbox 硬件编码）
@@ -19,6 +46,8 @@ FFPROBE = "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe"
 #   产出  ：桌面两个分桶目录（有人脸 / 无人脸）+ 清单目录
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent          # pycut/.. => 项目根
+_load_dotenv()   # 在读取任何密钥前加载 .env（用户只需在 .env 配置 DEEPSEEK_API_KEY）
+
 SRC_DIR = Path("/Volumes/Lexar/DevStorage/剪辑/爆款素材/抖音")
 DESKTOP = Path.home() / "Desktop"
 OUT_FACE = DESKTOP / "切片_有人脸"
@@ -53,21 +82,25 @@ WORKERS_ENC = 2          # 1080p 实测 2 是拐点
 
 # ---------------------------------------------------------------------------
 # LLM 网关预设（OpenAI 兼容协议）
+#   默认 deepseek（官方公网，稳定，支持图像）。用户只需配置 DEEPSEEK_API_KEY
+#   （环境变量或项目根 .env 文件，见 .env.example）；硬编码值为本机回退。
 #   --gateway 选择预设；命令行 --llm-url / --llm-key / --llm-model 可单独覆盖。
 # ---------------------------------------------------------------------------
 GATEWAYS = {
     "local": {  # 局域网网关（快，但偶发 502/503/超时）
         "url": "http://192.168.1.250:20128/v1",
-        "key": "sk-REDACTED_LOCAL-e76438-796176a8",
+        "key": os.environ.get("PYCUT_LOCAL_KEY",
+                              "sk-REDACTED_LOCAL-e76438-796176a8"),
         "model": "deepseek-v4.1-flash",
     },
-    "deepseek": {  # 官方备用网关（公网，稳定，支持图像）
+    "deepseek": {  # 官方 DeepSeek 网关（公网，默认）
         "url": "https://api.deepseek.com/v1",
-        "key": "sk-REDACTED_DEEPSEEK",
+        "key": os.environ.get("DEEPSEEK_API_KEY",
+                              "sk-REDACTED_DEEPSEEK"),
         "model": "deepseek-flash",
     },
 }
-DEFAULT_GATEWAY = "local"
+DEFAULT_GATEWAY = "deepseek"
 WORKERS_LLM = 8          # 实测比 4 快 19 倍
 LLM_MAX_TOKENS = 500     # 推理模型：30 会被 reasoning 吃光返回空
 LLM_MAX_TOKENS_RETRY = 1200

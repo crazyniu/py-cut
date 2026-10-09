@@ -1,11 +1,11 @@
-# Agent.md —— 给 AI 协作者的项目规范
+# AGENTS.md —— 给 AI 协作者的项目规范
 
 本文件是 AI（含本会话 agent）修改、扩展本项目时的**强制约定**。动手前先通读。
 
 ## 0. 一句话定位
 
 `pycut` 是一个**长期维护**的短视频本地处理工具箱。当前只实现 `slice`（切片），
-后续要加 `montage`（混剪）、转场贴纸、平台查重等。**所有功能都从 `pycut.py` 入口以子命令执行。**
+后续要加 `montage`（混剪）、转场贴纸、平台查重等。**所有功能都从 `pycut.py` 入口以子命令执行，参数既支持命令行参数，也支持终端 TUI 交互输入。**
 
 ## 1. 运行环境（硬性，违反即跑不起来）
 
@@ -20,17 +20,24 @@
 
 - 逻辑按职责拆进 `pycut/core/`（与命令编排解耦）。**不要把多个功能塞进一个文件。**
 - 命令实现只在 `pycut/commands/`，每个模块暴露 `register(subparsers)` 与 `run(args)`。
-- 新增功能 = 新建 `commands/xxx_cmd.py` + 在 `cli.py` 的 `COMMANTS` 注册表登记。
+- 新增功能 = 新建 `commands/xxx_cmd.py` + 在 `cli.py` 的 `COMMANDS` 注册表登记。
 - QA / 一次性工具放 `tools/`；测试放 `tests/`；规划放 `docs/`。
 
 ## 3. 配置与常量
 
 - 所有标定过的数值在 `pycut/config.py`（场景阈值 `SCENE_TH=0.30`、最短段 `MIN_SEG=2.0`、
-  网关预设、编码码率等）。**未经重新标定不要改这些数值**——它们是本地实测得到的。
+  编码码率等）。**未经重新标定不要改这些数值**——它们是本地实测得到的。
 - LLM 走 **OpenAI 兼容协议**，用**纯标准库 urllib**（环境没装 openai/requests）。
   新增 LLM 调用复用 `core/llm.py` 的 `LLMClient.ask_vision(frame, prompt)`。
-- 网关预设 `local`（局域网，快但偶发 502/503）/ `deepseek`（公网备用）。
-  `--gateway` 选择，`--llm-url/-key/-model` 覆盖。
+- **模型固定用 DeepSeek**：`config.DEFAULT_GATEWAY = "deepseek"`（官方公网，稳定，支持图像）。
+  **用户使用只需配置密钥**：在项目根新建 `.env`，填入
+  `DEEPSEEK_API_KEY=sk-xxxx`（或导出同名环境变量）。`.env` 已被 git 忽略，
+  模板见 `.env.example`。局域网备用网关 `local` 同理可用 `PYCUT_LOCAL_KEY` 覆盖。
+  `--gateway` 选择预设，`--llm-url/-key/-model` 覆盖。
+- **参数两种入口（等价）**：
+  - 命令行：`python3 pycut.py slice --file X --scene-th 0.35`
+  - 终端 TUI：直接 `python3 pycut.py`（无参数且为交互终端即进入），方向键选命令/改参数，R 运行。
+    TUI 与 CLI 共用 `cli.build_parser()` 的参数定义，改一方另一方自动同步。
 
 ## 4. 切片流水线（当前唯一落地功能）
 
@@ -50,11 +57,12 @@
 - **字幕擦除**不要用毛玻璃/中值净底：动态背景下中值会出块状伪影；掩膜法只动文字像素。大号艺术标题字形内部偏平滑是经典算法极限，要无痕需 AI 修复（ProPainter/LaMa，慢百倍），列为可选 `--quality high`（未实现）。
 - **幂等**：字幕已处理写 `<切片>.covered.json`；重跑须先按清单切割点从源视频还原原片，否则会把填补区当"模糊文字"误判。
 - `ffprobe avg_frame_rate` 可能带音频流的 `0/0` 行 → 取首行（`subtitle.cover_clip` 已处理）。
+- **密钥不要硬编码提交**：新增网关/换 key 走 `.env` 或环境变量，禁止把明文 key 写进 `config.py` 后提交（现有 fallback 值是本机遗留，新部署必须走 `.env`）。
 
 ## 6. 改动流程
 
-1. 读 `Agent.md` + 相关 `core/` 模块，确认复用点。
-2. 小步修改，**先 dry-run / 单视频试跑**再批量（如 `slice --file X --dry-run`）。
+1. 读 `AGENTS.md` + 相关 `core/` 模块，确认复用点。
+2. 小步修改，**先 dry-run / 单视频试跑**再批量（如 `slice --file X --dry-run`，或 TUI 里勾选 dry-run）。
 3. 跑 `tools/verify.py` 做独立质检（不信任 slicer 自己的清单）。
 4. 改完更新 `README.md` / `ROADMAP.md` / 本文件（如有约定变化）。
 5. 提交 git（本仓库根目录 `pycut/` 已 `git init`）。
@@ -65,3 +73,4 @@
 - 不要引入 openai/requests/ffmpeg-python 等未安装依赖（保持标准库 + cv2 + numpy）。
 - 不要把用户的桌面产出（切片目录、清单）纳入 git（它们不在仓库内，且属个人数据）。
 - 不要改动 `config.py` 里的标定数值，除非重新实测并写明依据。
+- 不要把明文 API Key 提交进仓库（用 `.env` / 环境变量）。

@@ -9,8 +9,9 @@ pycut/
 ├── pycut.py                # 统一入口（命令行，后续演进为 TUI）
 ├── pyproject.toml          # 包元数据
 ├── .gitignore
-├── Agent.md                # 给 AI 协作的规范（务必先读）
+├── AGENTS.md               # 给 AI 协作的规范（务必先读，AI 工具自动识别）
 ├── README.md
+├── .env.example            # 密钥模板（复制为 .env 并填 DEEPSEEK_API_KEY）
 ├── docs/
 │   └── ROADMAP.md          # 后续功能规划（混剪 / 转场 / 查重）
 ├── pycut/                  # 主包
@@ -41,20 +42,49 @@ pycut/
   **不要进 venv**（会丢失 cv2）。
 - **ffmpeg**：homebrew 安装的 `ffmpeg-full`（含 videotoolbox 硬件编码），路径见 `config.py`。
 
+## 配置（只需配密钥）
+
+模型固定用 **DeepSeek**（默认网关，公网稳定、支持图像）。用户只需配置密钥：
+
+```bash
+cp .env.example .env
+# 编辑 .env，填入你的密钥：
+#   DEEPSEEK_API_KEY=sk-xxxx
+```
+
+也可直接导出环境变量 `export DEEPSEEK_API_KEY=sk-xxxx`（优先级高于 `.env`）。
+`.env` 已在 `.gitignore` 中，不会被提交。局域网备用网关 `local` 用
+`PYCUT_LOCAL_KEY` 覆盖，默认不必配置。
+
 ## 用法
+
+参数**既支持命令行，也支持终端 TUI 交互**（两条等价）。
+
+### 方式一：终端 TUI（交互，推荐）
+
+```bash
+python3 pycut.py          # 无参数且为交互终端 -> 进入 TUI
+python3 pycut.py tui      # 显式进入 TUI
+```
+
+- 方向键选功能（slice / cover），回车进入参数表
+- `↑/↓` 移动参数，`Enter` 编辑数值 / 切换开关（如 `--dry-run`、网关在 local↔deepseek 间循环）
+- `R` 运行，`Q` 返回/退出；非交互环境（管道）自动回退命令行帮助
+
+### 方式二：命令行
 
 ```bash
 # 试跑单个视频：只检测分段，不产出（先看切点是否合理）
 python3 pycut.py slice --file "财源滚滚来__ (1)" --dry-run
 
-# 正式切片（默认 local 网关；公网稳定用 deepseek）
-python3 pycut.py slice --gateway deepseek
+# 正式切片（默认 deepseek 网关；也可用 --gateway local）
+python3 pycut.py slice
 
 # 只处理前 3 个视频
 python3 pycut.py slice --limit 3
 
 # 补跑 / 重跑字幕擦除（--force 忽略已遮盖标记）
-python3 pycut.py cover --all --gateway deepseek
+python3 pycut.py cover --all
 ```
 
 ## 当前功能：slice
@@ -75,5 +105,5 @@ python3 pycut.py cover --all --gateway deepseek
 
 ## 给协作者
 
-改代码前先读 **Agent.md**。新增功能 = 在 `pycut/commands/` 加一个命令模块并在
+改代码前先读 **AGENTS.md**。新增功能 = 在 `pycut/commands/` 加一个命令模块并在
 `cli.py` 的 `COMMANDS` 注册表登记；复用 `pycut/core/` 的成熟能力，不要在命令层重复造轮子。

@@ -38,6 +38,16 @@ def list_commands() -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+
+    # TUI 启动器：显式 `tui` 子命令，或无子命令且为交互终端时进入
+    if argv and argv[0] == "tui":
+        from . import tui  # noqa: PLC0415
+        return tui.run()
+    if not argv and sys.stdin.isatty():
+        from . import tui  # noqa: PLC0415
+        return tui.run()
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
