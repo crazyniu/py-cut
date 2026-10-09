@@ -1,0 +1,19 @@
+[project]
+name = "pycut"
+version = "0.1.0"
+description = "短视频智能处理工具箱：切片 / 混剪 / 转场 / 查重"
+readme = "README.md"
+requires-python = ">=3.13"
+# 依赖由「自带 cv2 的托管解释器」提供（cv2 / numpy / ffmpeg-full）。
+# 不在此处 pin，避免污染用户环境；详见 Agent.md。
+dependencies = []
+
+[project.scripts]
+pycut = "pycut.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["pycut", "pycut.core", "pycut.commands"]

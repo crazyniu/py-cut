@@ -1,0 +1,23 @@
+# ---- Python 通用 ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 本机 / 系统 ----
+.DS_Store
+.workbuddy/            # 项目记忆（含个人/会话信息，不入库）
+
+# ---- 运行副产物（切片 / 遮盖过程文件，通常落在桌面而非仓库）----
+*.tmp.mp4
+*.tmp_cover.mp4
+*.covered.json
+.workbuddy
+.workbuddy/**
