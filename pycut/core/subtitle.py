@@ -124,6 +124,14 @@ def detect_region(llm: LLMClient, clip: Path,
     y1 = max(0.0, y1 - PAD_Y * (y2 - y1))
     y2 = min(1.0, y2 + PAD_Y * (y2 - y1))
 
+    # 边缘吸附：框贴近视图左右边缘时延伸到边缘 —— 大标题的装饰/发光常出血到画外，
+    # LLM 框往往从可见文字主体量起，漏掉贴边部分（实测左缘残留蓝色装饰）。
+    EDGE_GLUE = 0.10
+    if x1 <= EDGE_GLUE:
+        x1 = 0.0
+    if x2 >= 1.0 - EDGE_GLUE:
+        x2 = 1.0
+
     # 像素化 + 偶数对齐（h264 要求偶数尺寸）
     X, Y = int(x1 * W), int(y1 * H)
     BW, BH = int((x2 - x1) * W), int((y2 - y1) * H)
