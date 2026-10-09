@@ -79,8 +79,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
     if opts.srt and Path(opts.srt).is_file():
         from ..core.montage_subtitles import parse_srt  # noqa: PLC0415
         try:
-            with contextlib_suppress():
-                cues = parse_srt(opts.srt)
+            cues = parse_srt(opts.srt)
             if cues:
                 # 关键：用**字幕自己的**最小可读时长（0.8s），不是片段的 min_clip(1.2s)。
                 # 实测 56 条字幕里 27 条短于 1.2s，按1.2 卡会丢一半；
@@ -266,16 +265,6 @@ def _burn_subtitles(video: Path, slots: list[tuple[float, float]],
 # ---------------------------------------------------------------------------
 # 内部工具
 # ---------------------------------------------------------------------------
-class contextlib_suppress:
-    """最小化抑制上下文（避免为一个 except 多引一个模块）。"""
-
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, *exc) -> bool:
-        return True
-
-
 def _slots_from_cues(cues, target: float, min_slot: float) -> list[tuple[float, float]]:
     """按字幕条数切时间槽：一条字幕 = 一个槽，槽长 = 该字幕时长。
 
