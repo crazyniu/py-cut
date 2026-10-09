@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import config
-from .utils import log
+from ..core.utils import log
 
 
 @dataclass
@@ -42,12 +42,13 @@ def run_pipeline(opts: MontageOptions) -> dict:
     返回键：source_duration / segments / clips_used / clips_reused /
             pip_count / final_duration / final / base（步骤B 中间产物路径）
     """
-    from .dedup_presets import derive_seed  # noqa: PLC0415 复用已有的 seed 派生
-    from .montage_clips import (build_concat_cmd, build_source_clip_cmd,  # noqa: PLC0415
-                                pick_clips, scan_library)
-    from .montage_pip import (build_pip_cmd, plan_pip_timeline,  # noqa: PLC0415
-                              scan_dedup_pool)
-    from .montage_source import plan_clip_slots, probe_source  # noqa: PLC0415
+    from ..core.dedup_presets import derive_seed  # noqa: PLC0415 复用已有的 seed 派生
+    from ..core.montage_clips import (concat_clips,  # noqa: PLC0415
+                                      pick_clips, scan_library)
+    from ..core.montage_pip import (build_pip_cmd,  # noqa: PLC0415
+                                    plan_pip_timeline, scan_dedup_pool)
+    from ..core.montage_source import (plan_clip_slots,  # noqa: PLC0415
+                                       probe_source)
 
     seed = opts.seed if opts.seed else derive_seed(opts.source)
     log(f"[seed] {seed}")
@@ -67,13 +68,28 @@ def run_pipeline(opts: MontageOptions) -> dict:
     log(f"  基准: {prof.duration:.2f}s  {prof.width}x{prof.height}  "
         f"语音段 {len(prof.segments)} 个  有声 {prof.speech_total:.1f}s")
 
-    # 画布以基准视频实测为准（config 的 MONTAGE_CANVAS 只是默认值）
+    # 画布以基准视频实测为准（config的 MONTAGE_CANVAS 只是默认值）
     canvas = (prof.width, prof.height)
     target = prof.duration * opts.fill_ratio
     slots = plan_clip_slots(prof.segments, target, fill_ratio=opts.fill_ratio,
                             min_slot=opts.min_clip, max_slot=opts.max_clip)
-    log(f"  时间槽 {len(slots)} 个，累计 {sum(b - a for a, b in slots):.2f}s"
+    slot_total = sum(b - a for a, b in slots)
+    log(f"  时间槽 {len(slots)} 个，累计 {slot_total:.2f}s"
         f"（目标 {target:.2f}s）")
+
+    # 基准视频带持续背景音乐，silencedetect 只能切出有限几段（实测 -32dB 只有 1 段），
+    # 槽合计会远小于目标时长。这里按「剩余量均分成整段」补齐——
+    # 补出来的槽取自基准视频的**连续区间**（不是语音段），画面上表现为
+    # 「说话时优先跟语音节奏，静音/音乐段用连续画面填满」，时长因此能对齐。
+    if slot_total < target - opts.min_clip:
+        need = target - slot_total
+        extra = _fill_slots(slots, need, opts.min_clip, opts.max_clip,
+                            prof.duration)
+        log(f"  语音段只覆盖 {slot_total:.2f}s，缺口 {need:.2f}s "
+            f"→ 补 {len(extra)} 个连续槽")
+        slots.extend(extra)
+    log(f"  最终时间槽 {len(slots)} 个，累计 "
+        f"{sum(b - a for a, b in slots):.2f}s（目标 {target:.2f}s）")
 
     result = {
         "source_duration": prof.duration,
@@ -113,18 +129,13 @@ def run_pipeline(opts: MontageOptions) -> dict:
         log(f"  [提示] 素材不足以填满目标，缺口 {picked[0]['shortfall']:.2f}s")
 
     base = tmp / f"base_{seed}.mp4"
-    # 片段库直接拼（不是从基准视频取画面）——基准视频只提供时长与节奏
-    cmd, concat_list = build_concat_cmd(picked, base, canvas=canvas,
-                                        fps=config.MONTAGE_FPS, crf=opts.crf)
-    log(f"  拼接 {len(picked)} 段 -> {base.name}")
-    ok = _run(cmd)
-    if concat_list:
-        _unlink(concat_list)
-    if not ok or not base.is_file():
-        log("  [失败] 拼接失败")
+    # 用 montage_clips.concat_clips（内部完成「分段截取 → concat → 原子替换」两阶段）
+    r = concat_clips(picked, base, canvas=canvas, fps=config.MONTAGE_FPS, crf=opts.crf)
+    if not r.get("ok") or not base.is_file():
+        log(f"  [失败] 拼接失败: {r.get('error') or '产物未生成'}")
         result["error"] = "步骤B 拼接失败"
         return result
-    log(f"  步骤B 产出: {base.name}  {_size(base)}")
+    log(f"  步骤B 产出: {base.name}  {_size(base)}  {r.get('duration', 0):.2f}s")
     result["base"] = str(base)
     result["clips_used"] = len(picked)
     result["clips_reused"] = reused
@@ -181,6 +192,59 @@ def run_pipeline(opts: MontageOptions) -> dict:
 # ---------------------------------------------------------------------------
 # 内部工具
 # ---------------------------------------------------------------------------
+def _fill_slots(slots: list[tuple[float, float]], need: float,
+                min_slot: float, max_slot: float,
+                src_duration: float) -> list[tuple[float, float]]:
+    """为剩余时长补齐连续时间槽（取自基准视频的连续区间）。
+
+    背景：爆款视频常带持续背景音乐，silencedetect 切不出足够的语音段
+    （实测 -32dB 时整条只切出 1 段 8s，目标却是 75.8s）。
+    这里把缺口切成**接近 mix 的节奏**的碎槽——混剪观感的关键是「碎片感」，
+    一段 13 秒的素材看起来像没剪，所以这里的上限按 min(max_slot, 补齐均分) 控制。
+    时间位置从基准视频里**未被语音段占用**的区间顺序取，避免与已有槽重叠。
+    """
+    if need <= 0 or max_slot <= 0:
+        return []
+    used = sorted(slots)
+    free: list[tuple[float, float]] = []
+    cur = 0.0
+    for s, e in used:
+        if s > cur:
+            free.append((cur, s))
+        cur = max(cur, e)
+    if cur < src_duration:
+        free.append((cur, src_duration))
+    free = [(s, e) for s, e in free if e - s >= min_slot]
+
+    # 补齐段的粒度：不超过 max_slot，且让段数足够多（碎节奏）。
+    # 目标每段 ≈ 4s，但至少要能填满 need。
+    seg_cap = min(max_slot, max(min_slot, need / 8.0))
+    out: list[tuple[float, float]] = []
+    left = need
+    for fs, fe in free:
+        avail = fe - fs
+        if avail < min_slot or left <= 0:
+            continue
+        n = max(1, int(round(avail / seg_cap)))
+        seg = avail / n
+        while seg > max_slot:          # 段长超上限就多分几段
+            n += 1
+            seg = avail / n
+        for i in range(n):
+            if left <= 0:
+                break
+            length = min(seg, left)
+            if length < min_slot:
+                break
+            out.append((fs + i * seg, fs + i * seg + length))
+            left -= length
+    if out:
+        log(f"[步骤A] 连续补槽 {len(out)} 个（每段约 {seg_cap:.1f}s），累计 "
+            f"{sum(e - s for s, e in out):.2f}s"
+            + (f"，仍缺 {left:.2f}s" if left > 0.05 else ""))
+    return out
+
+
 def _run(cmd: list[str]) -> bool:
     """执行 ffmpeg 命令（列表形式，不经 shell）。失败只返回 False。"""
     import subprocess  # noqa: PLC0415
@@ -204,12 +268,12 @@ def _unlink(p) -> None:
 
 
 def _size(p: Path) -> str:
-    from .utils import fmt_bytes  # noqa: PLC0415
+    from ..core.utils import fmt_bytes  # noqa: PLC0415
     return fmt_bytes(Path(p).stat().st_size)
 
 
 def _duration(p: Path) -> float:
-    from .ffmpeg import probe_scalar  # noqa: PLC0415
+    from ..core.ffmpeg import probe_scalar  # noqa: PLC0415
     try:
         return float(probe_scalar(Path(p), "format=duration"))
     except (TypeError, ValueError):

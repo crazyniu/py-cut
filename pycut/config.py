@@ -234,7 +234,12 @@ MONTAGE_RATIO_TOLERANCE = 0.12
 MONTAGE_MAX_SIDE_RATIO = 1.40       # w/h 超过 1.40 视为横屏
 
 # 语音切分（silencedetect）
-MONTAGE_SILENCE_NOISE_DB = -32      # 静音阈值 dB
+# 阈值实测（基准 1.mp4 77.32s / 有持续背景音乐，volumedetect: mean -13.6dB、max 0.0dB）：
+#   -32dB → 0 段静音（整条被判连续语音，截成 1 个 8s 槽，缺口 67.8s）
+#   -25dB → 3 段；-22dB → 6 段；-20dB → 7 段（语音合计 43.1s，槽最碎）
+# 素材带 BGM 时音量不往下掉，阈值必须比常规语音高得多，否则切不出节奏。
+# 取 -20dB：槽数最多、碎片感最强，配合 _fill_slots 补齐后节奏最自然。
+MONTAGE_SILENCE_NOISE_DB = -20     # 静音阈值 dB
 MONTAGE_SILENCE_MIN_DUR = 0.35      # 静音最短持续秒数，短于此不算断句
 # 语音段最短保留时长（太碎的段丢弃，避免切出 0.2s 的闪帧）
 MONTAGE_SEG_MIN_DUR = 0.8
