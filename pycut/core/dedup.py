@@ -779,14 +779,18 @@ def _probe_fallback_duration(path: Path) -> float:
 
     代价：`-count_frames` 需解码全片，实测 695ms，仅在主路径失败时触发。
 
-    边界（fp-dev查证后报备，本机ffprobe 9.0.2 实测均未出现，故**不加防御代码**）：
-    `float()` 遇`nan`/`inf` 不抛异常，会一路绕过 `dur_unknown` 与 `dur_ok` 两道
-    判定、直接把报告写成「nan s」。实测 mp4/mkv/flv/mpegts + 极短视频（0.067s）
-    的 duration 只出现「正常数值」或 `N/A`，无 nan/inf。
-    另有一条同源入口：本函数 `frames / fps`，而 `_fps_to_float('nan')` 返回
-    nan 且 `bool(nan)` 为 True，故 `or 30.0` 兜不住（`0/0` 能兜住，实测五种容器
-    + 全部真实切片的 `avg_frame_rate` 均为 `30/1`，无 `0/0`）。真要防就加
-    `math.isfinite`。
+    边界（fp-dev 报备后复核，本机 ffprobe 9.0.2 实测 nan/inf 不可达，故**不加防御
+    代码**）：`float()` 遇 `nan`/`inf` 不抛异常，会一路绕过 `dur_unknown` 与
+    `dur_ok` 两道判定、直接把报告写成「nan s」。实测 mp4/mkv/flv/mpegts + 极短视频
+    （0.067s）的 duration 只有「正常数值」或 `N/A` 两类。
+    另有一条同源入口：本函数 `frames / fps`，而 `_fps_to_float('nan')` 返回 nan、
+    且 `bool(nan)` 为 True，故 `or 30.0` 兜不住（`or` 只拦假值，nan 是真值）。
+    真要防就加 `math.isfinite`。
+    注意 `0/0` 这条**确实会出现**：本机切片实测 12 个里 10 个的
+    `probe_scalar(stream=avg_frame_rate)` 返回 `'30/1\n0/0'`（**有音轨的才有**，
+    无音轨的 002.mp4 只返回 `'30/1'`），即 AGENTS.md 第 5 节记载的同一现象。
+    本函数靠两点挡住：`splitlines()[0]` 取首行拿到真正的 `30/1`；即使拿到 `0/0`，
+    `_fps_to_float` 返回 0.0 也会被 `or 30.0` 兜住（`30/0` 同理，见函数内 `if b`）。
     """
     rc, out, _err = run_cmd(
         [FFPROBE, "-v", "error", "-select_streams", "v:0", "-count_frames",
