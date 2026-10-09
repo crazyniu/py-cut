@@ -572,11 +572,15 @@ def _gates(item: _Report, opts: DedupOptions, speed: float) -> dict:
     structural = bool(p.get("border") or p.get("mirror") or p.get("logo"))
     psnr_floor = opts.psnr_min / 2.0 if structural else opts.psnr_min
     psnr_ok = item.psnr >= psnr_floor
-    dur_ok = abs(item.dur_dst - item.dur_src) <= tol
+    # 时长取不到（容器无该字段且兜底也失败）时，0 会被算成「偏差 = 整片时长」，
+    # 报「时长不达标」是误导——真实原因是探测失败。故单列一档并从判定中剔除。
+    dur_unknown = item.dur_dst <= 0
+    dur_ok = True if dur_unknown else abs(item.dur_dst - item.dur_src) <= tol
     gates = {"phash_ok": bool(phash_ok), "psnr_ok": bool(psnr_ok),
              "dur_ok": bool(dur_ok), "dur_tolerance": round(tol, 3),
              "phash_threshold": round(need, 2),
              "psnr_floor": round(psnr_floor, 2), "structural": structural,
+             "dur_unknown": dur_unknown,
              "align": "frame"}
     # 超出期望区间上限 = 改动过头（常见于开了结构层/镜像），只提示不判失败
     span = config.DEDUP_PHASH_EXPECT.get(
@@ -600,7 +604,10 @@ def _gate_error(item: _Report, gates: dict, opts: DedupOptions) -> str:
                    f"（几何/结构改动导致 PSNR 偏低属正常，此处只兜底真的糊了/错位了）")
     if not gates.get("dur_ok"):
         tol = gates.get("dur_tolerance", config.DEDUP_DUR_TOLERANCE)
-        bad.append(f"时长偏差 {abs(item.dur_dst - item.dur_src):.2f}s > {tol:.2f}s")
+        if gates.get("dur_unknown"):
+            bad.append("时长无法探测（容器无该字段且兜底失败），本项跳过判定")
+        else:
+            bad.append(f"时长偏差 {abs(item.dur_dst - item.dur_src):.2f}s > {tol:.2f}s")
     return "；".join(bad)
 
 
@@ -737,8 +744,14 @@ def _video_duration(path: Path) -> float:
 
     实测哪些容器读不到（ffprobe 9.0.2，同一素材仅换 muxer）：
         mp4 / mov / mpegts  -> 有值（`-c copy`、带不带音轨都一样）
-        matroska(.mkv) / flv -> `N/A`   <- 会走兜底
-    另外 `stream.duration` **不会**因 fps 重采样而消失（实测 fps=60 / 30000/1001 /
+        matroska(.mkv) / flv -> stdout 为字符串 `N/A`（退出码仍是 0）  <- 会走兜底
+    注意别依赖退出码判断：缺字段时 ffprobe **rc=0**、stdout 才是 `N/A`；
+    只有文件不存在/损坏才 rc=1 + 空stdout。下面的 `float()` 由
+    `except ValueError` 兜住 `N/A`、由 `IndexError` 兜住空 stdout，两条都返回 0。
+    另外这类容器上 `format.duration` 反而有值（mkv 实测 5.30），正好是兜底链
+    最后一档的用武之地。
+
+    `stream.duration` **不会**因 fps 重采样而消失（实测 fps=60 / 30000/1001 /
     30003/1000 / 24000/1001 四种均正常给出），fps 不是字段缺失的原因。
     """
     rc, out, _err = run_cmd(
