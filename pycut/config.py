@@ -210,6 +210,47 @@ DEDUP_PITCH_RANGE = (1.004, 1.010)
 DEDUP_FPS_JITTER = ("30000/1001", "30", "30003/1000", "60")
 DEDUP_AUDIO_RATE = 44100
 
+# ---------------------------------------------------------------------------
+# 混剪 montage —— 三步流程（需求见未命名.txt / docs/MONTAGE.md）
+#   步骤A：从「爆款视频」提取语音节奏与总时长基准（不做 ASR 转写，见 MONTAGE.md 说明）
+#   步骤B：从「片段库」随机取竖屏片段、不重复、填满基准时长、静音
+#   步骤C：从「去重输出」取切片，以画中画叠在步骤B结果右上角、静音、时长同基准
+#   素材里混有横屏（1920x1080 / 3840x2160），一律排除——只吃竖屏 9:16
+# ---------------------------------------------------------------------------
+MONTAGE_SRC = Path("/Volumes/Lexar/DevStorage/剪辑/爆款素材/快手/1.mp4")  # 步骤A 基准
+MONTAGE_CLIP_DIR = Path("/Volumes/Lexar/DevStorage/剪辑/片段")           # 步骤B 片段库
+MONTAGE_DEDUP_DIR = DESKTOP / "去重_输出"                                # 步骤C 画中画素材
+MONTAGE_OUT = DESKTOP / "混剪_输出"
+MONTAGE_TMP = Path("/tmp/pycut_montage")   # 中间产物（步骤B 结果），不进桌面
+
+# 目标画布：以步骤A 基准视频的分辨率/帧率为准，保证最终成片与基准同规格
+MONTAGE_CANVAS = (720, 1276)        # 步骤A 实测 720x1276（注意不是 1280）
+MONTAGE_FPS = 30
+
+# 竖屏判定：宽高比在此区间才算 9:16，容差 ±12%（手机录制常见 720x1280 / 544x960）
+MONTAGE_PORTRAIT_RATIO = 9 / 16
+MONTAGE_RATIO_TOLERANCE = 0.12
+# 边长比上限：超过则判为非竖屏（1920x1080=1.78、3840x2160=1.78 都会被排除）
+MONTAGE_MAX_SIDE_RATIO = 1.40       # w/h 超过 1.40 视为横屏
+
+# 语音切分（silencedetect）
+MONTAGE_SILENCE_NOISE_DB = -32      # 静音阈值 dB
+MONTAGE_SILENCE_MIN_DUR = 0.35      # 静音最短持续秒数，短于此不算断句
+# 语音段最短保留时长（太碎的段丢弃，避免切出 0.2s 的闪帧）
+MONTAGE_SEG_MIN_DUR = 0.8
+# 语音段最长保留时长（超过则截断，防止一句长话铺满全屏）
+MONTAGE_SEG_MAX_DUR = 8.0
+MONTAGE_TARGET_FILL_RATIO = 0.98    # 拼接后目标时长 = 基准时长 × 该系数（留一点余量补齐）
+
+# 片段挑选（步骤B）
+MONTAGE_CLIP_MIN_DUR = 1.2          # 太短的片段不用（会闪）
+MONTAGE_CLIP_MAX_DUR = 12.0         # 太长的片段截到上限
+MONTAGE_WORKERS = 2
+
+# 画中画（步骤C）
+MONTAGE_PIP_SCALE = 0.26            # 画中画宽度 = 基准宽 × 该比例（右上角）
+MONTAGE_PIP_MARGIN = 0.03# 距右/上边缘留白比例
+
 MANIFEST_COLUMNS = [
     "video", "seg_index", "start", "end", "duration",
     "verdict", "decided_by",

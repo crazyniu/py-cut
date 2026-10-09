@@ -20,6 +20,7 @@ CMD_META = {
     "slice": "切片：场景分段 → 人脸分流 → 字幕擦除",
     "cover": "字幕擦除：对已有切片单独重跑去字幕",
     "dedup": "去重：分层扰动 + pHash/PSNR 自检（过查重）",
+    "montage": "混剪：话术基准 → 随机混剪 → 画中画叠加",
 }
 
 # 「任务设置」页只放该命令真正需要用户决定的参数（按此顺序展示）；
@@ -28,6 +29,7 @@ BASIC_PARAMS = {
     "slice": ["--file", "--no-sub", "--dry-run", "--force"],
     "cover": ["--file", "--all", "--force", "--dry-run"],
     "dedup": ["--file", "--all", "--preset", "--check"],
+    "montage": ["--step", "--no-pip", "--probe"],
 }
 
 # 参数在 TUI 里的中文显示名（argv 仍用原始 flag）
@@ -64,6 +66,23 @@ DISPLAY = {
     "--seed": "随机种子",
     "--phash-min": "pHash 门槛",
     "--psnr-min": "PSNR 门槛",
+    # montage
+    "--step": "执行到哪一步",
+    "--source": "步骤A 基准视频",
+    "--clip-dir": "步骤B 片段库",
+    "--dedup-dir": "步骤C 画中画素材",
+    "--out-dir": "成片输出目录",
+    "--no-pip": "跳过画中画",
+    "--allow-landscape": "允许横屏素材",
+    "--probe": "只探测素材规模",
+    "--pip-slot": "画中画时长",
+    "--pip-scale": "画中画大小",
+    "--fill-ratio": "填充比例",
+    "--noise-db": "静音阈值dB",
+    "--min-silence": "静音最短秒数",
+    "--min-clip": "片段最短秒数",
+    "--max-clip": "片段最长秒数",
+    "--crf": "输出画质CRF",
 }
 
 # 反向开关：界面显示正向含义（勾选=开启），实际写入的是 --no-xxx
@@ -200,6 +219,7 @@ def _finalize_argv(cmd: str, fields: list[dict]) -> list[str]:
     # cover/dedup 没给 --file 时，等同于「处理全部切片」，避免直接跑报参数缺失
     if cmd in ("cover", "dedup") and "--file" not in argv and "--all" not in argv:
         argv.append("--all")
+    # montage 不需要 --file/--all，默认参数就能跑全流程
     return argv
 
 
