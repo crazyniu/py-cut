@@ -55,28 +55,30 @@ pycut/
 
 ## 配置（只需配密钥）
 
-模型固定用 **DeepSeek**（默认网关，公网稳定、支持图像）。用户只需配置密钥：
+网关只有两个：**主网关 `main`**（默认 DeepSeek 官方，公网稳定、支持图像）和
+**备用网关 `backup`**。两者都是 OpenAI 兼容协议，主网关可换成任意其它网关 —— 与厂商无关。
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入你的密钥：
-#   DEEPSEEK_API_KEY=sk-xxxx
+# 编辑 .env，填入主网关密钥：
+#   PYCUT_MAIN_KEY=sk-xxxx
 ```
 
 `.env` 已在 `.gitignore` 中，不会被提交；密钥**只从 `.env` 读取**，代码里不存任何明文密钥。
-也可直接导出环境变量 `export DEEPSEEK_API_KEY=sk-xxxx`（优先级高于 `.env`）。
-
-网关地址与模型名同样可在 `.env` 配置，默认即 DeepSeek，通常不用改：
+真实 shell 环境变量优先级高于 `.env`。
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | 无（必填） | DeepSeek 密钥 |
-| `PYCUT_LLM_URL` | `https://api.deepseek.com/v1` | 网关地址（OpenAI 兼容） |
-| `PYCUT_LLM_MODEL` | `deepseek-flash` | 模型名称 |
-| `PYCUT_GATEWAY` | `deepseek` | 默认网关（`deepseek` / `local`） |
-| `PYCUT_LOCAL_URL/KEY/MODEL` | — | 局域网备用网关，默认不用配 |
+| `PYCUT_MAIN_URL` | `https://api.deepseek.com/v1` | 主网关地址（OpenAI 兼容） |
+| `PYCUT_MAIN_KEY` | 无（必填） | 主网关密钥（旧名 `DEEPSEEK_API_KEY` 兼容） |
+| `PYCUT_MAIN_MODEL` | `deepseek-flash` | 主网关模型名 |
+| `PYCUT_BACKUP_URL` | 同主网关 | 备用网关地址 |
+| `PYCUT_BACKUP_KEY` | 无 | 备用网关密钥（留空 = 不启用自动切换） |
+| `PYCUT_BACKUP_MODEL` | 同主网关 | 备用网关模型名 |
 
-命令行 `--gateway / --llm-url / --llm-key / --llm-model` 仍可临时覆盖。
+**自动切换**：主网关连续失败 3 次会自动切到备用网关并粘住后续调用（日志会提示）。
+`--gateway {main,backup}` 可手动指定起始网关，`--no-fallback` 关闭自动切换；
+`--llm-url / --llm-key / --llm-model` 临时覆盖（显式指定时不启用自动切换）。
 
 ## 用法
 
@@ -90,7 +92,7 @@ cp .env.example .env
 ```
 
 - 方向键选功能（slice / cover），回车进入参数表
-- `↑/↓` 移动参数，`Enter` 编辑数值 / 切换开关（如 `--dry-run`、网关在 local↔deepseek 间循环）
+- `↑/↓` 移动参数，`Enter` 编辑数值 / 切换开关（如 `--dry-run`、网关在 main↔backup 间循环）
 - `R` 运行，`Q` 返回/退出；非交互环境（管道）自动回退命令行帮助
 
 ### 方式二：命令行
@@ -99,8 +101,12 @@ cp .env.example .env
 # 试跑单个视频：只检测分段，不产出（先看切点是否合理）
 ./run.sh slice --file "财源滚滚来__ (1)" --dry-run
 
-# 正式切片（默认 deepseek 网关；也可用 --gateway local）
+# 正式切片（默认走主网关）
 ./run.sh slice
+
+# 直接用备用网关起步 / 关闭自动切换
+./run.sh slice --gateway backup
+./run.sh slice --no-fallback
 
 # 只处理前 3 个视频
 ./run.sh slice --limit 3

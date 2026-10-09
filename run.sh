@@ -26,7 +26,7 @@ echo "[pycut] 解释器: $PY"
 if [ ! -f .env ]; then
   if [ -f .env.example ]; then
     cp .env.example .env
-    echo "[pycut] 已由 .env.example 生成 .env —— 请编辑填入 DEEPSEEK_API_KEY"
+    echo "[pycut] 已由 .env.example 生成 .env —— 请编辑填入主网关密钥 PYCUT_MAIN_KEY"
   else
     echo "[pycut] 警告: 缺少 .env，也未找到 .env.example"
   fi
@@ -55,9 +55,10 @@ fi
 import sys
 sys.path.insert(0, '.')
 from pycut import config
-print('[pycut] 网关:', config.gateway_summary())
+for line in config.gateways_summary().splitlines():
+    print('[pycut] ' + line)
 if not config.key_ready():
-    print('[pycut] 警告: .env 未配置 DEEPSEEK_API_KEY，LLM 步骤会 401。')
+    print('[pycut] 警告: 主网关未配置密钥（.env 的 PYCUT_MAIN_KEY），LLM 步骤会 401。')
     print('         可先填密钥，或用 --no-llm 走纯 Haar（不调用大模型）。')
 " 2>/dev/null || echo "[pycut] 警告: 无法读取网关配置，请检查 .env"
 

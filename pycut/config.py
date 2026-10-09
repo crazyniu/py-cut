@@ -81,33 +81,42 @@ BITRATE_HIGH = "8M"      # 高 > 720
 WORKERS_ENC = 2          # 1080p 实测 2 是拐点
 
 # ---------------------------------------------------------------------------
-# LLM 网关预设（OpenAI 兼容协议）
-#   默认 deepseek（官方公网，稳定，支持图像）。用户只需配置 DEEPSEEK_API_KEY
-#   （环境变量或项目根 .env 文件，见 .env.example）；硬编码值为本机回退。
-#   --gateway 选择预设；命令行 --llm-url / --llm-key / --llm-model 可单独覆盖。
+# LLM 网关（OpenAI 兼容协议）—— 只有「主网关 / 备用网关」两个，不按厂商命名
+#   主网关 main  ：默认 DeepSeek 官方，可在 .env 换成任意 OpenAI 兼容网关
+#   备用网关 backup：主网关连续失败时自动顶上（可用 --no-fallback 关闭）
+#   --gateway {main,backup} 手动指定起始网关；--llm-* 可临时覆盖当前网关。
 # ---------------------------------------------------------------------------
-#   密钥 / 网关地址 / 模型名全部从 .env（或环境变量）读取，默认走 deepseek。
-#   .env 可配置项（见 .env.example）：
-#     DEEPSEEK_API_KEY   必填，DeepSeek 密钥
-#     PYCUT_LLM_URL      默认 https://api.deepseek.com/v1
-#     PYCUT_LLM_MODEL    默认 deepseek-flash
-#     PYCUT_GATEWAY      默认 deepseek（可改为 local）
-#     PYCUT_LOCAL_URL / PYCUT_LOCAL_KEY / PYCUT_LOCAL_MODEL  局域网网关可选
+#   全部从 .env（或环境变量）读取，代码里没有硬编码密钥。见 .env.example：
+#     PYCUT_MAIN_URL / PYCUT_MAIN_KEY / PYCUT_MAIN_MODEL       主网关（默认 DeepSeek）
+#     PYCUT_BACKUP_URL / PYCUT_BACKUP_KEY / PYCUT_BACKUP_MODEL 备用网关（可选）
+#     DEEPSEEK_API_KEY   主网关密钥的旧名，仍兼容（PYCUT_MAIN_KEY 优先）
+_MAIN_KEY = (os.environ.get("PYCUT_MAIN_KEY")
+             or os.environ.get("DEEPSEEK_API_KEY") or "")
 GATEWAYS = {
-    "local": {  # 局域网网关（快，但偶发 502/503/超时）
-        "url": os.environ.get("PYCUT_LOCAL_URL", "http://192.168.1.250:20128/v1"),
-        "key": os.environ.get("PYCUT_LOCAL_KEY", ""),
-        "model": os.environ.get("PYCUT_LOCAL_MODEL", "deepseek-v4.1-flash"),
+    "main": {  # 主网关：默认 DeepSeek 官方（公网、稳定、支持图像）
+        "url": (os.environ.get("PYCUT_MAIN_URL")
+                or os.environ.get("PYCUT_LLM_URL")
+                or "https://api.deepseek.com/v1"),
+        "key": _MAIN_KEY,
+        "model": (os.environ.get("PYCUT_MAIN_MODEL")
+                  or os.environ.get("PYCUT_LLM_MODEL")
+                  or "deepseek-flash"),
     },
-    "deepseek": {  # 官方 DeepSeek 网关（默认）
-        "url": os.environ.get("PYCUT_LLM_URL", "https://api.deepseek.com/v1"),
-        "key": os.environ.get("DEEPSEEK_API_KEY", ""),
-        "model": os.environ.get("PYCUT_LLM_MODEL", "deepseek-flash"),
+    "backup": {  # 备用网关：留空即视为未启用，主网关失败时不会切换
+        "url": os.environ.get("PYCUT_BACKUP_URL", ""),
+        "key": os.environ.get("PYCUT_BACKUP_KEY", ""),
+        "model": os.environ.get("PYCUT_BACKUP_MODEL", ""),
     },
 }
-DEFAULT_GATEWAY = os.environ.get("PYCUT_GATEWAY", "deepseek")
-if DEFAULT_GATEWAY not in GATEWAYS:
-    DEFAULT_GATEWAY = "deepseek"
+# 备用网关未填地址时，回落到主网关地址（只换 key/model 场景也允许）
+if not GATEWAYS["backup"]["url"]:
+    GATEWAYS["backup"]["url"] = GATEWAYS["main"]["url"]
+if not GATEWAYS["backup"]["model"]:
+    GATEWAYS["backup"]["model"] = GATEWAYS["main"]["model"]
+
+DEFAULT_GATEWAY = "main"     # 固定：默认走主网关（不再有 PYCUT_GATEWAY 开关）
+BACKUP_GATEWAY = "backup"
+LLM_FAILOVER_FAILS = 3       # 主网关连续失败 N 次 -> 自动切换备用网关
 WORKERS_LLM = 8          # 实测比 4 快 19 倍
 LLM_MAX_TOKENS = 500     # 推理模型：30 会被 reasoning 吃光返回空
 LLM_MAX_TOKENS_RETRY = 1200
@@ -136,8 +145,14 @@ MANIFEST_COLUMNS = [
 
 
 def resolve_gateway(name: str) -> dict:
-    """按名称取网关预设，未知名称回退默认。"""
+    """按名称取网关预设，未知名称回退主网关。"""
     return GATEWAYS.get(name, GATEWAYS[DEFAULT_GATEWAY])
+
+
+def other_gateway(name: str) -> str:
+    """取另一个网关名（主 <-> 备）。"""
+    n = name if name in GATEWAYS else DEFAULT_GATEWAY
+    return BACKUP_GATEWAY if n == DEFAULT_GATEWAY else DEFAULT_GATEWAY
 
 
 def apply_llm_overrides(name: str, url: str | None = None,
@@ -169,10 +184,30 @@ def key_ready(name: str | None = None) -> bool:
     return not _is_placeholder(resolve_gateway(name or DEFAULT_GATEWAY)["key"])
 
 
+def _state(k: str) -> str:
+    if not _is_placeholder(k):
+        return "已配置"
+    return "未配置(占位)" if k.strip() else "未配置"
+
+
 def gateway_summary(name: str | None = None) -> str:
     """用于日志：网关名 / 地址 / 模型 / 密钥状态（不打印密钥本身）。"""
-    n = name or DEFAULT_GATEWAY
+    n = name if name in GATEWAYS else DEFAULT_GATEWAY
     g = resolve_gateway(n)
-    k = g["key"]
-    state = "已配置" if not _is_placeholder(k) else ("未配置(占位)" if k.strip() else "未配置")
-    return f"{n} @ {g['url']} model={g['model']} key={state}"
+    return f"{n} @ {g['url']} model={g['model']} key={_state(g['key'])}"
+
+
+def gateways_summary() -> str:
+    """主网关 + 备用网关 两行摘要（不打印密钥本身）。"""
+    b = resolve_gateway(BACKUP_GATEWAY)
+    tail = "" if key_ready(BACKUP_GATEWAY) else "   (主网关失败时不会切换)"
+    return (f"主网关 {gateway_summary(DEFAULT_GATEWAY)}\n"
+            f"备用网关 {gateway_summary(BACKUP_GATEWAY)}{tail}")
+
+
+def backup_ready() -> bool:
+    """备用网关是否可用（密钥已真实配置且与主网关不是完全同一个地址/密钥）。"""
+    if not key_ready(BACKUP_GATEWAY):
+        return False
+    m, b = resolve_gateway(DEFAULT_GATEWAY), resolve_gateway(BACKUP_GATEWAY)
+    return (m["url"], m["key"], m["model"]) != (b["url"], b["key"], b["model"])

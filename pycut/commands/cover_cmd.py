@@ -25,7 +25,10 @@ def register(subparsers) -> None:
     p.add_argument("--file", nargs="+", help="要处理的切片 mp4 路径（可多个）")
     p.add_argument("--all", action="store_true", help="处理桌面两个切片目录的全部切片")
     p.add_argument("--gateway", default=config.DEFAULT_GATEWAY,
-                   choices=list(config.GATEWAYS.keys()), help="LLM 网关预设")
+                   choices=list(config.GATEWAYS.keys()),
+                   help="起始网关：main=主网关 / backup=备用网关")
+    p.add_argument("--no-fallback", action="store_true",
+                   help="主网关连续失败时不自动切换备用网关")
     p.add_argument("--llm-url", default=None)
     p.add_argument("--llm-key", default=None)
     p.add_argument("--llm-model", default=None)
@@ -44,7 +47,8 @@ def run(args: argparse.Namespace) -> int:
     reset_stop()
     self_check(require_src=False)
 
-    llm = make_llm(args.gateway, args.llm_url, args.llm_key, args.llm_model)
+    llm = make_llm(args.gateway, args.llm_url, args.llm_key, args.llm_model,
+                   use_fallback=not args.no_fallback)
     clips = collect_clips([Path(x) for x in args.file] if args.file else None)
     if not clips:
         log("没有可处理的切片")
@@ -74,7 +78,10 @@ def run(args: argparse.Namespace) -> int:
         f"{'无字幕':<8}{stat['nosub']:>4}   "
         f"{'跳过':<6}{stat['skip']:>4}   "
         f"{'失败':<6}{stat['fail']:>4}")
-    log(f"{'LLM 调用':<10}{llm.calls:>6}   （失败 {llm.failures}）")
+    note = f"（失败 {llm.failures}）"
+    if llm.switched_to:
+        note += f"  已切换备用网关 {llm.switched_to}"
+    log(f"{'LLM 调用':<10}{llm.calls:>6}   {note}")
     log(f"{'总耗时':<10}{time.time() - t0:>6.1f}s")
     log("=" * 56)
     return 0 if stat["fail"] == 0 else 2

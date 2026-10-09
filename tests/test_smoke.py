@@ -23,9 +23,12 @@ def test_config_paths_exist():
 
 
 def test_gateways_present():
-    assert "local" in config.GATEWAYS
-    assert "deepseek" in config.GATEWAYS
-    assert config.apply_llm_overrides("local")[0] == config.GATEWAYS["local"]["url"]
+    # 只有主网关 / 备用网关两个，不按厂商命名
+    assert set(config.GATEWAYS) == {"main", "backup"}
+    assert config.DEFAULT_GATEWAY == "main"
+    assert config.apply_llm_overrides("main")[0] == config.GATEWAYS["main"]["url"]
+    assert config.other_gateway("main") == "backup"
+    assert config.other_gateway("backup") == "main"
 
 
 def test_cli_registers_commands():
@@ -40,10 +43,14 @@ def test_cli_registers_commands():
 def test_slice_subparser_has_key_args():
     parser = cli.build_parser()
     # 通过解析验证 slice 子命令参数齐全
-    ns = parser.parse_args(["slice", "--dry-run", "--gateway", "deepseek"])
+    ns = parser.parse_args(["slice", "--dry-run", "--gateway", "backup"])
     assert ns.command == "slice"
     assert ns.dry_run is True
-    assert ns.gateway == "deepseek"
+    assert ns.gateway == "backup"
+    assert ns.no_fallback is False
+    ns2 = parser.parse_args(["slice", "--no-fallback"])
+    assert ns2.no_fallback is True
+    assert ns2.gateway == "main"
 
 
 if __name__ == "__main__":

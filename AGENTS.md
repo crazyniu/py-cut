@@ -34,16 +34,20 @@
   编码码率等）。**未经重新标定不要改这些数值**——它们是本地实测得到的。
 - LLM 走 **OpenAI 兼容协议**，用**纯标准库 urllib**（环境没装 openai/requests）。
   新增 LLM 调用复用 `core/llm.py` 的 `LLMClient.ask_vision(frame, prompt)`。
-- **模型固定用 DeepSeek**：`config.DEFAULT_GATEWAY` 默认 `deepseek`（官方公网，稳定，支持图像）。
-  **密钥只从 `.env` 读取，代码里不允许出现明文密钥**（`config.py` 里只有空串默认值）。
-  用户使用只需：项目根建 `.env` 填 `DEEPSEEK_API_KEY=sk-xxxx`（或导出同名环境变量，优先级更高）。
-  `.env` 已被 git 忽略，模板见 `.env.example`。
-- **网关地址 / 模型名也可在 `.env` 配置**，默认即 DeepSeek：`PYCUT_LLM_URL`
-  （默认 `https://api.deepseek.com/v1`）、`PYCUT_LLM_MODEL`（默认 `deepseek-flash`）、
-  `PYCUT_GATEWAY`（默认 `deepseek`），以及 `local` 网关的 `PYCUT_LOCAL_URL/KEY/MODEL`。
-  命令行 `--gateway` / `--llm-url` / `--llm-key` / `--llm-model` 仍可临时覆盖。
-  `config.key_ready()` / `config.gateway_summary()` 用于检查密钥状态（**日志里绝不打印密钥本身**，
-  占位值如 `sk-你的密钥` 视为未配置）。
+- **网关只有两个：主网关 `main` / 备用网关 `backup`**（`config.GATEWAYS` 只有这两个键，
+  不按厂商命名）。主网关默认 DeepSeek 官方，但**可以在 `.env` 换成任意 OpenAI 兼容网关**；
+  改地址/模型即可，代码无需改动。`config.DEFAULT_GATEWAY = "main"` 是常量，
+  不再有 `PYCUT_GATEWAY` 之类的选择开关。
+- **密钥只从 `.env` 读取，代码里不允许出现明文密钥**（`config.py` 里只有空串默认值）。
+  主网关：`PYCUT_MAIN_URL` / `PYCUT_MAIN_KEY`（旧名 `DEEPSEEK_API_KEY` 仍兼容）/ `PYCUT_MAIN_MODEL`；
+  备用网关：`PYCUT_BACKUP_URL` / `PYCUT_BACKUP_KEY` / `PYCUT_BACKUP_MODEL`（地址或模型留空时回落主网关值）。
+  `.env` 已被 git 忽略，模板见 `.env.example`；真实环境变量优先于 `.env`。
+- **备用网关的用途是自动容灾**：主网关连续失败达 `config.LLM_FAILOVER_FAILS`（=3）次，
+  `LLMClient` 自动切到备用网关并**粘住**（`_delegate`），后续调用都走备用，日志打印切换提示。
+  `--no-fallback` 可关闭；传了 `--llm-url/--llm-key/--llm-model` 显式覆盖时不挂备用。
+  备用网关未配密钥时不切换（`config.backup_ready()` 判断）。
+  `config.key_ready()` / `config.gateway_summary()` / `config.gateways_summary()`
+  用于检查状态（**日志里绝不打印密钥本身**，占位值如 `sk-你的密钥` 视为未配置）。
 - **参数两种入口（等价）**：
   - 命令行：`python3 pycut.py slice --file X --scene-th 0.35`
   - 终端 TUI：直接 `python3 pycut.py`（无参数且为交互终端即进入），方向键选命令/改参数，R 运行。

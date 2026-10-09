@@ -34,7 +34,10 @@ def register(subparsers) -> None:
     p.add_argument("--workers-llm", type=int, default=config.WORKERS_LLM, help="LLM 并发数")
     p.add_argument("--workers-enc", type=int, default=config.WORKERS_ENC, help="编码并发数")
     p.add_argument("--gateway", default=config.DEFAULT_GATEWAY,
-                   choices=list(config.GATEWAYS.keys()), help="LLM 网关预设")
+                   choices=list(config.GATEWAYS.keys()),
+                   help="起始网关：main=主网关 / backup=备用网关")
+    p.add_argument("--no-fallback", action="store_true",
+                   help="主网关连续失败时不自动切换备用网关")
     p.add_argument("--llm-url", default=None, help="LLM 网关地址（覆盖预设）")
     p.add_argument("--llm-key", default=None, help="LLM API Key（覆盖预设）")
     p.add_argument("--llm-model", default=None, help="LLM 模型名（覆盖预设）")
@@ -67,7 +70,8 @@ def run(args: argparse.Namespace) -> int:
     log(f"[源] {config.SRC_DIR} 找到 {len(files)} 个 mp4（os.scandir）")
 
     llm = make_llm(args.gateway, args.llm_url, args.llm_key, args.llm_model,
-                   enabled=not args.no_llm)
+                   enabled=not args.no_llm,
+                   use_fallback=not args.no_fallback and not args.no_llm)
     if args.no_llm:
         log("[LLM] 已通过 --no-llm 禁用")
 
@@ -140,7 +144,10 @@ def _summary(results, llm, manifest, t_detect, t_enc, t_all) -> int:
     if t_sub_all > 0 or sub_cov:
         log(f"{'字幕擦除':<12}{sub_cov:>10}  （耗时 {fmt_dur(t_sub_all)}）")
     log(f"{'总耗时':<12}{fmt_dur(time.time() - t_all):>10}")
-    log(f"{'LLM 调用':<12}{llm.calls:>10}  （失败 {llm.failures}）")
+    llm_note = f"（失败 {llm.failures}）"
+    if llm.switched_to:
+        llm_note += f"  已切换备用网关 {llm.switched_to}"
+    log(f"{'LLM 调用':<12}{llm.calls:>10}  {llm_note}")
     log(f"{'清单':<12}{manifest.csv_path}")
     log("=" * 62)
     return 0

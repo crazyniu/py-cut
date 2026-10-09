@@ -24,16 +24,36 @@ from .utils import log
 
 
 class LLMClient:
-    def __init__(self, url: str, key: str, model: str, enabled: bool = True):
+    """单个网关的 LLM 客户端。
+
+    主网关实例可挂一个备用网关实例（fallback）：主网关连续失败达
+    config.LLM_FAILOVER_FAILS 次时自动切到备用网关并粘住（后续调用都走备用）。
+    """
+
+    def __init__(self, url: str, key: str, model: str, enabled: bool = True,
+                 label: str = "main", fallback: "LLMClient | None" = None):
         self.url = url.rstrip("/") + "/chat/completions"
         self.key = key
         self.model = model
         self.enabled = enabled
-        self.calls = 0
-        self.failures = 0
+        self.label = label              # main / backup，仅用于日志
+        self.fallback = fallback        # 备用网关客户端（可为 None）
+        self.switched_to: str | None = None   # 已切换到哪个网关（None=未切换）
+        self._calls = 0
+        self._failures = 0
+        self._delegate: LLMClient | None = None
         self._consec_fail = 0
         self._lock = threading.Lock()
         self._jpg_quality = 80
+
+    # ---- 统计（已切换到备用时，累计自身 + 备用网关的计数）----
+    @property
+    def calls(self) -> int:
+        return self._calls + (self._delegate.calls if self._delegate is not None else 0)
+
+    @property
+    def failures(self) -> int:
+        return self._failures + (self._delegate.failures if self._delegate is not None else 0)
 
     def _disable(self, why: str) -> None:
         with self._lock:
@@ -97,6 +117,9 @@ class LLMClient:
 
     def ask_vision(self, frame, prompt: str) -> dict | None:
         """通用视觉问答：单帧 + 自定义 prompt，返回解析后的 JSON dict 或 None。"""
+        # 已切到备用网关：后续调用都走备用（粘性切换，避免来回抖动）
+        if self._delegate is not None:
+            return self._delegate.ask_vision(frame, prompt)
         if not self.enabled:
             return None
 
@@ -125,7 +148,7 @@ class LLMClient:
             if STOP.flag:
                 return None
             with self._lock:
-                self.calls += 1
+                self._calls += 1
             status, text = self._post(payload)
             if status == 200:
                 try:
@@ -147,14 +170,14 @@ class LLMClient:
                 except json.JSONDecodeError:
                     pass
                 with self._lock:
-                    self.failures += 1
+                    self._failures += 1
                     self._consec_fail += 1
                 continue
 
             # 4xx（除可重试状态）直接放弃，不重试
             if 400 <= status < 500 and status not in config.LLM_RETRY_STATUS:
                 with self._lock:
-                    self.failures += 1
+                    self._failures += 1
                     self._consec_fail += 1
                 log(f"[LLM] HTTP {status}，放弃重试")
                 break
@@ -162,17 +185,45 @@ class LLMClient:
             if attempt < 2:
                 time.sleep(config.LLM_BACKOFF[attempt])
             with self._lock:
-                self.failures += 1
+                self._failures += 1
                 self._consec_fail += 1
 
         with self._lock:
-            if self._consec_fail >= config.LLM_MAX_CONSEC_FAIL:
-                self._disable("连续失败")
+            consec = self._consec_fail
+        if consec >= config.LLM_MAX_CONSEC_FAIL:
+            self._disable("连续失败")
+
+        # 主网关连续失败 -> 切换备用网关重试本次调用
+        fb = self.fallback
+        if fb is not None and fb.enabled and consec >= config.LLM_FAILOVER_FAILS:
+            log(f"[LLM] {self.label} 网关连续失败 {consec} 次，"
+                f"自动切换备用网关（{config.gateway_summary(fb.label)}）")
+            self._delegate = fb
+            self.switched_to = fb.label
+            self.fallback = None
+            return fb.ask_vision(frame, prompt)
         return None
 
 
 def make_llm(name: str, url: str | None = None, key: str | None = None,
-             model: str | None = None, enabled: bool = True) -> LLMClient:
-    """按 --gateway 预设 + --llm-* 覆盖构造 LLMClient。"""
-    u, k, m = config.apply_llm_overrides(name, url, key, model)
-    return LLMClient(u, k, m, enabled=enabled)
+             model: str | None = None, enabled: bool = True,
+             use_fallback: bool = True) -> LLMClient:
+    """按 --gateway 预设（main/backup）+ --llm-* 覆盖构造 LLMClient。
+
+    use_fallback=True 且备用网关已配置密钥时，会挂上另一个网关作为备用：
+    主网关连续失败达阈值即自动切换。传了 --llm-* 显式覆盖时不挂备用
+    （用户手指定了网关，切到别的网关不符合预期）。
+    """
+    n = name if name in config.GATEWAYS else config.DEFAULT_GATEWAY
+    u, k, m = config.apply_llm_overrides(n, url, key, model)
+
+    fb: LLMClient | None = None
+    explicit = bool(url or key or model)
+    if use_fallback and not explicit:
+        other = config.other_gateway(n)
+        if config.key_ready(other):
+            ou, ok_, om = config.apply_llm_overrides(other)
+            fb = LLMClient(ou, ok_, om, enabled=enabled, label=other)
+        else:
+            log(f"[LLM] 备用网关 {other} 未配置密钥，不启用自动切换")
+    return LLMClient(u, k, m, enabled=enabled, label=n, fallback=fb)
