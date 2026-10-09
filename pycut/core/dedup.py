@@ -784,8 +784,9 @@ def _probe_fallback_duration(path: Path) -> float:
     判定、直接把报告写成「nan s」。实测 mp4/mkv/flv/mpegts + 极短视频（0.067s）
     的 duration 只出现「正常数值」或 `N/A`，无 nan/inf。
     另有一条同源入口：本函数 `frames / fps`，而 `_fps_to_float('nan')` 返回
-    nan 且 `bool(nan)` 为 True，故 `or 30.0` 兜不住（`0/0` 能兜住，实测
-    avg_frame_rate 有此情况）。真要防就加 `math.isfinite`。
+    nan 且 `bool(nan)` 为 True，故 `or 30.0` 兜不住（`0/0` 能兜住，实测五种容器
+    + 全部真实切片的 `avg_frame_rate` 均为 `30/1`，无 `0/0`）。真要防就加
+    `math.isfinite`。
     """
     rc, out, _err = run_cmd(
         [FFPROBE, "-v", "error", "-select_streams", "v:0", "-count_frames",
