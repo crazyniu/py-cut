@@ -778,6 +778,14 @@ def _probe_fallback_duration(path: Path) -> float:
     精度最低，只能当最后兜底。
 
     代价：`-count_frames` 需解码全片，实测 695ms，仅在主路径失败时触发。
+
+    边界（fp-dev查证后报备，本机ffprobe 9.0.2 实测均未出现，故**不加防御代码**）：
+    `float()` 遇`nan`/`inf` 不抛异常，会一路绕过 `dur_unknown` 与 `dur_ok` 两道
+    判定、直接把报告写成「nan s」。实测 mp4/mkv/flv/mpegts + 极短视频（0.067s）
+    的 duration 只出现「正常数值」或 `N/A`，无 nan/inf。
+    另有一条同源入口：本函数 `frames / fps`，而 `_fps_to_float('nan')` 返回
+    nan 且 `bool(nan)` 为 True，故 `or 30.0` 兜不住（`0/0` 能兜住，实测
+    avg_frame_rate 有此情况）。真要防就加 `math.isfinite`。
     """
     rc, out, _err = run_cmd(
         [FFPROBE, "-v", "error", "-select_streams", "v:0", "-count_frames",
