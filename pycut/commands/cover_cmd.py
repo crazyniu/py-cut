@@ -78,6 +78,8 @@ def run(args: argparse.Namespace) -> int:
         f"{'无字幕':<8}{stat['nosub']:>4}   "
         f"{'跳过':<6}{stat['skip']:>4}   "
         f"{'失败':<6}{stat['fail']:>4}")
+    if stat["dryrun"]:      # 试跑：只报检测到的区域，不落盘
+        log(f"{'试跑命中':<10}{stat['dryrun']:>6}   （--dry-run，未改写文件）")
     note = f"（失败 {llm.failures}）"
     if llm.switched_to:
         note += f"  已切换备用网关 {llm.switched_to}"

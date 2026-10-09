@@ -21,6 +21,38 @@ CMD_META = {
     "cover": "字幕擦除：对已有切片单独重跑去字幕",
 }
 
+# 「任务设置」页只放该命令真正需要用户决定的参数（按此顺序展示）；
+# 其余全部归入「高级参数」页（按 A 切换），LLM / 并发 / 阈值等日常不用管。
+BASIC_PARAMS = {
+    "slice": ["--file", "--no-sub", "--dry-run", "--force"],
+    "cover": ["--file", "--all", "--force", "--dry-run"],
+}
+
+# 参数在 TUI 里的中文显示名（argv 仍用原始 flag）
+DISPLAY = {
+    "--file": "指定视频（留空=全部）",
+    "--all": "处理全部切片",
+    "--no-sub": "切片时擦除字幕",
+    "--dry-run": "试跑（不产出）",
+    "--force": "重跑（忽略标记）",
+    "--limit": "前 N 个视频",
+    "--scene-th": "场景阈值",
+    "--min-seg": "最短段落(秒)",
+    "--workers-llm": "LLM 并发",
+    "--workers-enc": "编码并发",
+    "--samples": "每片抽帧数",
+    "--workers": "并发片段数",
+    "--no-llm": "启用 LLM",
+    "--no-fallback": "故障自动切备用",
+    "--gateway": "网关",
+    "--llm-url": "网关地址(覆盖)",
+    "--llm-key": "网关密钥(覆盖)",
+    "--llm-model": "模型名(覆盖)",
+}
+
+# 反向开关：界面显示正向含义（勾选=开启），实际写入的是 --no-xxx
+INVERT_FLAGS = {"--no-sub", "--no-llm", "--no-fallback"}
+
 
 def _get_subparser(parser, cmd: str):
     """兼容不同 argparse 版本，取出某个子命令的 ArgumentParser。"""
@@ -51,8 +83,11 @@ def _collect_params(cmd: str) -> list[dict]:
             continue
         long = next((o for o in a.option_strings if o.startswith("--")),
                    a.option_strings[0])
+        invert = long in INVERT_FLAGS
         if isinstance(a, argparse._StoreTrueAction):
             kind, val = "flag", bool(a.default)
+            if invert:                      # 界面显示正向含义：勾选=开启
+                val = not val
         elif getattr(a, "nargs", None) in ("+", "*"):
             kind, val = "list", (a.default if a.default else "")
         elif a.choices:
@@ -63,7 +98,12 @@ def _collect_params(cmd: str) -> list[dict]:
             "key": a.dest, "label": long, "kind": kind, "value": val,
             "choices": list(a.choices) if a.choices else None,
             "help": a.help or "", "default": a.default,
+            "display": DISPLAY.get(long, long), "invert": invert,
         })
+    # 任务设置页按 BASIC_PARAMS 的顺序展示，其余进高级页
+    order = [p for p in BASIC_PARAMS.get(cmd, [])]
+    rank = {p: i for i, p in enumerate(order)}
+    fields.sort(key=lambda f: rank.get(f["label"], len(order)))
     return fields
 
 
@@ -75,7 +115,8 @@ def _build_argv(cmd: str, fields: list[dict]) -> list[str]:
         if v is None:
             continue
         if f["kind"] == "flag":
-            if v:
+            raw = (not v) if f.get("invert") else v   # 反向开关换算回原始 flag
+            if raw != bool(f["default"]):
                 argv.append(f["label"])
         elif f["kind"] == "list":
             s = str(v).strip()
@@ -137,6 +178,36 @@ def _safe_add(stdscr, y: int, x: int, s: str, maxw: int) -> None:
         pass
 
 
+def _finalize_argv(cmd: str, fields: list[dict]) -> list[str]:
+    """生成将要执行的 argv：在 _build_argv 基础上补上命令的隐式默认。"""
+    argv = _build_argv(cmd, fields)
+    # cover 没给 --file 时，等同于「处理全部切片」，避免直接跑报参数缺失
+    if cmd == "cover" and "--file" not in argv and "--all" not in argv:
+        argv.append("--all")
+    return argv
+
+
+def _disp_width(s: str) -> int:
+    """终端显示宽度：CJK / 全角字符占 2 列。"""
+    import unicodedata  # noqa: PLC0415
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
+
+
+def _pad(s: str, width: int) -> str:
+    """按显示宽度右补空格，保证中英混排时数值列对齐。"""
+    return s + " " * max(1, width - _disp_width(s))
+
+
+def _val_text(f: dict) -> str:
+    """参数当前值的展示文本。"""
+    if f["kind"] == "flag":
+        return "[x]" if f["value"] else "[ ]"
+    s = str(f["value"])
+    if f["kind"] in ("list", "value"):
+        return s if s.strip() else "(空)"
+    return s
+
+
 def _loop(stdscr) -> tuple[str, list[str] | None]:
     curses.curs_set(0)
     stdscr.keypad(True)
@@ -145,8 +216,20 @@ def _loop(stdscr) -> tuple[str, list[str] | None]:
     phase = "menu"
     sel = 0
     cmd: str | None = None
-    fields: list[dict] | None = None
+    basic: list[dict] = []
+    adv: list[dict] = []
+    page = "basic"     # basic=任务设置页 / advanced=高级参数页
     fidx = 0
+
+    def fields() -> list[dict]:
+        return basic if page == "basic" else adv
+
+    def n_items() -> int:
+        return len(fields()) + (1 if page == "basic" else 0)
+
+    def do_run() -> tuple[str, list[str]]:
+        assert cmd is not None
+        return ("run", _finalize_argv(cmd, basic + adv))
 
     while True:
         stdscr.erase()
@@ -158,70 +241,79 @@ def _loop(stdscr) -> tuple[str, list[str] | None]:
                 _safe_add(stdscr, 2 + i, 2, f"{mark}{c:<8} {CMD_META.get(c, '')}", w)
             _safe_add(stdscr, h - 1, 0, " ↑/↓ 移动   Enter 进入   Q 退出 ", w)
         else:
-            assert fields is not None and cmd is not None
-            _safe_add(stdscr, 0, 0, f" pycut · {cmd} 参数   "
-                                    f"(↑/↓ 移动, Enter 编辑/切换, R 运行, Q 返回)", w)
-            for i, f in enumerate(fields):
-                y = 2 + i
-                if y >= h - 2:
+            fs = fields()
+            title = ("任务设置" if page == "basic" else "高级参数")
+            _safe_add(stdscr, 0, 0, f" pycut · {cmd} · {title}", w)
+            _safe_add(stdscr, 1, 2, "↑/↓ 移动 · Enter 编辑/切换 · A 高级参数 · R 运行 · Q 返回", w)
+            for i, f in enumerate(fs):
+                y = 3 + i
+                if y >= h - 3:
                     break
                 mark = "▶ " if i == fidx else "  "
-                if f["kind"] == "flag":
-                    val = "[x]" if f["value"] else "[ ]"
-                elif f["kind"] == "choice":
-                    val = str(f["value"])
-                elif f["kind"] == "list":
-                    val = str(f["value"]) if f["value"] else "(空)"
-                else:
-                    val = str(f["value"])
-                _safe_add(stdscr, y, 2, f"{mark}{f['label']:<14} {val}", w)
-            cur = fields[fidx]
-            help_line = cur["help"] or ""
-            _safe_add(stdscr, h - 1, 0, " " + help_line, w)
+                _safe_add(stdscr, y, 2, f"{mark}{_pad(f['display'], 20)} {_val_text(f)}", w)
+            if page == "basic":     # 任务设置页末尾：开始执行
+                y = 3 + len(fs)
+                mark = "▶ " if fidx == len(fs) else "  "
+                _safe_add(stdscr, y, 2, f"{mark}▶▶ 开始执行 {cmd}", w)
+            # 底部：将执行的命令预览 + 当前项说明
+            assert cmd is not None
+            _safe_add(stdscr, h - 2, 0, " 将执行: " + " ".join(_finalize_argv(cmd, basic + adv)), w)
+            if fidx < len(fs):
+                tip = fs[fidx]["help"] or ""
+            else:
+                tip = "回车立即开始执行（也可按 R）"
+            _safe_add(stdscr, h - 1, 0, " " + tip, w)
 
         stdscr.refresh()
         k = stdscr.getch()
 
-        if k in (27,):  # Esc
-            if phase == "form":
-                phase = "menu"
-            else:
+        if phase == "menu":
+            if k in (27, ord("q"), ord("Q")):
                 return ("quit", None)
-        elif k in (ord("q"), ord("Q")):
-            if phase == "form":
-                phase = "menu"
-            else:
-                return ("quit", None)
-        elif phase == "menu":
             if k in (curses.KEY_UP, ord("k")):
                 sel = (sel - 1) % len(cmds)
             elif k in (curses.KEY_DOWN, ord("j")):
                 sel = (sel + 1) % len(cmds)
             elif k in (10, curses.KEY_ENTER, ord(" "), ord("\r")):
                 cmd = cmds[sel]
-                fields = _collect_params(cmd)
-                fidx = 0
+                allf = _collect_params(cmd)
+                nb = len(BASIC_PARAMS.get(cmd, []))
+                basic, adv = allf[:nb], allf[nb:]
+                page, fidx = "basic", 0
                 phase = "form"
-        else:  # form
-            assert fields is not None
-            if k in (curses.KEY_UP, ord("k")):
-                fidx = (fidx - 1) % len(fields)
-            elif k in (curses.KEY_DOWN, ord("j")):
-                fidx = (fidx + 1) % len(fields)
-            elif k in (10, curses.KEY_ENTER, ord(" "), ord("\r")):
-                f = fields[fidx]
-                if f["kind"] == "flag":
-                    f["value"] = not f["value"]
-                elif f["kind"] == "choice":
-                    idx = f["choices"].index(f["value"]) if f["value"] in f["choices"] else -1
-                    f["value"] = f["choices"][(idx + 1) % len(f["choices"])]
-                else:
-                    new = _edit_string(stdscr, f["label"], str(f["value"]))
-                    if new is not None:
-                        f["value"] = new
-            elif k in (ord("r"), ord("R")):
-                assert cmd is not None
-                return ("run", _build_argv(cmd, fields))
+            continue
+
+        # ---- form ----
+        assert cmd is not None
+        fs = fields()
+        if k in (27, ord("q"), ord("Q")):
+            if page == "advanced":
+                page, fidx = "basic", 0
+            else:
+                phase, page, fidx = "menu", "basic", 0
+        elif k in (curses.KEY_UP, ord("k")):
+            fidx = (fidx - 1) % n_items()
+        elif k in (curses.KEY_DOWN, ord("j")):
+            fidx = (fidx + 1) % n_items()
+        elif k in (ord("a"), ord("A")):
+            if adv:
+                page = "advanced" if page == "basic" else "basic"
+                fidx = 0
+        elif k in (10, curses.KEY_ENTER, ord(" "), ord("\r")):
+            if page == "basic" and fidx == len(fs):
+                return do_run()
+            f = fs[fidx]
+            if f["kind"] == "flag":
+                f["value"] = not f["value"]
+            elif f["kind"] == "choice":
+                idx = f["choices"].index(f["value"]) if f["value"] in f["choices"] else -1
+                f["value"] = f["choices"][(idx + 1) % len(f["choices"])]
+            else:
+                new = _edit_string(stdscr, f["display"], str(f["value"]))
+                if new is not None:
+                    f["value"] = new
+        elif k in (ord("r"), ord("R")):
+            return do_run()
 
     return ("quit", None)
 
