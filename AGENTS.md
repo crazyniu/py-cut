@@ -9,9 +9,14 @@
 
 ## 1. 运行环境（硬性，违反即跑不起来）
 
+- **统一入口 `./run.sh`**：自动选解释器 → 按 `requirements.txt` 装依赖（已装则跳过）
+  → 校验 cv2 → 打印生效网关 → 运行。日常跑任务一律用 `./run.sh <command> ...`，
+  不要绕过它直接 `python3 pycut.py`（会踩解释器/依赖坑）。
 - **解释器**：必须用自带 `cv2 4.13.0` / `numpy` 的托管解释器：
   `/Users/apple/.workbuddy/binaries/python/versions/3.13.12/bin/python3`
   **禁止 `python3` 裸命令（可能指向系统 3.9）、禁止进 venv（丢 cv2）。**
+- **依赖**：只有 `numpy` + `opencv-python`（见 `requirements.txt`，用 `>=` 以免重复安装）；
+  其余能力（LLM、.env、CLI/TUI）全部走标准库。**不要引第三方依赖。**
 - **ffmpeg**：homebrew `ffmpeg-full`（含 `h264_videotoolbox` 硬件编码），路径在
   `pycut/config.py` 的 `FFMPEG` / `FFPROBE`。**不要假设系统 `ffmpeg`。**
 - **ffmpeg 9.0 差异**：`-vsync` 已移除，用 `-fps_mode cfr`；`-threads N` 在 scene 检测下反而更慢，**不要加**。
@@ -29,11 +34,16 @@
   编码码率等）。**未经重新标定不要改这些数值**——它们是本地实测得到的。
 - LLM 走 **OpenAI 兼容协议**，用**纯标准库 urllib**（环境没装 openai/requests）。
   新增 LLM 调用复用 `core/llm.py` 的 `LLMClient.ask_vision(frame, prompt)`。
-- **模型固定用 DeepSeek**：`config.DEFAULT_GATEWAY = "deepseek"`（官方公网，稳定，支持图像）。
-  **用户使用只需配置密钥**：在项目根新建 `.env`，填入
-  `DEEPSEEK_API_KEY=sk-xxxx`（或导出同名环境变量）。`.env` 已被 git 忽略，
-  模板见 `.env.example`。局域网备用网关 `local` 同理可用 `PYCUT_LOCAL_KEY` 覆盖。
-  `--gateway` 选择预设，`--llm-url/-key/-model` 覆盖。
+- **模型固定用 DeepSeek**：`config.DEFAULT_GATEWAY` 默认 `deepseek`（官方公网，稳定，支持图像）。
+  **密钥只从 `.env` 读取，代码里不允许出现明文密钥**（`config.py` 里只有空串默认值）。
+  用户使用只需：项目根建 `.env` 填 `DEEPSEEK_API_KEY=sk-xxxx`（或导出同名环境变量，优先级更高）。
+  `.env` 已被 git 忽略，模板见 `.env.example`。
+- **网关地址 / 模型名也可在 `.env` 配置**，默认即 DeepSeek：`PYCUT_LLM_URL`
+  （默认 `https://api.deepseek.com/v1`）、`PYCUT_LLM_MODEL`（默认 `deepseek-flash`）、
+  `PYCUT_GATEWAY`（默认 `deepseek`），以及 `local` 网关的 `PYCUT_LOCAL_URL/KEY/MODEL`。
+  命令行 `--gateway` / `--llm-url` / `--llm-key` / `--llm-model` 仍可临时覆盖。
+  `config.key_ready()` / `config.gateway_summary()` 用于检查密钥状态（**日志里绝不打印密钥本身**，
+  占位值如 `sk-你的密钥` 视为未配置）。
 - **参数两种入口（等价）**：
   - 命令行：`python3 pycut.py slice --file X --scene-th 0.35`
   - 终端 TUI：直接 `python3 pycut.py`（无参数且为交互终端即进入），方向键选命令/改参数，R 运行。

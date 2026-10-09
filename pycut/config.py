@@ -86,21 +86,28 @@ WORKERS_ENC = 2          # 1080p 实测 2 是拐点
 #   （环境变量或项目根 .env 文件，见 .env.example）；硬编码值为本机回退。
 #   --gateway 选择预设；命令行 --llm-url / --llm-key / --llm-model 可单独覆盖。
 # ---------------------------------------------------------------------------
+#   密钥 / 网关地址 / 模型名全部从 .env（或环境变量）读取，默认走 deepseek。
+#   .env 可配置项（见 .env.example）：
+#     DEEPSEEK_API_KEY   必填，DeepSeek 密钥
+#     PYCUT_LLM_URL      默认 https://api.deepseek.com/v1
+#     PYCUT_LLM_MODEL    默认 deepseek-flash
+#     PYCUT_GATEWAY      默认 deepseek（可改为 local）
+#     PYCUT_LOCAL_URL / PYCUT_LOCAL_KEY / PYCUT_LOCAL_MODEL  局域网网关可选
 GATEWAYS = {
     "local": {  # 局域网网关（快，但偶发 502/503/超时）
-        "url": "http://192.168.1.250:20128/v1",
-        "key": os.environ.get("PYCUT_LOCAL_KEY",
-                              "sk-REDACTED_LOCAL-e76438-796176a8"),
-        "model": "deepseek-v4.1-flash",
+        "url": os.environ.get("PYCUT_LOCAL_URL", "http://192.168.1.250:20128/v1"),
+        "key": os.environ.get("PYCUT_LOCAL_KEY", ""),
+        "model": os.environ.get("PYCUT_LOCAL_MODEL", "deepseek-v4.1-flash"),
     },
-    "deepseek": {  # 官方 DeepSeek 网关（公网，默认）
-        "url": "https://api.deepseek.com/v1",
-        "key": os.environ.get("DEEPSEEK_API_KEY",
-                              "sk-REDACTED_DEEPSEEK"),
-        "model": "deepseek-flash",
+    "deepseek": {  # 官方 DeepSeek 网关（默认）
+        "url": os.environ.get("PYCUT_LLM_URL", "https://api.deepseek.com/v1"),
+        "key": os.environ.get("DEEPSEEK_API_KEY", ""),
+        "model": os.environ.get("PYCUT_LLM_MODEL", "deepseek-flash"),
     },
 }
-DEFAULT_GATEWAY = "deepseek"
+DEFAULT_GATEWAY = os.environ.get("PYCUT_GATEWAY", "deepseek")
+if DEFAULT_GATEWAY not in GATEWAYS:
+    DEFAULT_GATEWAY = "deepseek"
 WORKERS_LLM = 8          # 实测比 4 快 19 倍
 LLM_MAX_TOKENS = 500     # 推理模型：30 会被 reasoning 吃光返回空
 LLM_MAX_TOKENS_RETRY = 1200
@@ -143,3 +150,29 @@ def apply_llm_overrides(name: str, url: str | None = None,
         key or preset["key"],
         model or preset["model"],
     )
+
+
+# 模板里的占位值（.env.example 的 sk-你的密钥 等）不算已配置
+_KEY_PLACEHOLDERS = ("你的", "your", "xxxx", "changeme", "placeholder", "todo", "xxx")
+
+
+def _is_placeholder(key: str) -> bool:
+    k = (key or "").strip()
+    if not k:
+        return True
+    low = k.lower()
+    return any(p in low for p in _KEY_PLACEHOLDERS)
+
+
+def key_ready(name: str | None = None) -> bool:
+    """密钥是否已真实配置（来自 .env / 环境变量）。空或占位都算未配置。"""
+    return not _is_placeholder(resolve_gateway(name or DEFAULT_GATEWAY)["key"])
+
+
+def gateway_summary(name: str | None = None) -> str:
+    """用于日志：网关名 / 地址 / 模型 / 密钥状态（不打印密钥本身）。"""
+    n = name or DEFAULT_GATEWAY
+    g = resolve_gateway(n)
+    k = g["key"]
+    state = "已配置" if not _is_placeholder(k) else ("未配置(占位)" if k.strip() else "未配置")
+    return f"{n} @ {g['url']} model={g['model']} key={state}"

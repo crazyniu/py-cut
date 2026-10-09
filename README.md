@@ -42,6 +42,17 @@ pycut/
   **不要进 venv**（会丢失 cv2）。
 - **ffmpeg**：homebrew 安装的 `ffmpeg-full`（含 videotoolbox 硬件编码），路径见 `config.py`。
 
+## 快速开始
+
+```bash
+./run.sh                 # 自动装依赖 -> 读 .env -> 进入 TUI
+./run.sh slice           # 或直接跑批量切片
+```
+
+`run.sh` 会：选好自带 cv2 的解释器 → 缺 `cv2/numpy` 时按 `requirements.txt` 安装
+（已装则跳过，不重复联网）→ 校验 cv2 → 打印生效网关（**不打印密钥**）→ 运行入口。
+没有 `.env` 时自动由 `.env.example` 生成并提示填密钥。
+
 ## 配置（只需配密钥）
 
 模型固定用 **DeepSeek**（默认网关，公网稳定、支持图像）。用户只需配置密钥：
@@ -52,9 +63,20 @@ cp .env.example .env
 #   DEEPSEEK_API_KEY=sk-xxxx
 ```
 
+`.env` 已在 `.gitignore` 中，不会被提交；密钥**只从 `.env` 读取**，代码里不存任何明文密钥。
 也可直接导出环境变量 `export DEEPSEEK_API_KEY=sk-xxxx`（优先级高于 `.env`）。
-`.env` 已在 `.gitignore` 中，不会被提交。局域网备用网关 `local` 用
-`PYCUT_LOCAL_KEY` 覆盖，默认不必配置。
+
+网关地址与模型名同样可在 `.env` 配置，默认即 DeepSeek，通常不用改：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `DEEPSEEK_API_KEY` | 无（必填） | DeepSeek 密钥 |
+| `PYCUT_LLM_URL` | `https://api.deepseek.com/v1` | 网关地址（OpenAI 兼容） |
+| `PYCUT_LLM_MODEL` | `deepseek-flash` | 模型名称 |
+| `PYCUT_GATEWAY` | `deepseek` | 默认网关（`deepseek` / `local`） |
+| `PYCUT_LOCAL_URL/KEY/MODEL` | — | 局域网备用网关，默认不用配 |
+
+命令行 `--gateway / --llm-url / --llm-key / --llm-model` 仍可临时覆盖。
 
 ## 用法
 
@@ -63,8 +85,8 @@ cp .env.example .env
 ### 方式一：终端 TUI（交互，推荐）
 
 ```bash
-python3 pycut.py          # 无参数且为交互终端 -> 进入 TUI
-python3 pycut.py tui      # 显式进入 TUI
+./run.sh          # 无参数且为交互终端 -> 进入 TUI
+./run.sh tui      # 显式进入 TUI
 ```
 
 - 方向键选功能（slice / cover），回车进入参数表
@@ -75,16 +97,16 @@ python3 pycut.py tui      # 显式进入 TUI
 
 ```bash
 # 试跑单个视频：只检测分段，不产出（先看切点是否合理）
-python3 pycut.py slice --file "财源滚滚来__ (1)" --dry-run
+./run.sh slice --file "财源滚滚来__ (1)" --dry-run
 
 # 正式切片（默认 deepseek 网关；也可用 --gateway local）
-python3 pycut.py slice
+./run.sh slice
 
 # 只处理前 3 个视频
-python3 pycut.py slice --limit 3
+./run.sh slice --limit 3
 
 # 补跑 / 重跑字幕擦除（--force 忽略已遮盖标记）
-python3 pycut.py cover --all
+./run.sh cover --all
 ```
 
 ## 当前功能：slice
