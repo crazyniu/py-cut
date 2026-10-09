@@ -1,19 +1,17 @@
-"""pycut 冒烟测试：验证包结构、配置、CLI 注册表。
+"""pycut 冒烟测试：验证包结构、配置、CLI 注册表、去重参数可复现性。
 
 运行：python3 -m pytest tests/ 或 python3 tests/test_smoke.py
-（仅做导入与结构断言，不触发实际 ffmpeg 编码 / LLM 调用。）
+（仅做导入与结构断言，不触发实际 ffmpeg 编码 / LLM 调用 / 大批量视频处理。）
 """
 from __future__ import annotations
 
 import os
 import sys
 
-import pytest
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pycut import cli, config  # noqa: E402
-from pycut.commands import cover_cmd, slice_cmd  # noqa: E402
+from pycut.commands import cover_cmd, dedup_cmd, slice_cmd  # noqa: E402
 
 
 def test_config_paths_exist():
@@ -53,5 +51,72 @@ def test_slice_subparser_has_key_args():
     assert ns2.gateway == "main"
 
 
+def test_dedup_registered():
+    """去重命令已挂到注册表，且档位/门槛配置齐备。"""
+    import pycut.tui as tui  # noqa: PLC0415
+
+    assert "dedup" in cli.list_commands()
+    assert set(config.DEDUP_PRESETS) == {"light", "standard", "aggressive"}
+    assert config.DEFAULT_GATEWAY == "main"
+    ns = cli.build_parser().parse_args(["dedup", "--all", "--preset", "aggressive"])
+    assert ns.command == "dedup" and ns.all is True and ns.preset == "aggressive"
+    # TUI：去重只把 范围/档位/自检 放在任务设置页，其余进高级页
+    fields = tui._collect_params("dedup")
+    nb = len(tui.BASIC_PARAMS["dedup"])
+    assert [f["label"] for f in fields[:nb]] == tui.BASIC_PARAMS["dedup"]
+    labels = {f["label"] for f in fields}
+    assert {"--mirror", "--speed", "--seed", "--phash-min"} <= labels
+
+
+def test_dedup_presets_deterministic():
+    """同 seed 同档位必须产出完全一致的参数（可复现是去重的基本要求）。"""
+    from pycut.core import dedup_presets as dp  # noqa: PLC0415
+
+    a = dp.build_params("standard", 42, has_audio=True, width=720, height=1280)
+    b = dp.build_params("standard", 42, has_audio=True, width=720, height=1280)
+    assert a == b
+    c = dp.build_params("standard", 43, has_audio=True, width=720, height=1280)
+    assert (a["crf"], a["crop_px"], a["noise"]) != (c["crf"], c["crop_px"], c["noise"])
+    # 无音轨 -> 不允许变调
+    d = dp.build_params("standard", 42, has_audio=False)
+    assert d["pitch"] == 1.0
+    # 轻档强度必须小于激进档
+    light = dp.build_params("light", 7)
+    aggr = dp.build_params("aggressive", 7)
+    assert light["crop_px"] <= aggr["crop_px"]
+    assert light["noise"] <= aggr["noise"]
+
+
+def test_fingerprint_identical_is_zero():
+    """自检基本正确性：同一文件自比的 pHash 距离为 0。"""
+    from pycut.core import fingerprint as fp  # noqa: PLC0415
+
+    src = config.SRC_DIR
+    videos = sorted(p for p in src.glob("*.mp4"))[:1]
+    if not videos:
+        return
+    prof = fp.phash_profile(videos[0], n=6)
+    assert len(prof) >= 1
+    assert fp.phash_distance(prof[0], prof[0]) == 0
+    r = fp.compare(videos[0], videos[0], n=6)
+    assert r["phash_dist"] == 0.0
+    assert r["psnr"] >= 60
+
+
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))
+    try:
+        import pytest  # noqa: PLC0415
+        sys.exit(pytest.main([__file__, "-q"]))
+    except ModuleNotFoundError:
+        # 本机没装 pytest：逐个直跑，至少把断言跑完
+        ok = fail = 0
+        for _name in [n for n in dir() if n.startswith("test_")]:
+            try:
+                globals()[_name]()
+                print(f"  ✓ {_name}")
+                ok += 1
+            except Exception as e:  # noqa: BLE001
+                print(f"  ✗ {_name}: {type(e).__name__}: {e}")
+                fail += 1
+        print(f"\n通过 {ok} / 失败 {fail}")
+        sys.exit(1 if fail else 0)

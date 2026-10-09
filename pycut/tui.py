@@ -19,6 +19,7 @@ from . import cli
 CMD_META = {
     "slice": "切片：场景分段 → 人脸分流 → 字幕擦除",
     "cover": "字幕擦除：对已有切片单独重跑去字幕",
+    "dedup": "去重：分层扰动 + pHash/PSNR 自检（过查重）",
 }
 
 # 「任务设置」页只放该命令真正需要用户决定的参数（按此顺序展示）；
@@ -26,6 +27,7 @@ CMD_META = {
 BASIC_PARAMS = {
     "slice": ["--file", "--no-sub", "--dry-run", "--force"],
     "cover": ["--file", "--all", "--force", "--dry-run"],
+    "dedup": ["--file", "--all", "--preset", "--check"],
 }
 
 # 参数在 TUI 里的中文显示名（argv 仍用原始 flag）
@@ -48,6 +50,20 @@ DISPLAY = {
     "--llm-url": "网关地址(覆盖)",
     "--llm-key": "网关密钥(覆盖)",
     "--llm-model": "模型名(覆盖)",
+    # dedup
+    "--preset": "去重档位",
+    "--check": "只自检（不产出）",
+    "--mirror": "允许镜像",
+    "--speed": "允许微变速",
+    "--border": "模糊边框",
+    "--badge": "角标色块",
+    "--logo": "画中画图片",
+    "--delogo": "水印区域",
+    "--out-dir": "输出目录",
+    "--in-place": "原地覆盖(危险)",
+    "--seed": "随机种子",
+    "--phash-min": "pHash 门槛",
+    "--psnr-min": "PSNR 门槛",
 }
 
 # 反向开关：界面显示正向含义（勾选=开启），实际写入的是 --no-xxx
@@ -181,8 +197,8 @@ def _safe_add(stdscr, y: int, x: int, s: str, maxw: int) -> None:
 def _finalize_argv(cmd: str, fields: list[dict]) -> list[str]:
     """生成将要执行的 argv：在 _build_argv 基础上补上命令的隐式默认。"""
     argv = _build_argv(cmd, fields)
-    # cover 没给 --file 时，等同于「处理全部切片」，避免直接跑报参数缺失
-    if cmd == "cover" and "--file" not in argv and "--all" not in argv:
+    # cover/dedup 没给 --file 时，等同于「处理全部切片」，避免直接跑报参数缺失
+    if cmd in ("cover", "dedup") and "--file" not in argv and "--all" not in argv:
         argv.append("--all")
     return argv
 

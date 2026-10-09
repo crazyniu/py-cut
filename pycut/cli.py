@@ -10,13 +10,14 @@ import argparse
 import sys
 
 from . import __version__
-from .commands import cover_cmd, slice_cmd
+from .commands import cover_cmd, dedup_cmd, slice_cmd
 from .core.utils import log
 
 # 命令注册表：名称 -> 命令模块（含 register / run）。新增功能在此登记即可。
 COMMANDS = {
     "slice": slice_cmd,
     "cover": cover_cmd,
+    "dedup": dedup_cmd,
 }
 
 

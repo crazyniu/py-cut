@@ -135,6 +135,67 @@ MIN_FREE_BYTES = 2 * 1024 ** 3   # 输出盘最小剩余空间
 # ---------------------------------------------------------------------------
 # 清单列（CSV utf-8-sig + JSON 双写）
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 去重 dedup（过平台查重）—— 需求与技术方案见 docs/DEDUP.md
+#   平台是 5 层指纹比对（文件哈希/元数据/视觉 pHash+CNN+光流/音频/文本），
+#   本模块按「容器→几何→像素→时间→结构→音频」分层扰动，并用 pHash 距离 + PSNR 自检。
+# ---------------------------------------------------------------------------
+DEDUP_OUT = DESKTOP / "去重_输出"      # 默认输出（保留切片桶的子目录结构）
+DEDUP_REPORT = DESKTOP / "去重_报告"   # JSON 报告目录
+DEDUP_PRESETS = ("light", "standard", "aggressive")
+DEDUP_DEFAULT_PRESET = "standard"
+DEDUP_WORKERS = 2                   # 并行处理数（libx264 软件编码，别开太高）
+DEDUP_X264_PRESET = "veryfast"
+DEDUP_PHASH_SAMPLES = 12            # 抽帧数
+
+# 自检门禁（阈值由本机实测标定，见下方「实测标定」注释，不要凭感觉拍）
+#   pHash 距离：按档位给下限。几何/像素层改动天然只把距离推到 2~8，
+#   只有结构层（模糊边框/镜像）才能到 18~34，所以门槛必须分档。
+#   实测标定（720x1280 素材，12 帧抽样；括号内是「长切片 39.8s」的值）：
+#     light       pHash ≈ 3.2~3.5 (长片 2.2)     PSNR ≈ 25dB
+#     standard    pHash ≈ 3.7~4.7 (长片 2.8)     PSNR ≈ 24dB
+#     aggressive  pHash ≈ 7.0~7.7 (长片 7.0)     PSNR ≈ 22dB
+#     +模糊边框    pHash ≈ 18.5~25.8              PSNR ≈ 13~17dB
+#     +镜像       pHash ≈ 21~34                  PSNR ≈ 16~17dB
+#   门槛取「实测下沿再留一点余量」：长切片运动量大、单帧改动被摊薄，
+#   pHash 天然偏低，用短片的值当门槛会把长片误判成「没动手」。
+#   PSNR 说明：它是「改动幅度」指标，不是画质指标——一旦做几何改动，
+#   逐像素对齐必然崩，PSNR 掉到 13~25dB 属正常，画面观感没问题。
+#   因此 PSNR 只当**灾难下限**（太低=真的糊了/错位了），不作为质量门禁。
+DEDUP_MIN_PHASH_BY_PRESET = {"light": 1.5, "standard": 2.0, "aggressive": 5.0}
+DEDUP_MIN_PHASH_DIST = 2.0      # 未指定档位时的兜底（= standard）
+DEDUP_MIN_PSNR = 14.0           # 灾难下限：低于此值视为画面真的被破坏
+# 各档 pHash 距离的实测期望区间（超出上限说明改动过头，多半是开了结构层/镜像）：
+# 实测 light≈3.2~3.5 / standard≈4.2~4.7 / aggressive≈7.7（无结构层）或 18~32（开结构层/镜像）。
+# 注意 pHash 距离强依赖**素材内容**：静态镜头比运动镜头改动更容易被检出，
+# 同一档在不同素材上数值可差一倍以上，所以下限只做「有没有真的动手」的兜底判断。
+DEDUP_PHASH_EXPECT = {
+    "light": (1.5, 14.0),
+    "standard": (2.0, 16.0),
+    "aggressive": (5.0, 30.0),
+}
+DEDUP_DUR_TOLERANCE = 0.35          # 时长偏差上限（启用变速时按 speed 放宽）
+
+# 参数随机化范围（seed 决定具体取值）
+DEDUP_CRF_RANGE = (22, 26)
+DEDUP_ABITRATE_RANGE = (96, 160)   # kbps
+DEDUP_GOP_RANGE = (46, 62)
+DEDUP_CROP_RANGE = (3, 8)           # 边缘微裁像素
+DEDUP_ZOOM_RANGE = (1.010, 1.030)
+DEDUP_ROTATE_DEG = (0.3, 0.8)
+DEDUP_PERSPECTIVE_PX = 3            # 激进档梯形变形最大像素
+DEDUP_BRIGHTNESS = 0.012           # ± 最大亮度偏移
+DEDUP_CONTRAST_RANGE = (1.010, 1.030)
+DEDUP_SATURATION_RANGE = (1.020, 1.050)
+DEDUP_HUE_DEG = 3                  # ± 最大色相偏移
+DEDUP_RGB_DRIFT = 0.012            # ± 通道增益漂移
+DEDUP_NOISE_RANGE = (3, 6)
+DEDUP_SHARPEN_RANGE = (0.3, 0.8)
+DEDUP_SPEED_RANGE = (1.020, 1.050)
+DEDUP_PITCH_RANGE = (1.004, 1.010)
+DEDUP_FPS_JITTER = ("30000/1001", "30", "30003/1000", "60")
+DEDUP_AUDIO_RATE = 44100
+
 MANIFEST_COLUMNS = [
     "video", "seg_index", "start", "end", "duration",
     "verdict", "decided_by",
