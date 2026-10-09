@@ -26,6 +26,7 @@ class MontageOptions:
     allow_landscape: bool = False
     pip_slot: float = 2.5
     use_pip: bool = True
+    srt: str = str(config.MONTAGE_SUB_PATH)   # 字幕文件；空串=不烧字幕
     crf: str = "20"
     fill_ratio: float = config.MONTAGE_TARGET_FILL_RATIO
     noise_db: float = config.MONTAGE_SILENCE_NOISE_DB
@@ -71,25 +72,44 @@ def run_pipeline(opts: MontageOptions) -> dict:
     # 画布以基准视频实测为准（config的 MONTAGE_CANVAS 只是默认值）
     canvas = (prof.width, prof.height)
     target = prof.duration * opts.fill_ratio
-    slots = plan_clip_slots(prof.segments, target, fill_ratio=opts.fill_ratio,
-                            min_slot=opts.min_clip, max_slot=opts.max_clip)
-    slot_total = sum(b - a for a, b in slots)
-    log(f"  时间槽 {len(slots)} 个，累计 {slot_total:.2f}s"
-        f"（目标 {target:.2f}s）")
+    # 有字幕时，**以字幕为节奏骨架**切槽——字幕条数（56）远多于语音段（7），
+    # 一槽一字幕才能把话术完整带上；否则 42 条字幕会因槽不够而丢失。
+    # 无字幕时才退回「语音段 + 连续补槽」。
+    slots: list[tuple[float, float]] = []
+    if opts.srt and Path(opts.srt).is_file():
+        from ..core.montage_subtitles import parse_srt  # noqa: PLC0415
+        try:
+            with contextlib_suppress():
+                cues = parse_srt(opts.srt)
+            if cues:
+                # 关键：用**字幕自己的**最小可读时长（0.8s），不是片段的 min_clip(1.2s)。
+                # 实测 56 条字幕里 27 条短于 1.2s，按1.2 卡会丢一半；
+                # 0.8s 下只剩 8 条过短（86% 可用）。
+                sub_min = config.MONTAGE_SUB_MIN_READABLE
+                slots = _slots_from_cues(cues, target, sub_min)
+                log(f"  按字幕切槽: {len(cues)} 条字幕 -> {len(slots)} 个槽，"
+                    f"累计 {sum(b - a for a, b in slots):.2f}s（目标 {target:.2f}s）")
+        except Exception as e:  # noqa: BLE001 字幕解析失败不该中断混剪
+            log(f"  [提示] 字幕解析失败（{type(e).__name__}），退回语音节奏切槽")
+            slots = []
 
-    # 基准视频带持续背景音乐，silencedetect 只能切出有限几段（实测 -32dB 只有 1 段），
-    # 槽合计会远小于目标时长。这里按「剩余量均分成整段」补齐——
-    # 补出来的槽取自基准视频的**连续区间**（不是语音段），画面上表现为
-    # 「说话时优先跟语音节奏，静音/音乐段用连续画面填满」，时长因此能对齐。
-    if slot_total < target - opts.min_clip:
-        need = target - slot_total
-        extra = _fill_slots(slots, need, opts.min_clip, opts.max_clip,
-                            prof.duration)
-        log(f"  语音段只覆盖 {slot_total:.2f}s，缺口 {need:.2f}s "
-            f"→ 补 {len(extra)} 个连续槽")
-        slots.extend(extra)
-    log(f"  最终时间槽 {len(slots)} 个，累计 "
-        f"{sum(b - a for a, b in slots):.2f}s（目标 {target:.2f}s）")
+    if not slots:
+        slots = plan_clip_slots(prof.segments, target, fill_ratio=opts.fill_ratio,
+                                min_slot=opts.min_clip, max_slot=opts.max_clip)
+        slot_total = sum(b - a for a, b in slots)
+        log(f"  按语音切槽: {len(slots)} 个，累计 {slot_total:.2f}s"
+            f"（目标 {target:.2f}s）")
+        # 基准视频带持续背景音乐，silencedetect 只能切出有限几段（实测 -20dB 只有 7 段
+        # 共 43s），槽合计会远小于目标。这里按「剩余量均分成整段」补齐。
+        if slot_total < target - opts.min_clip:
+            need = target - slot_total
+            extra = _fill_slots(slots, need, opts.min_clip, opts.max_clip,
+                                prof.duration)
+            log(f"  语音段只覆盖 {slot_total:.2f}s，缺口 {need:.2f}s "
+                f"→ 补 {len(extra)} 个连续槽")
+            slots.extend(extra)
+        log(f"  最终时间槽 {len(slots)} 个，累计 "
+            f"{sum(b - a for a, b in slots):.2f}s（目标 {target:.2f}s）")
 
     result = {
         "source_duration": prof.duration,
@@ -186,12 +206,107 @@ def run_pipeline(opts: MontageOptions) -> dict:
     result["final"] = str(final)
     result["final_duration"] = _duration(final)
     log(f"  成片: {final.name}  {_size(final)}  {result['final_duration']:.2f}s")
+
+    # ---------------- 步骤D：字幕烧录（可选） ----------------
+    if opts.srt and Path(opts.srt).is_file():
+        log("--- 步骤D：字幕烧录 ---")
+        ok = _burn_subtitles(Path(final), slots, canvas, opts)
+        if ok:
+            result["subtitles"] = result.get("subtitles", 0)
+            result["final_duration"] = _duration(final)
+            log(f"  烧录后: {_size(final)}  {result['final_duration']:.2f}s")
+        else:
+            log("  [失败] 字幕烧录失败，保留无字幕版本")
+            result["error"] = "步骤D 字幕烧录失败"
+    elif opts.srt:
+        log(f"--- 步骤D：跳过（字幕文件不存在: {opts.srt}）---")
+
     return result
+
+
+def _burn_subtitles(video: Path, slots: list[tuple[float, float]],
+                    canvas: tuple[int, int], opts: MontageOptions) -> bool:
+    """把字幕按槽序烧录进成片（字幕在底部，与右上角画中画不冲突）。"""
+    from ..core.montage_subtitles import (assign_cues_to_slots,  # noqa: PLC0415
+                                          build_ass, build_subtitle_cmd,
+                                          parse_srt, subtitle_tmp_path)
+    import os  # noqa: PLC0415
+
+    cues = parse_srt(opts.srt)
+    if not cues:
+        log("  [失败] 字幕解析为空")
+        return False
+    subs = assign_cues_to_slots(cues, slots, _duration(video))
+    if not subs:
+        log("  [失败] 没有可用的字幕-槽位对应")
+        return False
+    log(f"  字幕 {len(cues)} 条 -> 匹配 {len(subs)} 条"
+        f"（槽 {len(slots)} 个，{len(slots) - len(subs)} 个过短未配）")
+
+    ass_path, style = build_ass(subs, canvas=canvas)
+    log(f"  样式: {style.get('font_name', '?')} {style.get('font_size', 0):.0f}px "
+        f"BorderStyle={config.MONTAGE_SUB_BORDER_STYLE}")
+
+    out = video.with_name(video.stem + "_sub.mp4")
+    cmd = build_subtitle_cmd(video, Path(ass_path), out, crf=opts.crf,
+                             fps=config.MONTAGE_FPS)
+    if not _run(cmd):
+        _unlink(subtitle_tmp_path(out))
+        return False
+    tmp = subtitle_tmp_path(out)
+    if not tmp.is_file() or tmp.stat().st_size < 1024:
+        log("  [失败] 字幕烧录产物异常")
+        _unlink(tmp)
+        return False
+    os.replace(str(tmp), str(video))   # 原子替换回原成片路径
+    _unlink(ass_path)
+    return True
 
 
 # ---------------------------------------------------------------------------
 # 内部工具
 # ---------------------------------------------------------------------------
+class contextlib_suppress:
+    """最小化抑制上下文（避免为一个 except 多引一个模块）。"""
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, *exc) -> bool:
+        return True
+
+
+def _slots_from_cues(cues, target: float, min_slot: float) -> list[tuple[float, float]]:
+    """按字幕条数切时间槽：一条字幕 = 一个槽，槽长 = 该字幕时长。
+
+    这样成片节奏与话术**逐句对齐**，且不会丢字幕（槽数 = 字幕条数）。
+    过短的字幕（< min_slot）并入下一条，避免闪一下看不清。
+    """
+    spans: list[list[float]] = []
+    for c in cues:
+        s, e = float(c.start), float(c.end)
+        if e <= s:
+            continue
+        if spans and (e - s) < min_slot:
+            spans[-1][1] = max(spans[-1][1], e)   # 太短就并入上一句
+            continue
+        spans.append([s, e])
+
+    slots: list[tuple[float, float]] = []
+    acc = 0.0
+    for s, e in spans:
+        dur = e - s
+        if acc + dur > target:
+            e = s + (target - acc)                 # 超出目标就截断
+            if e - s < min_slot:
+                break
+        slots.append((s, e))
+        acc += e - s
+        if acc >= target:
+            break
+    return slots
+
+
 def _fill_slots(slots: list[tuple[float, float]], need: float,
                 min_slot: float, max_slot: float,
                 src_duration: float) -> list[tuple[float, float]]:

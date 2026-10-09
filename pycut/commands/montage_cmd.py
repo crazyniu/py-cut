@@ -45,6 +45,9 @@ def register(subparsers) -> None:
     g.add_argument("--pip-slot", type=float, default=2.5,
                    help="步骤C 每个画中画显示几秒")
     g.add_argument("--no-pip", action="store_true", help="不叠画中画（只跑步骤A+B）")
+    g.add_argument("--srt", default=str(config.MONTAGE_SUB_PATH),
+                   help="字幕文件（步骤D 烧录；传空串则不烧字幕）")
+    g.add_argument("--no-sub", action="store_true", help="不烧字幕")
     g.add_argument("--crf", default="20", help="输出 libx264 CRF（越小越清晰）")
     g.add_argument("--probe", type=int, default=0,
                    help="只探测素材库规模（片段数/竖屏数/时长分布）后退出，不处理")
@@ -154,6 +157,7 @@ def run(args: argparse.Namespace) -> int:
         allow_landscape=args.allow_landscape,
         pip_slot=args.pip_slot,
         use_pip=not args.no_pip,
+        srt=("" if args.no_sub else args.srt),
         crf=args.crf,
         fill_ratio=args.fill_ratio,
         noise_db=args.noise_db,

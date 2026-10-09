@@ -256,6 +256,17 @@ MONTAGE_WORKERS = 2
 MONTAGE_PIP_SCALE = 0.26            # 画中画宽度 = 基准宽 × 该比例（右上角）
 MONTAGE_PIP_MARGIN = 0.03# 距右/上边缘留白比例
 
+# 字幕烧录（步骤D）。样式按画布比例自适应，不写死像素。
+# 默认 BorderStyle=3（半透明黑底框）而非 BorderStyle=1（纯描边）：
+# 混剪素材随机、底部颜色不可控，底框能保证任何背景下白字都清晰（已实拍两种对比）。
+MONTAGE_SUB_FONT_RATIO = 0.042      # 字号 = 画布高 × 该比例（1276 → 54px）
+MONTAGE_SUB_MARGIN_V_RATIO = 0.08   # 底边距 = 画布高 × 该比例
+MONTAGE_SUB_MARGIN_H_RATIO = 0.05   # 左右安全边距
+MONTAGE_SUB_BORDER_STYLE = 3# 3=半透明底框；改 1 则切纯描边
+MONTAGE_SUB_MIN_READABLE = 0.8      # 字幕最短可读时长，槽比它短就不给字幕
+MONTAGE_SUB_PATH = Path.home() / "Desktop/10月8日.srt"   # 默认字幕文件
+MONTAGE_SUB_X264_PRESET = "veryfast"
+
 MANIFEST_COLUMNS = [
     "video", "seg_index", "start", "end", "duration",
     "verdict", "decided_by",
