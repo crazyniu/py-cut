@@ -770,10 +770,12 @@ def _probe_fallback_duration(path: Path) -> float:
     """`_video_duration` 读不到值时的兜底（防御性，正常路径不会走到）。
 
     存在的理由：`stream=duration` 并非在所有容器上都可靠——实测 matroska(.mkv)
-    与 flv 返回 `N/A`（mp4/mov/mpegts 有值），此时若直接返回 0 会让时长门禁
-    假失败。顺序：**先数帧/帧率（最准）-> 再试 stream=duration -> 最后 format**。
-    `format=duration` 是容器里最长流的长度，音视频不同步时会给错值
-    （实测只做 setpts 时 format 取的是未变的音频时长），只能当最后兜底。
+    与 flv 的 stdout 是 `N/A`（mp4/mov/mpegts 有值），此时若直接返回 0 会让
+    时长门禁假失败。顺序：**先数帧/帧率（最准）-> 再试 stream=duration ->
+    最后 format**。这三档在 mkv 上实测都能取到 5.300（stream缺、数帧与 format
+    兜住），所以最后一档并非摆设。`format=duration` 是容器里最长流的长度，
+    音视频不同步时会给错值（实测只做 setpts 时 format 取的是未变的音频时长），
+    精度最低，只能当最后兜底。
 
     代价：`-count_frames` 需解码全片，实测 695ms，仅在主路径失败时触发。
     """
