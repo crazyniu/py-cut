@@ -315,5 +315,80 @@ class CoreSafetyTests(unittest.TestCase):
                 workers=opts.workers, allow_landscape=True)
 
 
+    def test_reencoding_slice_invalidates_old_subtitle_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "source.mp4"
+            src.write_bytes(b"input")
+            dst = root / "face" / "001.mp4"
+            dst.parent.mkdir()
+            dst.write_bytes(b"old" * 700)
+            marker = dst.with_name(dst.name + ".covered.json")
+            marker.write_text('{"subtitle": true}', encoding="utf-8")
+            info = SimpleNamespace(path=src, has_audio=False, bitrate="5M")
+            def encode_ok(cmd, timeout):
+                Path(cmd[-1]).write_bytes(b"new" * 700)
+                return 0, "", ""
+            with mock.patch.object(slice_pipeline, "run_cmd", side_effect=encode_ok), \
+                 mock.patch.object(slice_pipeline, "log"):
+                ok, size = slice_pipeline.cut_clip(info, 0.0, 2.5, dst)
+            self.assertTrue(ok)
+            self.assertEqual(size, 2100)
+            self.assertEqual(dst.read_bytes(), b"new" * 700)
+            self.assertFalse(marker.exists())
+
+            marker.write_text("{}", encoding="utf-8")
+            with mock.patch.object(slice_pipeline, "run_cmd",
+                                   return_value=(1, "", "encoder failed")), \
+                 mock.patch.object(slice_pipeline, "log"):
+                failed, size = slice_pipeline.cut_clip(info, 0.0, 2.5, dst)
+            self.assertFalse(failed)
+            self.assertEqual(size, 0)
+            self.assertEqual(dst.read_bytes(), b"new" * 700)
+            self.assertTrue(marker.exists())
+
+    def test_montage_explicit_missing_subtitle_does_not_run_pipeline(self):
+        from pycut.commands import montage_cmd
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "source.mp4"
+            source.write_bytes(b"source")
+            args = cli.build_parser().parse_args([
+                "montage", "--source", str(source),
+                "--srt", str(root / "missing.srt")])
+            with mock.patch.object(montage_cmd, "install_signal_handlers"), \
+                 mock.patch.object(montage_cmd, "reset_stop"), \
+                 mock.patch.object(montage_cmd, "self_check"), \
+                 mock.patch.object(montage_pipeline, "run_pipeline") as work, \
+                 mock.patch.object(montage_cmd, "log"):
+                self.assertEqual(montage_cmd.run(args), 2)
+            work.assert_not_called()
+
+    def test_ass_temp_file_is_cleaned_if_subtitle_encoding_fails(self):
+        from pycut.core import montage_subtitles
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ass_path = root / "subtitles.ass"
+            ass_path.write_text("[Script Info]", encoding="utf-8")
+            opts = montage_pipeline.MontageOptions(srt="fake.srt")
+            with mock.patch.object(montage_subtitles, "parse_srt",
+                                   return_value=[object()]), \
+                 mock.patch.object(montage_subtitles, "assign_cues_to_slots",
+                                   return_value=[object()]), \
+                 mock.patch.object(montage_subtitles, "build_ass",
+                                   return_value=(ass_path, {"font_name": "test", "font_size": 20})), \
+                 mock.patch.object(montage_subtitles, "build_subtitle_cmd",
+                                   return_value=["ffmpeg"]), \
+                 mock.patch.object(montage_pipeline, "_duration",
+                                   return_value=5.0), \
+                 mock.patch.object(montage_pipeline, "_run",
+                                   return_value=False), \
+                 mock.patch.object(montage_pipeline, "log"):
+                ok = montage_pipeline._burn_subtitles(
+                    root / "output.mp4", [(0.0, 5.0)], (720, 1280), opts)
+            self.assertFalse(ok)
+            self.assertFalse(ass_path.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
