@@ -76,35 +76,34 @@ class NavigationTests(unittest.TestCase):
             self.assertEqual(tui._loop(screen), ("quit", None))
         self.assertEqual(screen.keys, [])
 
-    def test_picker_starts_at_home_and_space_chooses_current(self):
+    def test_native_picker_defaults_to_current_home(self):
         with tempfile.TemporaryDirectory() as tmp, \
-             mock.patch.object(tui.Path, "home", return_value=Path(tmp)):
-            screen = Screen([ord(" ")])
-            self.assertEqual(tui._pick_dir(screen, "选择目录"), tmp)
-            self.assertTrue(any(tmp in s for _, _, s in screen.printed))
+             mock.patch.object(tui.Path, "home", return_value=Path(tmp)), \
+             mock.patch.object(tui, "choose_directory",
+                               return_value=tmp) as chooser:
+            self.assertEqual(
+                tui._pick_dir(Screen([]), "选择目录"), tmp
+            )
+        chooser.assert_called_once_with("选择目录", Path(tmp))
 
-    def test_picker_enters_child_then_chooses_with_enter(self):
+    def test_native_picker_passes_prior_folder_when_backtracking(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             child = root / "中文素材"
             child.mkdir()
-            # With an explicit start the current-folder action is focused.
-            screen = Screen([curses.KEY_UP, 10, 10], size=(20, 60))
-            self.assertEqual(
-                tui._pick_dir(screen, "素材目录", start=root), str(child)
-            )
+            with mock.patch.object(tui, "choose_directory",
+                                   return_value=str(child)) as chooser:
+                self.assertEqual(
+                    tui._pick_dir(Screen([]), "素材目录", start=root),
+                    str(child),
+                )
+            chooser.assert_called_once_with("素材目录", root)
 
-    def test_picker_backspace_goes_to_parent_not_application_exit(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            child = root / "source"
-            child.mkdir()
-            screen = Screen([curses.KEY_BACKSPACE, ord(" ")])
-            self.assertEqual(tui._pick_dir(screen, "目录", start=child), str(root))
-
-    def test_picker_left_at_root_cannot_leave_filesystem(self):
-        screen = Screen([curses.KEY_LEFT, ord(" ")], size=(20, 60))
-        self.assertEqual(tui._pick_dir(screen, "目录", start=Path("/")), "/")
+    def test_native_picker_cancel_returns_to_previous_wizard(self):
+        with mock.patch.object(tui, "choose_directory", return_value=None):
+            self.assertIsNone(tui._pick_dir(
+                Screen([]), "目录", start=Path("/")
+            ))
 
     def test_review_esc_goes_back_to_selected_folder_not_main(self):
         paths = ["/tmp/one", "/tmp/two"]
