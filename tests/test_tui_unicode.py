@@ -87,24 +87,25 @@ class UnicodeSearchTests(unittest.TestCase):
         self.assertIsNone(tui._prompt_text(Screen(["\x1b"]), 4, 2, 80, "关键词"))
 
         class AsciiOnly(Screen):
-            get_wch = None
+            def __getattribute__(self, name):
+                if name == "get_wch":
+                    raise AttributeError(name)
+                return super().__getattribute__(name)
 
             def getch(self):
-                k = self.keys.pop(0) if self.keys else 27
-                return k
+                return self.keys.pop(0) if self.keys else 27
 
         screen = AsciiOnly([ord("a"), ord("b"), 10])
-        # 如果不可用 get_wch，应退化到普通 getch 的 ASCII 输入。
-        with mock.patch.object(screen, "get_wch", None, create=False):
-            self.assertEqual(
-                tui._prompt_text(screen, 4, 2, 80, "关键词"), "ab"
-            )
+        # 如果 curses 窗口缺少 get_wch，应退化到 getch 的 ASCII 输入。
+        self.assertEqual(
+            tui._prompt_text(screen, 4, 2, 80, "关键词"), "ab"
+        )
 
     def test_search_tui_cancel_before_keyword_does_not_scan(self):
         with mock.patch.object(tui, "_pick_dir", return_value="/tmp/videos"), \
              mock.patch.object(tui, "_prompt_text", return_value=None), \
              mock.patch.object(tui, "search_videos") as search:
-            self.assertIsNone(tui._wizard_search(mock.Mock(), 80))
+            self.assertIsNone(tui._wizard_search(Screen([]), 80))
             search.assert_not_called()
 
 
