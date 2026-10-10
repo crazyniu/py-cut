@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
+import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -14,7 +15,16 @@ from pycut import cli, config  # noqa: E402
 from pycut.commands import cover_cmd, dedup_cmd, slice_cmd  # noqa: E402
 
 
+def _require_media_environment() -> None:
+    """本机 FFmpeg 和真实素材验证仅在明确授权后运行，不污染纯逻辑测试。"""
+    if os.environ.get("PYCUT_TEST_MEDIA") != "1":
+        raise unittest.SkipTest(
+            "需要真实媒体环境；设置 PYCUT_TEST_MEDIA=1 后才会检查本机 FFmpeg/素材"
+        )
+
+
 def test_config_paths_exist():
+    _require_media_environment()
     assert os.path.isfile(config.FFMPEG), f"ffmpeg 不存在: {config.FFMPEG}"
     assert os.path.isfile(config.FFPROBE), f"ffprobe 不存在: {config.FFPROBE}"
     assert config.SRC_DIR.is_dir(), f"源目录不存在: {config.SRC_DIR}"
@@ -103,13 +113,14 @@ def test_dedup_presets_deterministic():
 
 
 def test_fingerprint_identical_is_zero():
-    """自检基本正确性：同一文件自比的 pHash 距离为 0。"""
+    """真实视频自比依赖 FFmpeg 和测试素材，不应在跨环境 CI 静默通过。"""
+    _require_media_environment()
     from pycut.core import fingerprint as fp  # noqa: PLC0415
 
     src = config.SRC_DIR
     videos = sorted(p for p in src.glob("*.mp4"))[:1]
     if not videos:
-        return
+        raise unittest.SkipTest(f"源目录没有可用于 pHash 验收的 MP4：{src}")
     prof = fp.phash_profile(videos[0], n=6)
     assert len(prof) >= 1
     assert fp.phash_distance(prof[0], prof[0]) == 0
@@ -124,14 +135,17 @@ if __name__ == "__main__":
         sys.exit(pytest.main([__file__, "-q"]))
     except ModuleNotFoundError:
         # 本机没装 pytest：逐个直跑，至少把断言跑完
-        ok = fail = 0
+        ok = fail = skipped = 0
         for _name in [n for n in dir() if n.startswith("test_")]:
             try:
                 globals()[_name]()
                 print(f"  ✓ {_name}")
                 ok += 1
+            except unittest.SkipTest as e:
+                print(f"  ↷ {_name} (skip): {e}")
+                skipped += 1
             except Exception as e:  # noqa: BLE001
                 print(f"  ✗ {_name}: {type(e).__name__}: {e}")
                 fail += 1
-        print(f"\n通过 {ok} / 失败 {fail}")
+        print(f"\n通过 {ok} / 跳过 {skipped} / 失败 {fail}")
         sys.exit(1 if fail else 0)
