@@ -26,6 +26,8 @@ def register(subparsers) -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--file", default="", help="只处理文件名（或部分匹配）的单个视频，试跑用")
     p.add_argument("--limit", type=int, default=0, help="只处理前 N 个视频（0=全部）")
+    p.add_argument("--max-depth", type=int, default=None,
+                   help="指定扫描深度（0=仅当前目录，TUI 默认 3；留空=CLI 原有无限递归）")
     p.add_argument("--dry-run", action="store_true", help="只做检测与分段，不抽帧/不切割")
     p.add_argument("--force", action="store_true", help="忽略续跑，重做已处理的视频")
     p.add_argument("--no-llm", action="store_true", help="完全不调用 LLM（人脸仅靠 Haar）")
@@ -51,7 +53,14 @@ def register(subparsers) -> None:
 
 
 def _pick_files(args: argparse.Namespace) -> list:
-    files = list_videos()
+    if args.max_depth is not None:
+        if args.max_depth < 0:
+            sys.exit("[错误] --max-depth 必须 >= 0")
+        from ..core.scan import list_videos_recursive  # noqa: PLC0415
+        files = [p for p in list_videos_recursive(config.SRC_DIR, args.max_depth)
+                 if p.suffix.lower() == ".mp4"]
+    else:
+        files = list_videos()
     if args.file:
         key = args.file.lower()
         matched = [f for f in files if key in f.name.lower()]
@@ -83,6 +92,9 @@ def run(args: argparse.Namespace) -> int:
 
     files = _pick_files(args)
     log(f"[源] {config.SRC_DIR} 找到 {len(files)} 个 mp4（os.scandir）")
+    if not files:
+        log("[错误] 所选范围内没有可处理的 MP4 视频")
+        return 1
 
     llm = make_llm(args.gateway, args.llm_url, args.llm_key, args.llm_model,
                    enabled=not args.no_llm,
@@ -165,4 +177,9 @@ def _summary(results, llm, manifest, t_detect, t_enc, t_all) -> int:
     log(f"{'LLM 调用':<12}{llm.calls:>10}  {llm_note}")
     log(f"{'清单':<12}{manifest.csv_path}")
     log("=" * 62)
+    # 任何切割 / 字幕失败都不能被误报成成功，避免 TUI 继续执行后续去重。
+    sub_failed = sum(r.sub_fail for r in results)
+    if tot_fail or sub_failed:
+        log(f"[失败] 切片错误 {tot_fail}，字幕处理错误 {sub_failed}")
+        return 2
     return 0
