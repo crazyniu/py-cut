@@ -67,23 +67,33 @@ def _grab_frame(clip: Path, t: float, jp: Path, width: int = DETECT_WIDTH) -> bo
 
 def detect_region(llm: LLMClient, clip: Path,
                   samples: int = SAMPLES) -> tuple[int, int, int, int, list[str]] | None:
-    """返回像素区域 (X, Y, BW, BH) 与识别到的字幕文本；无字幕/检测失败返回 None。"""
+    """返回字幕区域或明确的“无字幕”(None)；探测失败抛 RuntimeError。
+
+    检测不到文字与抽帧/LLM 全部失败不是同一个状态。失败时禁止写入
+    “无字幕”标记，否则往后每次重跑都会直接跳过可能存在的字幕。
+    """
+    if samples < 1:
+        raise RuntimeError("至少需要抽取一帧进行字幕检测")
     dur_s = probe_scalar(clip, "format=duration")
     if not dur_s:
-        return None
+        raise RuntimeError("无法探测视频时长")
     dur = float(dur_s)
+    if dur <= 0:
+        raise RuntimeError("视频时长无效")
     w_s = probe_scalar(clip, "stream=width")
     h_s = probe_scalar(clip, "stream=height")
     if not w_s or not h_s:
-        return None
+        raise RuntimeError("无法探测视频分辨率")
     W, H = int(w_s), int(h_s)
 
     boxes: list[list[float]] = []
     texts: list[str] = []
+    clean_replies = 0
+    uncertain_positive = 0
     with tempfile.TemporaryDirectory(prefix="subchk_") as td:
         for i in range(samples):
             if STOP.flag:
-                return None
+                raise RuntimeError("用户中断字幕检测")
             t = dur * (i + 0.5) / samples
             jp = Path(td) / f"f{i}.jpg"
             if not _grab_frame(clip, t, jp):
@@ -92,19 +102,38 @@ def detect_region(llm: LLMClient, clip: Path,
             if frame is None:
                 continue
             r = llm.ask_vision(frame, DETECT_PROMPT)
-            if r and r.get("has_subtitle") and isinstance(r.get("box"), list) \
-                    and len(r["box"]) == 4:
-                try:
-                    b = [float(v) for v in r["box"]]
-                except (TypeError, ValueError):
-                    continue
-                if all(0.0 <= v <= 1.0 for v in b) and b[2] > b[0] and b[3] > b[1]:
-                    boxes.append(b)
-                    if r.get("text"):
-                        texts.append(str(r["text"]))
+            if not isinstance(r, dict):
+                continue
+            if r.get("has_subtitle") is False:
+                clean_replies += 1
+                continue
+            if r.get("has_subtitle") is not True:
+                continue
+            box = r.get("box")
+            if not isinstance(box, list) or len(box) != 4:
+                uncertain_positive += 1
+                continue
+            try:
+                b = [float(v) for v in box]
+            except (TypeError, ValueError):
+                uncertain_positive += 1
+                continue
+            if all(0.0 <= v <= 1.0 for v in b) and b[2] > b[0] and b[3] > b[1]:
+                boxes.append(b)
+                if r.get("text"):
+                    texts.append(str(r["text"]))
+            else:
+                uncertain_positive += 1
 
     if not boxes:
-        return None
+        # 只有过半采样点得到明确否定且不存在“检测到字幕但框无效”
+        # 的冲突回复，才能持久标记无字幕。其余情形保留重试机会。
+        if clean_replies >= (samples // 2 + 1) and uncertain_positive == 0:
+            return None
+        raise RuntimeError(
+            f"字幕检测结果不可靠：有效无字幕答复 {clean_replies}/{samples}，"
+            f"无法定位的字幕答复 {uncertain_positive}；未标记已处理"
+        )
 
     # 中位数聚合：抗单帧位置漂移 / 个别帧把警示条框得偏上或偏下
     x1, y1 = _median([b[0] for b in boxes]), _median([b[1] for b in boxes])
@@ -277,7 +306,11 @@ def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
     if mk.exists() and not force:
         return "skip"
 
-    region = detect_region(llm, clip, samples)
+    try:
+        region = detect_region(llm, clip, samples)
+    except (RuntimeError, ValueError, OSError) as exc:
+        log(f"  [字幕检测失败] {clip.name}: {exc}")
+        return "fail"
     if region is None:
         if not llm.enabled:
             return "fail"  # LLM 不可用时不能盲盖
