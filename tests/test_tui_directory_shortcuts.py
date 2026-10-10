@@ -207,6 +207,72 @@ class FolderShortcutTests(unittest.TestCase):
             screen = Screen([ord("P"), 27, ord(" ")])
             self.assertEqual(tui._pick_dir(screen, "目录", start=root), str(root))
 
+    def test_missing_leading_slash_does_not_duplicate_user_home(self):
+        """Regression: /Users/apple must not turn into /Users/apple/Users/apple."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "Users" / "apple"
+            home.mkdir(parents=True)
+            for name in ("Desktop", "Documents", "Downloads", "Movies"):
+                (home / name).mkdir()
+            raw = str(home).lstrip(os.sep)
+            mistaken = home / raw
+            mistaken.mkdir(parents=True)
+            with mock.patch.object(tui.Path, "home", return_value=home):
+                # The mistakenly nested directory really exists: selecting the
+                # first matching relative candidate was the old bug.
+                self.assertTrue(mistaken.is_dir())
+                self.assertEqual(tui._resolve_directory_path(raw, home), home)
+                screen = Screen([ord("P"), *raw, 10, 27])
+                self.assertIsNone(tui._pick_dir(screen, "目录", start=home))
+            output = "\n".join(screen.printed)
+            for name in ("Desktop/", "Documents/", "Downloads/", "Movies/"):
+                self.assertIn(name, output)
+            self.assertNotIn(str(mistaken), output)
+
+    def test_explicit_dot_relative_path_remains_relative(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "Users" / "apple"
+            home.mkdir(parents=True)
+            raw = str(home).lstrip(os.sep)
+            nested = home / raw
+            nested.mkdir(parents=True)
+            with mock.patch.object(tui.Path, "home", return_value=home):
+                self.assertEqual(
+                    tui._resolve_directory_path("./" + raw, home),
+                    nested,
+                )
+
+    def test_existing_nested_home_path_warns_and_offers_recovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "Users" / "apple"
+            home.mkdir(parents=True)
+            nested = home / home.relative_to(home.anchor)
+            nested.mkdir(parents=True)
+            with mock.patch.object(tui.Path, "home", return_value=home):
+                screen = Screen([ord("1"), ord(" ")])
+                self.assertEqual(tui._pick_dir(screen, "目录", start=nested),
+                                 str(home))
+            self.assertTrue(
+                any("疑似重复用户目录" in line for line in screen.printed)
+            )
+
+    def test_directory_error_is_distinct_from_no_child_folders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for error in (None, PermissionError(13, "Permission denied")):
+                with self.subTest(error=error):
+                    with mock.patch.object(
+                        tui, "list_dirs",
+                        side_effect=(lambda path, **kw: []
+                                     if error is None else (_ for _ in ()).throw(error)),
+                    ):
+                        screen = Screen([27])
+                        self.assertIsNone(tui._pick_dir(screen, "目录", start=root))
+                    displayed = "\n".join(screen.printed)
+                    self.assertIn("无法读取子目录" if error else
+                                  "没有可见的子文件夹", displayed)
+
+
     def test_short_terminal_shows_all_shortcut_labels(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
