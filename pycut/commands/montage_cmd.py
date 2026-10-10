@@ -101,7 +101,7 @@ def _probe_library(clip_dir: Path, allow_landscape: bool, workers: int) -> int:
     log(f"  文件总数(含横屏): {len(all_files)}")
 
     if allow_landscape:
-        items = scan_library(clip_dir, workers=workers)
+        items = scan_library(clip_dir, workers=workers, allow_landscape=True)
         log(f"  可用: {len(items)} 条")
     else:
         # 只用竖屏：先按侧边比过滤，再按时长过滤，两次统计便于看清各过滤掉了多少
