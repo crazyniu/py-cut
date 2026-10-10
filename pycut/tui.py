@@ -26,6 +26,7 @@ from __future__ import annotations
 import curses
 import curses.textpad  # noqa: F401  必须显式导入：不会随 import curses 自动加载
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -324,9 +325,10 @@ def _erase_grapheme(s: str) -> str:
     return s[:i]
 
 
-def _prompt_text(stdscr, y, x, w, title, default="") -> str | None:
-    """通过 get_wch 接受中文/日文输入法及 Unicode 粘贴；Esc 取消。"""
+def _prompt_text(stdscr, y, x, w, title, default="", *, validate=None) -> str | None:
+    """Unicode-capable input; an optional validator keeps bad paths editable."""
     buf = default
+    error = ""
     supports_unicode = callable(getattr(stdscr, "get_wch", None))
     get_key = stdscr.get_wch if supports_unicode else stdscr.getch
     while True:
@@ -344,34 +346,88 @@ def _prompt_text(stdscr, y, x, w, title, default="") -> str | None:
         try:
             stdscr.move(line_y, 0)
             stdscr.clrtoeol()
+            stdscr.move(line_y + 1, 0)
+            stdscr.clrtoeol()
         except curses.error:
             # 窗口也可能恰好在绘制时发生尺寸变化。
             continue
         prompt = f"{title}："
         if x + _disp_width(prompt) + 4 >= w:
-            prompt = "关键词："
+            prompt = "输入："
         _safe_add(stdscr, line_y, x, prompt, w, "text")
         bx = x + _disp_width(prompt) + 1
         _safe_add(stdscr, line_y, bx, _clip(buf, max(0, w - bx - 2), tail=True),
                   w, "value", curses.A_REVERSE)
-        hint = ("Enter 搜索 · Esc 取消 · Backspace 删除" if supports_unicode else
-                "仅 ASCII 输入 · Enter 搜索 · Esc 取消")
-        _safe_add(stdscr, line_y + 1, x, hint, w, "dim")
+        hint = (error or ("Enter 确认 · Esc 取消 · Backspace 删除"
+                          if supports_unicode else "仅 ASCII 输入 · Enter 确认 · Esc 取消"))
+        _safe_add(stdscr, line_y + 1, x, hint, w, "bad" if error else "dim")
         stdscr.refresh()
         try:
             k = get_key()
         except curses.error:
             continue
         if k in ("\n", "\r", 10, 13, curses.KEY_ENTER):
+            error = validate(buf) if validate is not None else ""
+            if error:
+                continue
             return buf
         if k in ("\x1b", 27):
             return None
         if k in ("\b", "\x7f", curses.KEY_BACKSPACE, 127, 8):
             buf = _erase_grapheme(buf)
+            error = ""
         elif isinstance(k, str) and k.isprintable():
             buf += k
+            error = ""
         elif isinstance(k, int) and 32 <= k <= 126:
             buf += chr(k)
+            error = ""
+
+
+
+def _mount_directory(home: Path) -> Path:
+    """Directory containing mounted disks; macOS uses /Volumes."""
+    if sys.platform == "darwin":
+        return Path("/Volumes")
+    candidates = (
+        Path("/run/media") / home.name,
+        Path("/media") / home.name,
+        Path("/run/media"),
+        Path("/media"),
+        Path("/mnt"),
+    )
+    return next((p for p in candidates if p.is_dir()), Path("/media"))
+
+
+def _resolve_directory_path(raw: str, current: Path) -> Path:
+    """Validate pasted/typed paths without executing shell commands.
+
+    Accept native paths, ~ and environment variables, and the quotes or
+    escaped spaces produced when dragging a folder into a macOS terminal.
+    Relative paths are interpreted within the currently browsed directory.
+    """
+    value = raw.strip()
+    if not value:
+        raise ValueError("请输入文件夹路径")
+    candidates = [value]
+    try:
+        words = shlex.split(value)
+    except ValueError:
+        words = []
+    if len(words) == 1 and words[0] != value:
+        candidates.append(words[0])
+
+    for candidate in candidates:
+        expanded = Path(os.path.expandvars(candidate)).expanduser()
+        folder = expanded if expanded.is_absolute() else current / expanded
+        if folder.is_dir():
+            return folder
+    # A file should not silently be treated as a usable input directory.
+    expanded = Path(os.path.expandvars(candidates[-1])).expanduser()
+    last = expanded if expanded.is_absolute() else current / expanded
+    if last.is_file():
+        raise ValueError("路径指向文件，请选择文件夹")
+    raise ValueError("目录不存在或无权访问，请检查路径")
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +439,7 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
     Enter opens a folder (or confirms the last "use this folder" row);
     Backspace/Left goes to its parent, Esc goes back to the wizard.
     Space confirms the currently displayed directory. The default is home,
-    with ~ and / available for home/root navigation.
+    with ~ and / for home/root, 1-5 for common locations, P for pasted paths.
     """
     home = Path.home()
     cur = Path(start).expanduser() if start is not None else home
@@ -399,16 +455,17 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
         return items
 
     entries = _entries()
+    message = ""
     # Initial opening favours a child folder. On returning from a confirmation
     # page, focus the already chosen directory instead of entering it again.
     sel = (len(entries) - 1 if start is not None else
            next((i for i, item in enumerate(entries)
                  if item[0] == "directory"), len(entries) - 1))
 
-    def _change_dir(target: Path, *, focus_child: Path | None = None) -> None:
+    def _change_dir(target: Path, *, focus_child: Path | None = None) -> bool:
         nonlocal cur, entries, sel
         if not target.is_dir():
-            return
+            return False
         cur = target
         entries = _entries()
         # After entering a directory, Enter a second time selects it.
@@ -416,6 +473,7 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
         sel = next((i for i, (kind, _label, path) in enumerate(entries)
                     if kind == "directory" and path == focus_child),
                    len(entries) - 1)
+        return True
 
     while True:
         h, w = stdscr.getmaxyx()
@@ -442,17 +500,50 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
             _safe_add(stdscr, y, 8, _ellipsize(label, w - 12, tail=False), w,
                       color, attr)
 
+        shortcuts = ("1 主目录   2 桌面   3 文档   4 下载   5 挂载磁盘   P 粘贴路径"
+                     if w >= 86 else
+                     "1主目录  2桌面  3文档  4下载  5磁盘  P路径")
+        _safe_add(stdscr, h - 4, 2, shortcuts, w, "info")
+        count = sum(kind == "directory" for kind, _, _ in entries)
         _safe_add(stdscr, h - 3, 2,
-                  f"子目录 {sum(kind == 'directory' for kind, _, _ in entries)} 个 · {sel + 1}/{len(entries)}",
-                  w, "dim")
+                  message or f"子目录 {count} 个 · {sel + 1}/{len(entries)}",
+                  w, "bad" if message else "dim")
         _footer(stdscr,
-                "↑↓ 移动 · ← 返回上级 · →/Enter 打开 · Space 选择当前 · Esc 返回 · ~ 主目录 · / 根目录",
-                "↑↓移动  ←上级  →进入  Space选目录  Esc返回")
+                "↑↓ 移动 · ← 上级 · →/Enter 打开 · Space 选择当前 · Esc 返回",
+                "↑↓移动  ←上级  →打开  Space选目录  Esc返回")
         stdscr.refresh()
 
         k = stdscr.getch()
         if k in (27, ord("q"), ord("Q")):
             return None
+        if k in (ord("1"), ord("2"), ord("3"), ord("4"), ord("5")):
+            shortcuts = {
+                ord("1"): home,
+                ord("2"): home / "Desktop",
+                ord("3"): home / "Documents",
+                ord("4"): home / "Downloads",
+                ord("5"): _mount_directory(home),
+            }
+            target = shortcuts[k]
+            message = "" if _change_dir(target) else f"目录不存在或无权访问：{target}"
+            continue
+        if k in (ord("p"), ord("P")):
+            chosen: Path | None = None
+
+            def _validate(raw: str) -> str | None:
+                nonlocal chosen
+                try:
+                    chosen = _resolve_directory_path(raw, cur)
+                except ValueError as exc:
+                    return str(exc)
+                return None
+
+            value = _prompt_text(stdscr, h - 7, 2, w, "粘贴目录路径",
+                                 validate=_validate)
+            if value is not None and chosen is not None:
+                message = "" if _change_dir(chosen) else "目录已失效，请重新选择"
+            continue
+        message = ""
         if k in (curses.KEY_UP, ord("k")):
             sel = max(0, sel - 1)
         elif k in (curses.KEY_DOWN, ord("j")):
