@@ -166,8 +166,8 @@ def search_videos(root: Path, keyword: str, max_depth: int = DEFAULT_MAX_DEPTH) 
     root = Path(root).expanduser()
     if not root.is_dir():
         return []
-    kw = keyword.strip().lower()
+    kw = keyword.strip().casefold()
     if not kw:
         return []
     files = list_videos_recursive(root, max_depth=max_depth)
-    return [f for f in files if kw in f.name.lower()]
+    return [f for f in files if kw in f.name.casefold()]
