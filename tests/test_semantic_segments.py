@@ -40,5 +40,34 @@ class SemanticSegmentsTests(unittest.TestCase):
             match_segments([(2, 2)], [TranscriptSpan(0, 3, "x")], ["x"])
 
 
+    def test_json_loader_accepts_timestamped_transcript(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from pycut.core.semantic_segments import load_transcript_json
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "transcript.json"
+            path.write_text(json.dumps({"segments": [
+                {"start": 0, "end": 1.5, "text": "你好 hello"}
+            ]}), encoding="utf-8")
+            self.assertEqual(load_transcript_json(str(path)),
+                             [TranscriptSpan(0, 1.5, "你好 hello")])
+
+    def test_json_loader_rejects_invalid_and_missing_inputs(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from pycut.core.semantic_segments import load_transcript_json
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "transcript.json"
+            with self.assertRaises(ValueError):
+                load_transcript_json(str(path))
+            for payload in ({}, {"segments": []},
+                            {"segments": [{"start": True, "end": 2, "text": "x"}]},
+                            {"segments": [{"start": 0, "end": 1, "text": None}]}):
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                with self.subTest(payload=payload), self.assertRaises(ValueError):
+                    load_transcript_json(str(path))
+
 if __name__ == "__main__":
     unittest.main()
