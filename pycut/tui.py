@@ -389,12 +389,11 @@ def _prompt_text(stdscr, y, x, w, title, default="", *, validate=None) -> str | 
 
 
 def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
-    """Choose ONE folder using the platform's established file dialog.
+    """Pick a directory inside Textual's cross-platform terminal UI.
 
-    Mac: system-native directory chooser (with disks, sidebar and Cmd+Shift+G).
-    Other desktops: open-source Tk native directory chooser.
-    No hand-maintained filesystem tree, path concatenation or shortcut keys.
-    Esc/Cancel returns to the previous wizard step without starting work.
+    The open-source textual-fspicker owns directory navigation and disk lists.
+    The existing curses wizard only supplies an initial path and validates the
+    returned directory; cancel returns to the preceding wizard step.
     """
     home = Path.home()
     initial = Path(start).expanduser() if start is not None else home
@@ -405,25 +404,29 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
         initial = home
 
     stdscr.erase()
-    _frame(stdscr, title, "请在系统文件夹选择窗口中选择目录；取消可返回上一页")
+    _frame(stdscr, title, "在终端目录选择器中选择文件夹 · Esc 取消返回")
     stdscr.refresh()
 
     try:
         selected = choose_directory(title, initial)
-    except (OSError, RuntimeError) as exc:
-        _flash(stdscr, f"打开系统文件夹选择窗口失败：{exc}", "bad")
+    except (OSError, RuntimeError, ImportError) as exc:
+        _flash(stdscr, f"终端文件夹选择器不可用：{exc}", "bad")
         return None
+    finally:
+        # Textual used the same terminal while curses was suspended. Redraw
+        # the existing wizard after it restores curses' saved terminal mode.
+        stdscr.erase()
+        stdscr.refresh()
 
     if not selected:
         return None
-
     folder = Path(selected).expanduser()
     try:
         valid = folder.is_absolute() and folder.is_dir()
     except OSError:
         valid = False
     if not valid:
-        _flash(stdscr, "所选目录不存在、已卸载或无权限访问，请重新选择", "bad")
+        _flash(stdscr, "目录不存在、已卸载或无权访问，请重新选择", "bad")
         return None
     return str(folder)
 
