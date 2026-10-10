@@ -12,11 +12,10 @@
 
 | 文档 | 什么时候看 |
 |---|---|
-**`docs/ISSUES.md`** | **每次开工前必读**。已知缺陷、能力缺口、待决策项、踩过的坑都在这 |
+**`docs/ISSUES.md`** | 了解历史技术限制、能力缺口与踩过的坑；不把它当作实时任务或 Bug 状态表 |
 **`AGENTS.md`（本文件）**第 5 节 | 关键坑清单，含三大功能专属的 ffmpeg 陷阱 |
 
-改了功能要同步更新 `ISSUES.md`（§1 限制 / §2 未实现 / §4 坑）、
-`docs/DEDUP.md` 第 9 节状态表、`README.md` 目录树。
+Markdown 只保留长期需求、架构、技术约定与可复现的技术限制；修复普通 Bug 不要求更新 Markdown 任务或进度清单。仅当功能契约或长期规范变化时更新 README/相关技术文档。当前项目可以直接修改并提交代码，不强制走 Kanban/Issue 领取流程。
 
 ## 1. 运行环境（硬性，违反即跑不起来）
 
@@ -73,10 +72,16 @@
     **不要改回预置候选目录列表**（用户反馈选不到目录、无法回上级）。
   - 目录扫描统一走 `core/scan.py`：递归统计/列出**默认最多下探 3 层**
     （`DEFAULT_MAX_DEPTH=3`，用户要求控制深度），系统目录（Library/System/.git 等）自动剪枝。
-  - 混剪向导用 `tui._multi_select` 多选爆款视频 + 每支设「裂变数量」，返回
-    `list[list[str]]`（多支成片 = 多个 argv），`run()` 循环执行。
-  - 查素材向导用 `tui._wizard_search`，走 `scan.search_videos`（文件名关键词，递归，同深度限制）。
-  - 每个功能最终生成 argv 交给 `cli.main` 执行，与命令行完全同源，无参数漂移。
+  - 混剪向导用 `tui._multi_select` 多选爆款视频 + 每支设「裂变数量」（E 编辑 1～99），
+    每个选中视频生成独立 argv；按顺序执行，失败停止后续依赖任务。
+  - 查素材向导用 `tui._wizard_search`，走 `scan.search_videos`（文件名关键词，递归，同深度限制），
+    支持 Unicode，Enter/O 可以在 macOS Finder 中定位文件。
+  - TUI 以 `cli.build_parser()` 定义的命令参数生成 argv，交给 `pycut/tui_runner.py`
+    使用 `sys.executable` 启动 CLI 子进程；主线程独占 curses，子进程 stdout/stderr
+    显示为实时日志，完成后可返回主菜单。**不得把错误退出码当成功，也不得在失败后继续
+    执行后继去重**。不执行 shell 命令拼接、不回显 API Key。
+  - TUI 切片从 `core/scan.py` 预览「三层内 MP4」，CLI 显式传 `--max-depth 3`；
+    直接 CLI 不传参数时保持原有无限递归。预览视频集合必须与实际处理一致。
   - 新增功能时**必须**同步在 `tui.FEATURES` 登记主菜单项并写对应 `_wizard_*` 函数。
 
 ## 4. 切片流水线
@@ -107,7 +112,7 @@
 1. 读 `AGENTS.md` + 相关 `core/` 模块，确认复用点。
 2. 小步修改，**先 dry-run / 单视频试跑**再批量（如 `slice --file X --dry-run`）。
 3. 跑 `tools/verify.py` 做独立质检（不信任 slicer 自己的清单）。
-4. 改完更新 `README.md` / `ROADMAP.md` / 本文件（如有约定变化）。
+4. 仅当长期需求或技术约定确有变化时更新对应 README / 设计文档，不用 Markdown 管理日常 Bug 或开发进度。
 5. 提交 git（本仓库根目录 `pycut/` 已 `git init`）。
 
 ## 7. 不要做的事
