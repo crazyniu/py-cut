@@ -169,6 +169,47 @@ class TUIRegression(unittest.TestCase):
         ))
         self.assertEqual(tui_runner.run_jobs.__name__, "run_jobs")
 
+    def test_home_number_shortcut_dispatches_selected_wizard(self):
+        s = Screen(keys=[ord("4")])
+        with mock.patch.object(tui.curses, "curs_set"), \
+             mock.patch.object(tui, "_run_feature_wizard",
+                               return_value=[["montage"]]) as wizard:
+            result = tui._loop(s)
+        self.assertEqual(result, ("run", [["montage"]]))
+        self.assertEqual(wizard.call_args.args[1], "montage")
+
+    def test_runner_aborts_followup_command_when_first_fails(self):
+        s = Screen(keys=[10])
+        with mock.patch.object(tui_runner, "_run_one", return_value=(2, False)) as one:
+            code, should_quit = tui_runner.run_jobs(
+                s, [["slice", "--no-sub"], ["dedup", "--all"]]
+            )
+        self.assertEqual((code, should_quit), (2, False))
+        self.assertEqual(one.call_count, 1)
+
+    def test_runner_preserves_user_cancellation(self):
+        s = Screen(keys=[10])
+        with mock.patch.object(tui_runner, "_run_one", return_value=(130, True)):
+            code, should_quit = tui_runner.run_jobs(s, [["slice"]])
+        self.assertEqual((code, should_quit), (130, False))
+
+    def test_montage_returns_failure_if_pipeline_errors(self):
+        from pycut.commands import montage_cmd
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "source.mp4"
+            src.write_bytes(b"not a real video")
+            args = cli.build_parser().parse_args([
+                "montage", "--source", str(src), "--no-sub"
+            ])
+            with mock.patch.object(montage_cmd, "self_check"), \
+                 mock.patch.object(montage_cmd, "install_signal_handlers"), \
+                 mock.patch.object(montage_cmd, "reset_stop"), \
+                 mock.patch.object(montage_cmd, "_resolve_srt", return_value=""), \
+                 mock.patch("pycut.commands.montage_pipeline.run_pipeline",
+                            return_value={"error": "fake failure"}), \
+                 mock.patch.object(montage_cmd, "log"):
+                self.assertEqual(montage_cmd.run(args), 2)
+
     def test_cli_runner_launches_python_without_media(self):
         # 仅查询版本号；没有 ffmpeg、素材或 LLM 调用。
         s = Screen(keys=[-1] * 20, size=(24, 100))
