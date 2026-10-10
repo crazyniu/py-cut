@@ -238,6 +238,9 @@ def probe_source(path: Path) -> SourceProfile | None:
 
     width = int(_float_or_zero(probe_scalar(path, "stream=width")))
     height = int(_float_or_zero(probe_scalar(path, "stream=height")))
+    if width <= 0 or height <= 0:
+        log(f"[步骤A] {path.name}: 视频流缺失有效分辨率")
+        return None
     # 必须走 probe_scalar + 取首行：见 _fps_to_float 注释里的 0/0 多行坑
     fps = _fps_to_float(probe_scalar(path, "stream=avg_frame_rate")) or FALLBACK_FPS
 
