@@ -25,7 +25,13 @@ def detect_scenes(path, scene_th: float) -> list[float]:
         "-filter:v", f"select='gt(scene,{scene_th})',showinfo",
         "-f", "null", "-",
     ]
-    _rc, _out, err = run_cmd(args, timeout=1800)
+    rc, _out, err = run_cmd(args, timeout=1800)
+    if rc != 0:
+        # ffmpeg 失败与合法的“没有场景切换”不能等同，否则会把整支
+        # 视频当作一个完整片段继续编码，可能掩盖坏文件和解码故障。
+        tail = err.strip().splitlines()
+        reason = tail[-1] if tail else "没有错误输出"
+        raise RuntimeError(f"场景检测失败 rc={rc}: {reason}")
 
     cuts: list[float] = []
     for line in err.splitlines():
@@ -83,8 +89,10 @@ def build_segments(cuts: list[float], duration: float,
 
     # 尾部过短 -> 并入上一段
     if len(segs) >= 2 and segs[-1][1] - segs[-1][0] < min_seg:
-        a, _ = segs.pop()
-        b0, _ = segs.pop()
-        segs.append((b0, a))
+        # 末段并入上一段时，右边界必须使用最后一个片段的 end。
+        # 原实现把最后片段的 start 当作 end，会丢失整段结尾画面。
+        _tail_start, tail_end = segs.pop()
+        prev_start, _prev_end = segs.pop()
+        segs.append((prev_start, tail_end))
 
     return [(round(s, 3), round(e, 3)) for s, e in segs if e - s > 0.01]
