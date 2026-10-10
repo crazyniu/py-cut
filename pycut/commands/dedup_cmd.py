@@ -45,6 +45,8 @@ def register(subparsers) -> None:
     g.add_argument("--border", action="store_true", help="模糊边框填充（改构图）")
     g.add_argument("--badge", action="store_true", help="右下角标色块")
     g.add_argument("--logo", default="", help="画中画图片路径（贴纸/角标）")
+    g.add_argument("--sticker", default="",
+                   help="贴纸图片路径（背面半透明 + 边缘羽化的静态干扰层）")
     g.add_argument("--delogo", default="",
                    help="可见水印遮盖区域 x,y,w,h（走 delogo 滤镜）")
 
@@ -131,6 +133,7 @@ def run(args: argparse.Namespace) -> int:
         badge=args.badge,
         logo=args.logo,
         delogo=args.delogo,
+        sticker=args.sticker,
         out_dir=args.out_dir,
         in_place=args.in_place,
         phash_min=args.phash_min,

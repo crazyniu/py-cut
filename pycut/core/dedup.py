@@ -66,6 +66,7 @@ class DedupOptions:
     badge: bool = False
     logo: str = ""
     delogo: str = ""                   # 可见水印位置 "x,y,w,h"，走 delogo 滤镜
+    sticker: str = ""                   # 贴纸图片路径（背面半透明 + 边缘羽化）
     out_dir: str = ""                  # 空 = 用 config.DEDUP_OUT 默认目录
     in_place: bool = False             # 原地覆盖（危险，默认 False）
     phash_min: float = 0.0             # 0 = 按档位自动取 config.DEDUP_MIN_PHASH_BY_PRESET
@@ -441,6 +442,30 @@ def build_filter_complex(params: dict, info: VideoInfo,
         parts.append(f"[{cur}][dd_lgs]overlay={off}:format=auto[dd_v1]")
         cur = "dd_v1"
 
+    # 贴纸（静态图片干扰层）：与画中画同层级，但**背面半透明 + 边缘羽化**，
+    # 视觉上融进画面而不是硬贴上去。素材路径由 params['sticker'] 给。
+    stk = str(params.get("sticker") or "").strip()
+    if stk and Path(stk).is_file():
+        sw = _even(max(24, int(W * config.MONTAGE_STICKER_SCALE)))
+        fade = max(8, int(sw * 0.45))
+        sp = str(params.get("sticker_pos") or "br").lower()
+        sm = _even(W * config.MONTAGE_STICKER_MARGIN)
+        off = {"tl": f"{sm}:{sm}", "tr": f"W-w-{sm}:{sm}",
+               "bl": f"{sm}:H-h-{sm}"}.get(sp, f"W-w-{sm}:H-h-{sm}")
+        op = config.MONTAGE_STICKER_OPACITY
+        # 羽化权重：四边到边距的 min 连乘（中心≈1、边缘≈0）
+        fw = (f"min(1\\,min(X\\,W-1-X)/{fade})*"
+              f"min(1\\,min(Y\\,H-1-Y)/{fade})")
+        # 输入序号：logo 占 1，故贴纸在有 logo 时是 2，否则是 1。
+        # （与 _build_cmd 里 -i 的追加顺序严格对应，改一处必须改另一处）
+        sidx = 2 if logo else 1
+        parts.append(
+            f"[{sidx}:v]scale={sw}:-2,format=rgba,"
+            f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
+            f"a='alpha(X,Y)*{op}*max(0\\,({fw}))'[dd_sk]")
+        parts.append(f"[{cur}][dd_sk]overlay={off}:format=auto[dd_v2]")
+        cur = "dd_v2"
+
     parts.append(f"[{cur}]null[vout]")
     return ";".join(parts)
 
@@ -480,6 +505,12 @@ def _build_cmd(src: Path, dst_tmp: Path, params: dict, info: VideoInfo,
         # **不要加 -loop 1**：图片输入会被无限循环，ffmpeg 永不结束（实测挂死）。
         # 单帧图片 + overlay 默认 eof_action=repeat 会一直保持最后一帧，够用。
         cmd += ["-i", str(logo_path)]
+
+    stk_path = str(params.get("sticker") or "").strip()
+    if stk_path and Path(stk_path).is_file():
+        # 贴纸占下一个输入序号；与 logo 同时存在时 logo=1、贴纸=2，
+        # build_filter_complex 里按同一顺序取 [1:v] / [2:v]（两者同时启用才需要 2）。
+        cmd += ["-i", stk_path]
 
     cmd += ["-map_metadata", "-1"]
 
@@ -652,6 +683,10 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
             mirror=opts.mirror, speed=opts.speed, border=opts.border,
             badge=opts.badge, logo=opts.logo, delogo=opts.delogo,
         )
+        # 贴纸不在 build_params 的 28 键契约里（那是「按 seed 随机化」的参数集，
+        # 而贴纸是调用方显式指定的路径），在这里注入，供 filter_complex 消费。
+        if opts.sticker:
+            params["sticker"] = opts.sticker
         params = dict(params or {})
         item.params = params
 
