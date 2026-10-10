@@ -140,7 +140,8 @@ def run_pipeline(opts: MontageOptions) -> dict:
     if stickers:
         log(f"  贴纸素材 {len(stickers)} 张（叠在片段上：背面半透明 + 边缘羽化）")
     items = scan_library(opts.clip_dir, min_dur=opts.min_clip,
-                         max_dur=opts.max_clip, workers=opts.workers)
+                         max_dur=opts.max_clip, workers=opts.workers,
+                         allow_landscape=opts.allow_landscape)
     if opts.allow_landscape:
         log(f"  素材 {len(items)} 条（已允许横屏）")
     else:
