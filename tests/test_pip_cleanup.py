@@ -42,10 +42,14 @@ class PipEmptyTimelineTests(unittest.TestCase):
             out = root / "previous.mp4"
             out.write_bytes(b"known good" * 200)
             tmp = montage_pip._tmp_path(out)
+            attempts = 0
             def encode(_cmd, timeout):
-                if not tmp.exists():
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
                     tmp.write_bytes(b"broken" * 200)
                     return 1, "", "copy error"
+                self.assertFalse(tmp.exists(), "fallback must start without stale copy output")
                 tmp.write_bytes(b"new clean" * 200)
                 return 0, "", ""
             info = SimpleNamespace(width=720, height=1280, duration=7.0)
