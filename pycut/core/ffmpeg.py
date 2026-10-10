@@ -62,6 +62,10 @@ def probe_video(path: Path) -> VideoInfo | None:
 
     width = int(_f(vs.get("width")))
     height = int(_f(vs.get("height")))
+    if width <= 0 or height <= 0:
+        # 破损容器可能有合法时长，却没有可解码的视频尺寸。
+        # 不可把 0×0 当作正常视频传给切片/编码模块。
+        return None
     dur = _f(vs.get("duration"))
     if dur <= 0:
         dur = _f((data.get("format") or {}).get("duration"))
