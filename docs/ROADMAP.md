@@ -3,6 +3,7 @@
 > 本文只记录长期产品需求、架构边界和扩展方向，不管理 Issue、Todo 或进度。
 > 当前缺陷、负责人与验收以 [GitHub Issues](https://github.com/natefox2017/py-cut/issues) 为准；未来视频能力统一由 [#19](https://github.com/natefox2017/py-cut/issues/19) 关联。
 > 工程验证和算法限制见 [ISSUES.md](ISSUES.md)，去重模块的详细设计见 [DEDUP.md](DEDUP.md)。
+
 ---
 
 ## 核心功能的现有接口契约
@@ -36,6 +37,7 @@
 - **D** SRT → ASS → libass 烧录（54px 大字 + 半透明底框）
 - **E** 贴回基准视频原声（静音成片不可用）
 - 入口：`pycut.py montage`（`--probe` 只看素材规模、`--step` 单独跑某步）
+- ASS 字幕样式沿用现行半透明底框与标定字号，不擅自改变默认；多背景可读性验证要求见 [#36](https://github.com/natefox2017/py-cut/issues/36)。
 
 ---
 
