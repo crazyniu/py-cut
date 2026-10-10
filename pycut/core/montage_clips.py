@@ -256,8 +256,11 @@ def _drop_duplicates(items: list[ClipItem]) -> tuple[list[ClipItem], int]:
 
 
 def scan_library(root=None, min_dur=None, max_dur=None,
-                 workers=None) -> list[ClipItem]:
-    """递归扫描片段库，返回**竖屏且时长合规**的素材列表。
+                 workers=None, allow_landscape: bool = False) -> list[ClipItem]:
+    """递归扫描片段库，默认只返回竖屏且时长合规的素材。
+
+    当 allow_landscape=True 时不执行横竖屏过滤（会由 fit_filter
+    按比例缩放并补边），以兑现 CLI 的 --allow-landscape 开关。
 
     - 竖屏判定：`w / h <= config.MONTAGE_MAX_SIDE_RATIO`（1.40）。
       1920x1080 与 3840x2160 都是 1.78，稳稳排除；720x1280=0.562、544x960=0.567 通过。
@@ -315,8 +318,8 @@ def scan_library(root=None, min_dur=None, max_dur=None,
     for it in results:
         if it is None:
             n_bad += 1
-        elif it.width / it.height > ratio_max:
-            n_land += 1                        # 横屏：用户明确排除
+        elif not allow_landscape and it.width / it.height > ratio_max:
+            n_land += 1                        # 默认排除横屏，显式允许则保留
         elif it.duration < lo:
             n_short += 1
         else:
