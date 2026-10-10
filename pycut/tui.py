@@ -204,7 +204,7 @@ def _small_screen(stdscr) -> bool:
     stdscr.erase()
     _safe_add(stdscr, 1, 2, "终端窗口太小", w, "warn", curses.A_BOLD)
     _safe_add(stdscr, 3, 2, f"当前 {w}×{h}，至少需要 60×14", w, "text")
-    _safe_add(stdscr, 5, 2, "请放大窗口 · Esc/Q 返回", w, "dim")
+    _safe_add(stdscr, 5, 2, "请放大窗口 · Esc 返回 · Q 退出", w, "dim")
     stdscr.refresh()
     return True
 
@@ -231,6 +231,19 @@ def _footer(stdscr, full: str, compact: str) -> None:
     _safe_add(stdscr, h - 2, 2,
               _ellipsize(compact if w < 80 else full, w - 4),
               w, "dim", curses.A_REVERSE)
+
+
+def _home_brand(stdscr) -> None:
+    """A visible CLI-style identity lockup on spacious terminals."""
+    _h, w = stdscr.getmaxyx()
+    _safe_add(stdscr, 5, 3, "╭─────╮", w, "muted")
+    _safe_add(stdscr, 6, 3, "│  ▶  │", w, "accent", curses.A_BOLD)
+    _safe_add(stdscr, 7, 3, "╰─────╯", w, "muted")
+    _safe_add(stdscr, 5, 14, "P Y C U T", w, "accent", curses.A_BOLD)
+    _safe_add(stdscr, 6, 14, f"v{__version__}  ·  Terminal video workstation",
+              w, "text")
+    _safe_add(stdscr, 7, 14, "选择工作流程  /  Choose a workflow", w, "dim")
+    _safe_add(stdscr, 9, 2, "─" * max(0, w - 4), w, "muted")
 
 
 # ---------------------------------------------------------------------------
@@ -348,39 +361,45 @@ def _prompt_text(stdscr, y, x, w, title, default="") -> str | None:
 # 目录选择器（文件系统层级浏览器）
 # ---------------------------------------------------------------------------
 def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
-    """目录选择器：从根目录出发逐级浏览文件系统，选定任意目录。
+    """Browse folders like a regular file picker.
 
-    交互：
-      ↑/↓ 或 j/k   在「子目录列表」中移动
-      Enter        进入选中的子目录；在「..」或「选择当前目录」上则选定
-      ←/h/Backspace 返回上一级目录
-      Esc          取消（返回 None）
-      ~            直接跳到用户主目录；/ 跳到根目录
-
-    列表第一项固定为「📁 选择当前目录」（直接选定当前所在目录），
-    第二项固定为「📁 ..」（返回上一级），之后才是当前目录的子目录。
-    系统级目录与隐藏目录自动过滤，不再显示。从根目录 / 开始，
-    可一路浏览到任意位置，不再依赖预置候选。
+    Enter opens a folder (or confirms the last "use this folder" row);
+    Backspace/Left goes to its parent, Esc goes back to the wizard.
+    Space confirms the currently displayed directory. The default is home,
+    with ~ and / available for home/root navigation.
     """
-    # 起点：默认根目录；若有 start 则从那里开始
-    cur = Path(start).expanduser() if start else Path("/")
+    home = Path.home()
+    cur = Path(start).expanduser() if start is not None else home
     if not cur.is_dir():
-        cur = Path("/")
+        cur = home if home.is_dir() else Path("/")
 
-    def _entries() -> list[tuple[str, Path]]:
-        """返回当前目录下的可选项：(显示名, 目标路径)。"""
-        out: list[tuple[str, Path]] = []
-        out.append(("📁  选择当前目录", cur))
+    def _entries() -> list[tuple[str, str, Path]]:
+        items: list[tuple[str, str, Path]] = []
         if cur != cur.parent:
-            out.append(("📁  ..  返回上一级", cur.parent))
-        # 只列可见子目录（自动过滤系统级目录 + 隐藏目录）
-        for p in list_dirs(cur):
-            out.append((f"📂  {p.name}", p))
-        return out
+            items.append(("parent", "../  上一级", cur.parent))
+        items.extend(("directory", f"{p.name}/", p) for p in list_dirs(cur))
+        items.append(("select", "✓  使用当前文件夹", cur))
+        return items
 
     entries = _entries()
-    # 从根目录浏览时默认落在第一个子目录，避免误按 Enter 直接选择 /。
-    sel = 2 if len(entries) > 2 else 0
+    # Initial opening favours a child folder. On returning from a confirmation
+    # page, focus the already chosen directory instead of entering it again.
+    sel = (len(entries) - 1 if start is not None else
+           next((i for i, item in enumerate(entries)
+                 if item[0] == "directory"), len(entries) - 1))
+
+    def _change_dir(target: Path, *, focus_child: Path | None = None) -> None:
+        nonlocal cur, entries, sel
+        if not target.is_dir():
+            return
+        cur = target
+        entries = _entries()
+        # After entering a directory, Enter a second time selects it.
+        # After moving up, highlight the child we just left.
+        sel = next((i for i, (kind, _label, path) in enumerate(entries)
+                    if kind == "directory" and path == focus_child),
+                   len(entries) - 1)
+
     while True:
         h, w = stdscr.getmaxyx()
         if _small_screen(stdscr):
@@ -390,67 +409,57 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
         stdscr.erase()
         _frame(stdscr, title, str(cur))
 
-        if sel >= len(entries):
-            sel = max(0, len(entries) - 1)
-        start_y = 5
+        sel = min(sel, len(entries) - 1)
         max_rows = max(1, h - 9)
-        top = 0
-        if sel >= max_rows:
-            top = sel - max_rows + 1
+        top = min(max(0, sel - max_rows + 1), max(0, len(entries) - max_rows))
         for i in range(top, min(len(entries), top + max_rows)):
-            label, _path = entries[i]
-            y = start_y + (i - top)
-            active = (i == sel)
-            mark = "❯" if active else " "
-            # 过长目录名：截断，保留末尾
-            label = _ellipsize(label, w - 8, tail=True)
+            kind, label, _target = entries[i]
+            y = 5 + i - top
+            active = i == sel
             attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
-            fg = "accent" if active else "text"
-            _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
-            _safe_add(stdscr, y, 5, label, w, fg, attr)
+            icon = "✓" if kind == "select" else "↖" if kind == "parent" else "▸"
+            color = "good" if kind == "select" else "accent" if active else "text"
+            _safe_add(stdscr, y, 3, "❯" if active else " ", w,
+                      "accent" if active else "muted", attr)
+            _safe_add(stdscr, y, 5, icon, w, color, attr)
+            _safe_add(stdscr, y, 8, _ellipsize(label, w - 12, tail=False), w,
+                      color, attr)
 
+        _safe_add(stdscr, h - 3, 2,
+                  f"目录 {len(list_dirs(cur))} 个 · {sel + 1}/{len(entries)}",
+                  w, "dim")
         _footer(stdscr,
-                " ↑/↓ 移动 · Enter 进入/选定 · ←/h 返回上级 · ~ 主目录 · / 根目录 · Esc 取消 ",
-                "↑↓移动  Enter进入  ←返回  ~主目录  /根  Esc取消")
+                " ↑↓ 选择 · Enter 打开/确认 · Space 使用当前目录 · ←/Backspace 上级 · ~ 主目录 · / 根 · Esc 返回 ",
+                "↑↓选择 Enter打开 Space选当前 ←上级 ~主目录 /根 Esc返回")
         stdscr.refresh()
-        k = stdscr.getch()
 
-        if k in (27,):  # Esc
-            return None
-        if k in (ord("q"), ord("Q")):
+        k = stdscr.getch()
+        if k in (27, ord("q"), ord("Q")):
             return None
         if k in (curses.KEY_UP, ord("k")):
-            sel = (sel - 1) % max(1, len(entries))
+            sel = max(0, sel - 1)
         elif k in (curses.KEY_DOWN, ord("j")):
-            sel = (sel + 1) % max(1, len(entries))
-        elif k in (curses.KEY_LEFT, 8, 127, curses.KEY_BACKSPACE, ord("h")):
+            sel = min(len(entries) - 1, sel + 1)
+        elif k in (curses.KEY_LEFT, curses.KEY_BACKSPACE, 127, 8, ord("h")):
             if cur != cur.parent:
-                cur = cur.parent
-                entries = _entries()
-                sel = 0
-        elif k in (ord("~"),):
-            cur = Path.home()
-            entries = _entries()
-            sel = 0
-        elif k in (ord("/"),):
-            cur = Path("/")
-            entries = _entries()
-            sel = 0
-        elif k in (10, curses.KEY_ENTER, ord("\r"), ord(" ")):
-            if not entries:
-                continue
-            label, target = entries[sel]
-            if label.startswith("📁  选择当前目录"):
-                return str(cur)
-            if label.startswith("📁  .."):
-                cur = target
-                entries = _entries()
-                sel = 0
-                continue
-            # 进入子目录
-            cur = target
-            entries = _entries()
-            sel = 0
+                old = cur
+                _change_dir(cur.parent, focus_child=old)
+        elif k == ord("~"):
+            _change_dir(home)
+        elif k == ord("/"):
+            _change_dir(Path("/"))
+        elif k == ord(" "):
+            return str(cur)
+        elif k in (10, curses.KEY_ENTER, ord("\r"), curses.KEY_RIGHT, ord("l")):
+            kind, _label, target = entries[sel]
+            if kind == "select":
+                if k not in (curses.KEY_RIGHT, ord("l")):
+                    return str(cur)
+            elif kind == "parent":
+                old = cur
+                _change_dir(target, focus_child=old)
+            else:
+                _change_dir(target)
 
 
 # ---------------------------------------------------------------------------
@@ -564,16 +573,20 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
 # ---------------------------------------------------------------------------
 # 多选列表（混剪爆款视频）
 # ---------------------------------------------------------------------------
-def _multi_select(stdscr, title: str, files: list[Path]) -> tuple[list[Path], dict[str, int]] | None:
+def _multi_select(stdscr, title: str, files: list[Path],
+                  initial: tuple[list[Path], dict[str, int]] | None = None
+                  ) -> tuple[list[Path], dict[str, int]] | None:
     """多选视频列表 + 每个的裂变数量。返回 (选中列表, {路径: 裂变数})；Esc 返回 None。
 
     空格勾选/取消；选中项上按数字键 0-9 设置裂变数量（默认 1）；A 全选/取消全选。
     """
     if not files:
         return None
-    selected: set[int] = set()
-    fission: dict[str, int] = {str(f): 1 for f in files}
-    sel = 0
+    previous_files, previous_counts = initial if initial is not None else ([], {})
+    previous_paths = {str(p) for p in previous_files}
+    selected = {i for i, f in enumerate(files) if str(f) in previous_paths}
+    fission = {str(f): previous_counts.get(str(f), 1) for f in files}
+    sel = min(selected) if selected else 0
     while True:
         h, w = stdscr.getmaxyx()
         if _small_screen(stdscr):
@@ -611,12 +624,12 @@ def _multi_select(stdscr, title: str, files: list[Path]) -> tuple[list[Path], di
         stdscr.refresh()
 
         k = stdscr.getch()
-        if k in (27,):
+        if k in (27, ord("q"), ord("Q")):
             return None
         if k in (curses.KEY_UP, ord("k")):
-            sel = (sel - 1) % max(1, len(files))
+            sel = max(0, sel - 1)
         elif k in (curses.KEY_DOWN, ord("j")):
-            sel = (sel + 1) % max(1, len(files))
+            sel = min(len(files) - 1, sel + 1)
         elif k == ord(" "):
             if sel in selected:
                 selected.discard(sel)
@@ -646,26 +659,31 @@ def _multi_select(stdscr, title: str, files: list[Path]) -> tuple[list[Path], di
 # 主循环
 # ---------------------------------------------------------------------------
 def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
+    """Main menu: Back stays here; only Q explicitly exits the application."""
     try:
         curses.curs_set(0)
     except curses.error:
-        pass  # 少数终端不支持隐藏光标，仍允许使用 TUI。
+        pass
     stdscr.keypad(True)
 
-    # Clamp the saved position when the available menu items change.
     feat_sel = max(0, min(getattr(_loop, "_feat_sel", 0), len(FEATURES) - 1))
     while True:
         h, w = stdscr.getmaxyx()
         if _small_screen(stdscr):
-            if stdscr.getch() in (27, ord("q"), ord("Q")):
+            # Back on the final (home) page must not close the process.
+            if stdscr.getch() in (ord("q"), ord("Q")):
                 return ("quit", None)
             continue
         stdscr.erase()
-        _frame(stdscr, "选择功能", "本地视频工作台  /  ↑↓ 导航，Enter 进入")
-        sel = feat_sel
+        _frame(stdscr, "选择功能", "本地视频工作台  /  选择一个处理流程")
+        spacious = h >= 20
+        if spacious:
+            _home_brand(stdscr)
+        menu_y = 11 if spacious else 5
+
         for i, (key, name, desc) in enumerate(FEATURES):
-            y = 5 + i
-            active = (i == sel)
+            y = menu_y + i
+            active = i == feat_sel
             attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
             fg = "accent" if active else "keyword"
             _safe_add(stdscr, y, 3, "❯" if active else " ", w,
@@ -673,37 +691,46 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
             _safe_add(stdscr, y, 5, f"{i + 1:02d}  ", w, "dim", attr)
             _safe_add(stdscr, y, 9, _pad(name, 10), w, fg, attr)
             _safe_add(stdscr, y, 20, desc, w, "dim", attr)
-        if h >= 17:
-            key, name, _desc = FEATURES[sel]
+
+        key, name, _desc = FEATURES[feat_sel]
+        if spacious:
+            _safe_add(stdscr, 16, 3, f"当前选择  /  {name}", w,
+                      "accent", curses.A_BOLD)
+            if h >= 22:
+                _safe_add(stdscr, 17, 3, FEATURE_HINTS[key], w, "text")
+        elif h >= 17:
             _safe_add(stdscr, 11, 2, "─" * max(0, w - 4), w, "muted")
-            _safe_add(stdscr, 12, 3, f"当前选择  /  {name}", w, "accent", curses.A_BOLD)
+            _safe_add(stdscr, 12, 3, f"当前选择  /  {name}", w,
+                      "accent", curses.A_BOLD)
             _safe_add(stdscr, 13, 3, FEATURE_HINTS[key], w, "text")
-            _safe_add(stdscr, 15, 3, "每个向导会先展示处理范围，确认后才执行。", w, "dim")
-        _footer(stdscr, f" ↑/↓ 移动 · 1-{len(FEATURES)} 快速进入 · Enter 选择 · Q 退出 ",
-                f"↑↓移动  1-{len(FEATURES)}快捷  Enter选择  Q退出")
+        _footer(stdscr,
+                f" ↑↓ 移动 · 1-{len(FEATURES)} 快速进入 · Enter 选择 · Esc 返回主菜单 · Q 退出 ",
+                f"↑↓移动 1-{len(FEATURES)}快捷 Enter进入 Esc返回 Q退出")
         stdscr.refresh()
+
         k = stdscr.getch()
-        if k in (27, ord("q"), ord("Q")):
+        if k in (ord("q"), ord("Q")):
             return ("quit", None)
         if k in (curses.KEY_UP, ord("k")):
-            sel = (sel - 1) % len(FEATURES)
+            feat_sel = max(0, feat_sel - 1)
         elif k in (curses.KEY_DOWN, ord("j")):
-            sel = (sel + 1) % len(FEATURES)
+            feat_sel = min(len(FEATURES) - 1, feat_sel + 1)
         elif k in (10, curses.KEY_ENTER, ord("\r"), ord(" ")) or (
             ord("1") <= k < ord("1") + len(FEATURES)
         ):
             if ord("1") <= k < ord("1") + len(FEATURES):
-                sel = k - ord("1")
-            _loop._feat_sel = sel
-            key = FEATURES[sel][0]
+                feat_sel = k - ord("1")
+            _loop._feat_sel = feat_sel
+            key = FEATURES[feat_sel][0]
             argv_list = _run_feature_wizard(stdscr, key, w)
             if argv_list == "__BACK__":
                 continue
             if argv_list:
                 return ("run", argv_list)
-        # 每轮结束把当前选中保存下来（下一轮重绘沿用）
-        feat_sel = sel
-    return ("quit", None)
+        # Esc/Left/Backspace are intentionally no-ops at the root menu.
+        # They never call curses.endwin() or terminate the application.
+        _loop._feat_sel = feat_sel
+
 
 
 def _run_feature_wizard(stdscr, key: str, w: int) -> list[list[str]] | str | None:
