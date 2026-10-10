@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import curses
 import curses.textpad  # noqa: F401  必须显式导入：不会随 import curses 自动加载
+import os
 import sys
 from pathlib import Path
 
@@ -83,13 +84,16 @@ def _init_colors() -> None:
 
 
 def _detect_light_bg() -> bool:
+    """通过终端的 COLORFGBG 约定识别浅色背景；未知时使用默认配色。
+
+    curses.color_content 返回 0..1000 的颜色分量，不能靠读取黑色索引
+    判断终端背景，原有 >40000 的判定永远不会成立。
+    """
+    value = os.environ.get("COLORFGBG", "").split(";")
     try:
-        if curses.COLORS >= 256 and curses.can_change_color():
-            r, g, b = curses.color_content(curses.COLOR_BLACK)
-            return (r + g + b) / 3 > 40000
-    except curses.error:
-        pass
-    return False
+        return bool(value) and int(value[-1]) in (7, 15)
+    except ValueError:
+        return False
 
 
 def _attr(name: str) -> int:
@@ -111,19 +115,42 @@ FEATURES = [
 # ---------------------------------------------------------------------------
 # 渲染辅助
 # ---------------------------------------------------------------------------
-def _disp_width(s: str) -> int:
+def _char_width(char: str) -> int:
     import unicodedata  # noqa: PLC0415
-    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
+    if unicodedata.combining(char) or unicodedata.category(char) in ("Mn", "Me", "Cf"):
+        return 0
+    return 2 if unicodedata.east_asian_width(char) in "WF" or ord(char) >= 0x1F300 else 1
+
+
+def _disp_width(s: str) -> int:
+    return sum(_char_width(c) for c in s)
+
+
+def _clip(s: str, width: int, *, tail: bool = False) -> str:
+    """按终端显示列而不是 Python 字符数裁剪，保留宽字符完整性。"""
+    if width <= 0:
+        return ""
+    chars = reversed(s) if tail else iter(s)
+    out: list[str] = []
+    used = 0
+    for char in chars:
+        col = _char_width(char)
+        if used + col > width:
+            break
+        out.append(char)
+        used += col
+    return "".join(reversed(out) if tail else out)
 
 
 def _pad(s: str, width: int) -> str:
-    return s + " " * max(1, width - _disp_width(s))
+    return s + " " * max(0, width - _disp_width(s))
 
 
 def _safe_add(stdscr, y, x, s, maxw, color="text", attrs=0):
-    if y < 0 or maxw <= 1 or x >= maxw - 1:
+    h, w = stdscr.getmaxyx()
+    if y < 0 or y >= h or x < 0 or x >= w - 1:
         return
-    s = s[: maxw - x - 1] if x + _disp_width(s) > maxw - 1 else s
+    s = _clip(str(s), min(maxw, w) - x - 1)
     if not s:
         return
     try:
@@ -132,56 +159,81 @@ def _safe_add(stdscr, y, x, s, maxw, color="text", attrs=0):
         pass
 
 
+def _small_screen(stdscr) -> bool:
+    h, w = stdscr.getmaxyx()
+    if w >= 50 and h >= 14:
+        return False
+    stdscr.erase()
+    _safe_add(stdscr, 1, 2, "终端窗口太小", w, "warn", curses.A_BOLD)
+    _safe_add(stdscr, 3, 2, f"当前 {w}×{h}，至少需要 50×14", w, "text")
+    _safe_add(stdscr, 5, 2, "请放大窗口 · Esc/Q 返回", w, "dim")
+    stdscr.refresh()
+    return True
+
+
 # ---------------------------------------------------------------------------
 # 输入框（数字 / 简单文本，带默认值）
 # ---------------------------------------------------------------------------
 def _prompt_int(stdscr, y, x, w, title, default, lo, hi) -> int | None:
-    """输入一个整数，返回 None 表示取消。"""
+    """可编辑整数输入，首个数字覆盖默认值；越界需改正而非悄悄钳制。"""
     buf = str(default)
+    untouched = True
+    error = ""
     while True:
         stdscr.move(y, 0)
         stdscr.clrtoeol()
-        _safe_add(stdscr, y, x, f"{title} [{lo}~{hi}]：", w, "text")
-        body = buf
-        _safe_add(stdscr, y, x + _disp_width(f"{title} [{lo}~{hi}]：") + 1, body, "value",
-                  curses.A_REVERSE)
-        _safe_add(stdscr, y + 1, x, "Enter 确认 · Esc 取消", w, "dim")
+        prompt = f"{title} [{lo}~{hi}]："
+        _safe_add(stdscr, y, x, prompt, w, "text")
+        bx = x + _disp_width(prompt) + 1
+        _safe_add(stdscr, y, bx, _clip(buf, max(0, w - bx - 2), tail=True), w,
+                  "value", curses.A_REVERSE)
+        _safe_add(stdscr, y + 1, x, error or "Enter 确认 · Esc 取消 · Backspace 删除", w,
+                  "bad" if error else "dim")
         stdscr.refresh()
         k = stdscr.getch()
         if k in (10, curses.KEY_ENTER, ord("\r")):
-            try:
-                v = int(buf)
-            except ValueError:
-                continue
-            return max(lo, min(hi, v))
-        if k in (27,):
+            if buf.isdigit() and lo <= int(buf) <= hi:
+                return int(buf)
+            error = f"请输入 {lo}～{hi} 之间的整数"
+        elif k == 27:
             return None
-        if k in (curses.KEY_BACKSPACE, 127, 8):
+        elif k in (curses.KEY_BACKSPACE, 127, 8):
             buf = buf[:-1]
+            untouched = False
+            error = ""
         elif ord("0") <= k <= ord("9"):
-            buf += chr(k)
+            buf = ("" if untouched else buf) + chr(k)
+            untouched = False
+            error = ""
 
 
 def _prompt_text(stdscr, y, x, w, title, default="") -> str | None:
-    """输入一段文本（关键词），返回字符串；Esc 返回 None。"""
+    """通过 get_wch 接受中文/日文输入法及 Unicode 粘贴；Esc 取消。"""
     buf = default
+    get_key = getattr(stdscr, "get_wch", stdscr.getch)
     while True:
         stdscr.move(y, 0)
         stdscr.clrtoeol()
-        _safe_add(stdscr, y, x, f"{title}：", w, "text")
-        body = buf
-        _safe_add(stdscr, y, x + _disp_width(f"{title}：") + 1, body, "value",
-                  curses.A_REVERSE)
-        _safe_add(stdscr, y + 1, x, "Enter 搜索 · Esc 取消", w, "dim")
+        prompt = f"{title}："
+        _safe_add(stdscr, y, x, prompt, w, "text")
+        bx = x + _disp_width(prompt) + 1
+        _safe_add(stdscr, y, bx, _clip(buf, max(0, w - bx - 2), tail=True),
+                  w, "value", curses.A_REVERSE)
+        _safe_add(stdscr, y + 1, x, "Enter 搜索 · Esc 取消 · Backspace 删除", w, "dim")
         stdscr.refresh()
-        k = stdscr.getch()
-        if k in (10, curses.KEY_ENTER, ord("\r")):
+        try:
+            k = get_key()
+        except curses.error:
+            continue
+        if k in ("\n", "\r", 10, 13, curses.KEY_ENTER):
             return buf
-        if k in (27,):
+        if k in ("\x1b", 27):
             return None
-        if k in (curses.KEY_BACKSPACE, 127, 8):
+        if k in ("\b", "\x7f", curses.KEY_BACKSPACE, 127, 8):
             buf = buf[:-1]
-        elif 32 <= k <= 126:  # 可打印 ASCII（含中文需按多字节，这里简单处理常用字符）
+        elif isinstance(k, str) and k.isprintable():
+            buf += k
+        elif isinstance(k, int) and 32 <= k <= 126:
             buf += chr(k)
 
 
