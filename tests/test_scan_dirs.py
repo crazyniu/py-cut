@@ -86,6 +86,8 @@ class ScanDirsTests(unittest.TestCase):
             with mock.patch.object(scan.os, "scandir",
                                    side_effect=PermissionError("denied")):
                 self.assertEqual(scan.list_dirs(root), [])
+                with self.assertRaises(PermissionError):
+                    scan.list_dirs(root, raise_on_error=True)
 
     def test_one_unreadable_entry_does_not_hide_other_directories(self):
         class Entry:
