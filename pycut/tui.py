@@ -787,40 +787,31 @@ def _flash(stdscr, msg: str, color: str = "bad") -> None:
 
 
 def run() -> int:
-    """入口：非交互回退 CLI 帮助；否则启动 curses TUI。"""
-    if not sys.stdin.isatty():
+    """终端交互入口：每次处理后留在主菜单，错误码不再被误报成功。"""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
         cli.build_parser().print_help()
         return 0
-    try:
-        stdscr = curses.initscr()
-        curses.noecho()
-        curses.cbreak()
-        try:
-            curses.start_color()
-            _init_colors()
-            result = _loop(stdscr)
-        finally:
-            curses.echo()
-            curses.nocbreak()
-            curses.endwin()
-    except Exception as e:  # noqa: BLE001
-        try:
-            curses.endwin()
-        except Exception:  # noqa: BLE001
-            pass
-        print(f"[TUI 启动失败] {e}\n回退：python3 pycut.py <command> --help")
-        return 0
 
-    if result and result[0] == "run":
-        _, argv_list = result
-        # 多支成片（混剪多选爆款视频）= 多个 argv，逐条执行
+    def _app(stdscr) -> int:
+        _init_colors()
         final_code = 0
-        for argv in argv_list:
-            code = cli.main(argv)
+        while True:
+            result = _loop(stdscr)
+            if not result or result[0] != "run":
+                return final_code
+            from . import tui_runner  # noqa: PLC0415
+            code, should_quit = tui_runner.run_jobs(stdscr, result[1])
             if code:
                 final_code = code
-        return final_code
-    return 0
+            if should_quit:
+                return final_code
+
+    try:
+        return curses.wrapper(_app)
+    except Exception as e:  # noqa: BLE001
+        # curses.wrapper 负责在任何异常下恢复终端，错误必须有非零退出码。
+        print(f"[TUI 运行失败] {type(e).__name__}: {e}", file=sys.stderr)
+        return 2
 
 
 # _loop 的选中记忆（静态属性）
