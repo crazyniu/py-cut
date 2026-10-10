@@ -197,7 +197,10 @@ def run_pipeline(opts: MontageOptions) -> dict:
             log("  [提示] 无画中画素材，直接输出步骤B 结果")
             cmd = [config.FFMPEG, "-y", "-loglevel", "error", "-i", str(base),
                    "-c", "copy", str(final)]
-            _run(cmd)
+            if not _run(cmd):
+                log("  [失败] 无画中画素材时的成片拷贝失败")
+                result["error"] = "步骤C 失败"
+                return result
         else:
             timeline = plan_pip_timeline(pool, target, slot=opts.pip_slot,
                                          seed=seed)
@@ -219,9 +222,9 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 return result
             result["pip_count"] = len(timeline)
 
-    if not final.is_file():
-        log("  [失败] 成片未生成")
-        result["error"] = "成片未生成"
+    if not final.is_file() or final.stat().st_size < 1024:
+        log("  [失败] 成片未生成或文件异常")
+        result["error"] = "成片未生成或文件异常"
         return result
 
     result["final"] = str(final)
