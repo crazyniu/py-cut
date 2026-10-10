@@ -153,21 +153,24 @@ class LLMClient:
             if status == 200:
                 try:
                     obj = json.loads(text)
-                    msg = ((obj.get("choices") or [{}])[0]).get("message") or {}
+                    choices = obj.get("choices") or [{}]
+                    first = choices[0]
+                    msg = first.get("message") or {}
                     content = msg.get("content")
-                    finish = ((obj.get("choices") or [{}])[0]).get("finish_reason")
-                    # 推理模型：finish_reason=length 时 content 被 reasoning_content 吃光
+                    finish = first.get("finish_reason")
+                    # 200 只代表 HTTP 成功，不代表模型返回了可用的 JSON。
+                    # 原实现两个 continue 绕过了失败计数：连续收到空内容 /
+                    # reasoning token 耗尽时永远不会启用备用网关。
                     if (not content or not str(content).strip()) and finish == "length":
                         payload = dict(payload, max_tokens=config.LLM_MAX_TOKENS_RETRY)
-                        continue
-                    parsed = self._extract_json(str(content or ""))
-                    if parsed is not None:
-                        with self._lock:
-                            self._consec_fail = 0
-                        return parsed
-                    payload = dict(payload, max_tokens=config.LLM_MAX_TOKENS_RETRY)
-                    continue
-                except json.JSONDecodeError:
+                    else:
+                        parsed = self._extract_json(str(content or ""))
+                        if parsed is not None:
+                            with self._lock:
+                                self._consec_fail = 0
+                            return parsed
+                        payload = dict(payload, max_tokens=config.LLM_MAX_TOKENS_RETRY)
+                except (json.JSONDecodeError, TypeError, AttributeError, IndexError, KeyError):
                     pass
                 with self._lock:
                     self._failures += 1
