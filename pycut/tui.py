@@ -358,7 +358,7 @@ def _prompt_text(stdscr, y, x, w, title, default="", *, validate=None) -> str | 
         bx = x + _disp_width(prompt) + 1
         _safe_add(stdscr, line_y, bx, _clip(buf, max(0, w - bx - 2), tail=True),
                   w, "value", curses.A_REVERSE)
-        hint = (error or ("Enter 确认 · Esc 取消 · Backspace 删除"
+        hint = (error or ("Enter 确认 · Esc 取消 · Ctrl+U 清空 · Backspace 删除"
                           if supports_unicode else "仅 ASCII 输入 · Enter 确认 · Esc 取消"))
         _safe_add(stdscr, line_y + 1, x, hint, w, "bad" if error else "dim")
         stdscr.refresh()
@@ -373,7 +373,10 @@ def _prompt_text(stdscr, y, x, w, title, default="", *, validate=None) -> str | 
             return buf
         if k in ("\x1b", 27):
             return None
-        if k in ("\b", "\x7f", curses.KEY_BACKSPACE, 127, 8):
+        if k in ("\x15", 21):  # Standard terminal Ctrl+U: clear the current path.
+            buf = ""
+            error = ""
+        elif k in ("\b", "\x7f", curses.KEY_BACKSPACE, 127, 8):
             buf = _erase_grapheme(buf)
             error = ""
         elif isinstance(k, str) and k.isprintable():
