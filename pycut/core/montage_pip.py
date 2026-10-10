@@ -358,23 +358,31 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
 
     if not entries:
         log(f"  [画中画] 时间轴为空，直接转存 base: {base.name}")
-        cmd = [FFMPEG, "-y", "-loglevel", "error", "-nostdin",
-               "-i", str(base), "-map", "0:v:0", "-an",
-               "-c:v", "copy", "-movflags", "+faststart", str(tmp)]
-        rc, _out, err = run_cmd(cmd, timeout=ENC_TIMEOUT_MAX)
-        if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:
-            log(f"  [画中画] -c copy 转存失败（rc={rc}），回退重编码")
-            cmd = _encode_cmd(
-                base, tmp,
-                f"[0:v]scale={W}:{H}:flags=bicubic,setsar=1[bg];[bg]null[vout]",
-                crf, fps)
+        try:
+            cmd = [FFMPEG, "-y", "-loglevel", "error", "-nostdin",
+                   "-i", str(base), "-map", "0:v:0", "-an",
+                   "-c:v", "copy", "-movflags", "+faststart", str(tmp)]
             rc, _out, err = run_cmd(cmd, timeout=ENC_TIMEOUT_MAX)
             if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:
-                raise RuntimeError(
-                    f"转存 base 失败 rc={rc}: "
-                    f"{err.strip().splitlines()[-1] if err.strip() else '无输出'}")
-        os.replace(str(tmp), str(out))
-        return cmd
+                log(f"  [画中画] -c copy 转存失败（rc={rc}），回退重编码")
+                # 不能让 copy 失败留下的半成品成为回退编码的输出。
+                if tmp.is_file():
+                    tmp.unlink()
+                cmd = _encode_cmd(
+                    base, tmp,
+                    f"[0:v]scale={W}:{H}:flags=bicubic,setsar=1[bg];[bg]null[vout]",
+                    crf, fps)
+                rc, _out, err = run_cmd(cmd, timeout=ENC_TIMEOUT_MAX)
+                if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:
+                    raise RuntimeError(
+                        f"转存 base 失败 rc={rc}: "
+                        f"{err.strip().splitlines()[-1] if err.strip() else '无输出'}")
+            os.replace(str(tmp), str(out))
+            return cmd
+        finally:
+            # 非空时间轴有清理逻辑，空时间轴的 copy/fallback 失败也必须一致。
+            if tmp.is_file():
+                tmp.unlink()
 
     # --- 输入：base 是第0 路，每个画中画各自 -ss/-t 输入侧精确截取 ---
     cmd: list[str] = [FFMPEG, "-y", "-loglevel", "error", "-nostdin",
