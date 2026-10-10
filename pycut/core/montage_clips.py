@@ -43,7 +43,7 @@ VIDEO_EXTS = (".mp4", ".mov", ".m4v")
 # 唯一大小的直接跳过 —— 实测 509 个文件里只有 214 个需要读，1.3s 跑完。
 DEDUP_CHUNK = 1 << 20
 
-# build_source_clip_cmd 签名里没有 crf，单独给一个模块级默认
+# 片段截取/拼接默认 CRF（libx264 软件编码）
 CRF_DEFAULT = "20"
 
 # 单文件 ffprobe 超时：读容器头很快，60s 足够，异常文件不拖死整批
@@ -331,22 +331,6 @@ def scan_library(root=None, min_dur=None, max_dur=None,
     return items
 
 
-def library_stats(items: list[ClipItem]) -> str:
-    """一行统计（分辨率分布 + 时长 min/中位/max），给命令层 / `--probe` 用。"""
-    if not items:
-        return "（无可用素材）"
-    import statistics  # noqa: PLC0415
-
-    durs = sorted(i.duration for i in items)
-    res: dict[str, int] = {}
-    for i in items:
-        key = f"{i.width}x{i.height}"
-        res[key] = res.get(key, 0) + 1
-    dist = "  ".join(f"{k} {v}条" for k, v in sorted(res.items(), key=lambda x: -x[1]))
-    return (f"{len(items)} 条  分辨率[{dist}]  时长 min/中位/max = "
-            f"{durs[0]:.2f}/{statistics.median(durs):.2f}/{durs[-1]:.2f}s")
-
-
 # ---------------------------------------------------------------------------
 # 步骤B-2：按时间槽挑片段
 # ---------------------------------------------------------------------------
@@ -551,20 +535,6 @@ def _seg_cmd(src: Path, offset: float, take: float, out: Path,
         "-vf", chain,
         *_enc_args(out, fps, crf),
     ]
-
-
-def build_source_clip_cmd(src: Path, start: float, dur: float, out: Path,
-                          canvas=None, fps=None) -> list[str]:
-    """从步骤A 的基准视频截取一段（双 seek：输入侧粗 seek + 输出侧精 seek）。
-
-    AGENTS.md 记录过：只靠输入侧 `-ss` 会抽到别的镜头的帧（关键帧间隔 8.33s 而镜头
-    中位数 2.03s），所以必须输入侧回退 `config.COARSE_BACKOFF`（1.0s）、输出侧再精 seek。
-    `start` 小于回退量时粗 seek 退化为 0，全部由输出侧精 seek 承担，不会多退。
-
-    同样 scale+pad 到画布：基准视频本身就是 720x1276，滤镜幂等；
-    万一基准换了分辨率也不会变形/出黑边。另加 `-an` 静音、libx264。
-    """
-    return _seg_cmd(Path(src), float(start), float(dur), Path(out), canvas, fps)
 
 
 def _normalize_segments(items: list[dict], canvas, fps, crf: str) -> list[Path]:

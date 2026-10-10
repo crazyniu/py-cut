@@ -35,7 +35,9 @@ def register(subparsers) -> None:
     g.add_argument("--dedup-dir", default="",
                    help=f"步骤C 画中画素材目录（默认 {config.MONTAGE_DEDUP_DIR}）")
     g.add_argument("--out-dir", default="",
-                   help=f"最终成片输出目录（默认 {config.MONTAGE_OUT}）")
+                   help=f"最终成片输出目录（默认 {config.MONTAGE_OUT}；TUI 混剪默认桌面 out）")
+    g.add_argument("--fission", type=int, default=1,
+                   help="每支爆款视频裂变生成几支成片（每支随机选片/扰动不同、话术相同）")
 
     g = p.add_argument_group("混剪参数")
     g.add_argument("--seed", type=int, default=0,
@@ -45,8 +47,9 @@ def register(subparsers) -> None:
     g.add_argument("--pip-slot", type=float, default=2.5,
                    help="步骤C 每个画中画显示几秒")
     g.add_argument("--no-pip", action="store_true", help="不叠画中画（只跑步骤A+B）")
-    g.add_argument("--srt", default=str(config.MONTAGE_SUB_PATH),
-                   help="字幕文件（步骤D 烧录；传空串则不烧字幕）")
+    g.add_argument("--srt", default="auto",
+                   help="字幕文件（步骤D 烧录）。默认 auto=自动找与基准视频同目录同名的 .srt"
+                        "（如 1.mp4 → 1.srt）；也可直接指定 .srt 路径；传空串则不烧字幕")
     g.add_argument("--no-sub", action="store_true", help="不烧字幕")
     g.add_argument("--crf", default="20", help="输出 libx264 CRF（越小越清晰）")
     g.add_argument("--probe", type=int, default=0,
@@ -119,6 +122,35 @@ def _probe_library(clip_dir: Path, allow_landscape: bool, workers: int) -> int:
     return 0
 
 
+def _resolve_srt(args: argparse.Namespace, source: Path) -> str:
+    """确定字幕文件路径（步骤D 用），返回空串表示不烧字幕。
+
+    优先级：
+      1. `--no-sub`  -> 不烧（空串）
+      2. `--srt ""`  -> 不烧（空串）
+      3. `--srt <路径>` -> 用用户给的路径（不存在则由流水线打日志跳过）
+      4. `--srt auto`（默认）-> 与基准视频同目录同名的 .srt：
+         `1.mp4 -> 1.srt`、`foo.mov -> foo.srt`。找不到也返回空串并提示。
+
+    设计动机：用户明确要求「字幕和爆款视频同目录同名」，这样批量切不同素材时
+    每支视频自动带自己的话术，不必每次手改固定路径（旧的 MONTAGE_SUB_PATH）。
+    """
+    if args.no_sub:
+        return ""
+    raw = args.srt
+    if raw in ("", None):
+        return ""
+    if raw != "auto":
+        return str(raw)
+    candidate = source.with_suffix(".srt")
+    if candidate.is_file():
+        log(f"[字幕] 自动配对: {candidate.name}")
+        return str(candidate)
+    log(f"[字幕] 未找到同名字幕 {candidate.name}（跳过烧字幕；"
+        f"可 --srt 指定路径或把 .srt 放到视频同目录）")
+    return ""
+
+
 def _is_portrait(p: Path) -> bool:
     """按侧边比粗判竖屏（用于 --probe 统计，不做精确探测，快）。"""
     import subprocess  # noqa: PLC0415
@@ -152,6 +184,10 @@ def run(args: argparse.Namespace) -> int:
     if not source.is_file():
         sys.exit(f"[错误] 步骤A 基准视频不存在: {source}")
 
+    # 字幕配对：默认 auto=与基准视频同目录同名 .srt（1.mp4 -> 1.srt）。
+    # 用户显式传 --srt 路径时优先用；传空串（--srt ""）或 --no-sub 则不烧字幕。
+    srt = _resolve_srt(args, source)
+
     if args.probe:
         return _probe_library(clip_dir, args.allow_landscape, args.workers)
 
@@ -178,7 +214,7 @@ def run(args: argparse.Namespace) -> int:
         speed_range=(1.0, max(1.0, args.speed_max)),
         sticker_dir=args.sticker_dir,
         sticker_chance=0.0 if args.no_sticker else max(0.0, min(1.0, args.sticker_chance)),
-        srt=("" if args.no_sub else args.srt),
+        srt=srt,
         crf=args.crf,
         fill_ratio=args.fill_ratio,
         noise_db=args.noise_db,
@@ -190,9 +226,41 @@ def run(args: argparse.Namespace) -> int:
     )
     result = montage_pipeline.run_pipeline(opts)
 
+    # ---------------- 批量裂变 ----------------
+    # --fission N 表示「每支爆款视频出 N 支不同成片」。首支已由上面那次跑出
+    # （复用 opts.seed），第 2..N 支换个 seed + 换个输出名再跑，随机选片/扰动不同
+    # 但话术与节奏不变。seed 派生：用户显式给 seed 时在其上累加，否则按源+序号。
+    fission = max(1, int(getattr(args, "fission", 1) or 1))
+    if fission > 1 and not result.get("error"):
+        from ..core.dedup_presets import derive_seed  # noqa: PLC0415
+        base_seed = args.seed if args.seed else derive_seed(source)
+        for i in range(2, fission + 1):
+            log("")
+            log(f"--- 裂变 {i}/{fission}（同一爆款视频，换 seed 重混）---")
+            vopts = montage_pipeline.MontageOptions(
+                step=args.step, source=source, clip_dir=clip_dir,
+                dedup_dir=dedup_dir, out_dir=out_dir,
+                seed=base_seed + i * 10007,   # 派生新 seed，保证与首支不同
+                allow_landscape=args.allow_landscape,
+                pip_slot=args.pip_slot, use_pip=not args.no_pip,
+                pip_continuous=not args.pip_gap, keep_audio=not args.no_audio,
+                mirror_chance=max(0.0, min(1.0, args.mirror_chance)),
+                speed_range=(1.0, max(1.0, args.speed_max)),
+                sticker_dir=args.sticker_dir,
+                sticker_chance=0.0 if args.no_sticker else max(0.0, min(1.0, args.sticker_chance)),
+                srt=srt, crf=args.crf, fill_ratio=args.fill_ratio,
+                noise_db=args.noise_db, min_silence=args.min_silence,
+                min_clip=args.min_clip, max_clip=args.max_clip,
+                pip_scale=args.pip_scale, workers=args.workers,
+                out_name=f"混剪_{source.stem}_{i}.mp4",
+            )
+            r = montage_pipeline.run_pipeline(vopts)
+            if not r.get("error") and r.get("final"):
+                log(f"  裂变 {i} 产出: {r['final']}")
+
     log("")
     log("=" * 62)
-    log("混剪完成")
+    log(f"混剪完成（裂变 {fission} 支）" if fission > 1 else "混剪完成")
     log("=" * 62)
     log(f"{'基准时长':<12}{fmt_dur(result['source_duration'])}")
     log(f"{'语音段数':<12}{result['segments']:>10}")

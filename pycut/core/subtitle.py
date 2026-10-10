@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -21,7 +20,7 @@ import cv2
 import numpy as np
 
 from .. import config
-from .ffmpeg import FFMPEG, FFPROBE, probe_scalar
+from .ffmpeg import FFMPEG, probe_scalar
 from .llm import LLMClient
 from .runtime import STOP
 from .utils import log
@@ -37,7 +36,8 @@ INPAINT_R = 4           # TELEA 修复半径
 GRAIN_BOOST = 1.3       # 填补区颗粒增益（匹配周边纹理强度）
 WORKERS = 4             # 并发片段数（每片段 = N 次 LLM + 1 次逐帧修复）
 
-SRC_BUCKETS = [config.OUT_FACE, config.OUT_NOFACE]
+# 切片桶在运行时可能被 slice/dedup 的 --src-dir/--out-dir 覆盖，故 collect_clips
+# 直接读 config.OUT_FACE/OUT_NOFACE（动态），不再用 import 时的快照列表。
 
 DETECT_PROMPT = (
     "这是竖屏短视频的一帧。检测画面中人为叠加的文字层"
@@ -306,7 +306,7 @@ def collect_clips(paths: list[Path] | None = None) -> list[Path]:
                 log(f"[不存在] {p}")
         return out
     out: list[Path] = []
-    for bucket in SRC_BUCKETS:
+    for bucket in (config.OUT_FACE, config.OUT_NOFACE):
         if not bucket.is_dir():
             continue
         for vd in sorted(bucket.iterdir()):

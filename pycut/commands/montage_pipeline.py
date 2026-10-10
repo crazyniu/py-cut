@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import os
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -42,6 +41,7 @@ class MontageOptions:
     max_clip: float = config.MONTAGE_CLIP_MAX_DUR
     pip_scale: float = config.MONTAGE_PIP_SCALE
     workers: int = 0
+    out_name: str = ""   # 覆盖默认成片名（批量裂变时给每支唯一名）；空=用 混剪_{stem}.mp4
 
 
 def run_pipeline(opts: MontageOptions) -> dict:
@@ -181,7 +181,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
         return result
 
     # ---------------- 步骤C：画中画叠加 ----------------
-    final = out_dir / f"混剪_{opts.source.stem}.mp4"
+    final = out_dir / (opts.out_name or f"混剪_{opts.source.stem}.mp4")
     if not opts.use_pip:
         log("--- 步骤C：--no-pip，跳过画中画 ---")
         cmd = ["-y", "-i", str(base), "-c", "copy", str(final)]

@@ -276,7 +276,9 @@ MONTAGE_SUB_MARGIN_V_RATIO = 0.08   # 底边距 = 画布高 × 该比例
 MONTAGE_SUB_MARGIN_H_RATIO = 0.05   # 左右安全边距
 MONTAGE_SUB_BORDER_STYLE = 3# 3=半透明底框；改 1 则切纯描边
 MONTAGE_SUB_MIN_READABLE = 0.8      # 字幕最短可读时长，槽比它短就不给字幕
-MONTAGE_SUB_PATH = Path.home() / "Desktop/10月8日.srt"   # 默认字幕文件
+# 字幕默认策略：montage 的 --srt 默认 auto = 与基准视频同目录同名 .srt（1.mp4→1.srt）。
+# 此常量保留仅为向后兼容（老代码/文档引用），新逻辑见 montage_cmd._resolve_srt。
+MONTAGE_SUB_PATH = Path.home() / "Desktop/10月8日.srt"
 MONTAGE_SUB_X264_PRESET = "veryfast"
 
 MANIFEST_COLUMNS = [
@@ -339,19 +341,3 @@ def gateway_summary(name: str | None = None) -> str:
     n = name if name in GATEWAYS else DEFAULT_GATEWAY
     g = resolve_gateway(n)
     return f"{n} @ {g['url']} model={g['model']} key={_state(g['key'])}"
-
-
-def gateways_summary() -> str:
-    """主网关 + 备用网关 两行摘要（不打印密钥本身）。"""
-    b = resolve_gateway(BACKUP_GATEWAY)
-    tail = "" if key_ready(BACKUP_GATEWAY) else "   (主网关失败时不会切换)"
-    return (f"主网关 {gateway_summary(DEFAULT_GATEWAY)}\n"
-            f"备用网关 {gateway_summary(BACKUP_GATEWAY)}{tail}")
-
-
-def backup_ready() -> bool:
-    """备用网关是否可用（密钥已真实配置且与主网关不是完全同一个地址/密钥）。"""
-    if not key_ready(BACKUP_GATEWAY):
-        return False
-    m, b = resolve_gateway(DEFAULT_GATEWAY), resolve_gateway(BACKUP_GATEWAY)
-    return (m["url"], m["key"], m["model"]) != (b["url"], b["key"], b["model"])

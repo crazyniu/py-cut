@@ -53,19 +53,30 @@ def test_slice_subparser_has_key_args():
 
 def test_dedup_registered():
     """去重命令已挂到注册表，且档位/门槛配置齐备。"""
-    import pycut.tui as tui  # noqa: PLC0415
-
     assert "dedup" in cli.list_commands()
     assert set(config.DEDUP_PRESETS) == {"light", "standard", "aggressive"}
     assert config.DEFAULT_GATEWAY == "main"
     ns = cli.build_parser().parse_args(["dedup", "--all", "--preset", "aggressive"])
     assert ns.command == "dedup" and ns.all is True and ns.preset == "aggressive"
-    # TUI：去重只把 范围/档位/自检 放在任务设置页，其余进高级页
-    fields = tui._collect_params("dedup")
-    nb = len(tui.BASIC_PARAMS["dedup"])
-    assert [f["label"] for f in fields[:nb]] == tui.BASIC_PARAMS["dedup"]
-    labels = {f["label"] for f in fields}
-    assert {"--mirror", "--speed", "--seed", "--phash-min"} <= labels
+    # dedup 支持 --src-dir 递归扫描
+    ns2 = cli.build_parser().parse_args(["dedup", "--src-dir", "/tmp"])
+    assert ns2.src_dir == "/tmp"
+
+
+def test_tui_wizard_structure():
+    """向导式 TUI 结构：5 功能齐全、目录扫描工具可用、混剪支持裂变。"""
+    import pycut.tui as tui  # noqa: PLC0415
+    from pycut.core import scan  # noqa: PLC0415
+
+    # 主菜单应有 4 个功能（切片/字幕擦除/去重/混剪）
+    names = [f[1] for f in tui.FEATURES]
+    assert names == ["切片", "字幕擦除", "去重", "混剪"]
+    # 目录扫描工具
+    assert hasattr(scan, "count_videos_recursive")
+    assert hasattr(scan, "list_videos_flat")
+    # 混剪支持 --fission 裂变（直接解析验证）
+    ns = cli.build_parser().parse_args(["montage", "--fission", "3"])
+    assert ns.fission == 3
 
 
 def test_dedup_presets_deterministic():

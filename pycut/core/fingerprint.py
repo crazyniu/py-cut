@@ -128,23 +128,6 @@ def phash_profile(path: Path | str, n: int = DEFAULT_SAMPLES) -> list[int]:
     return [phash(f) for f in sample_frames(path, n)]
 
 
-def psnr_between(path_a: Path | str, path_b: Path | str,
-                 n: int = DEFAULT_SAMPLES) -> float:
-    """两视频平均 PSNR(dB)。
-
-    逐帧算：灰度 -> 尺寸不同先缩放到较小者的尺寸（否则无法逐像素相减）->
-    `mse = mean((a-b)^2)` -> `psnr = 10*log10(255^2/mse)`，最后取平均。
-    两视频时长不同时按索引对齐（配对数 = 较少一侧的帧数），
-    时长差异大时这个值只能当参考，别当严格结论。
-
-    完全一致返回 99.0（避免 log10(0)）。
-    """
-    frames_a = sample_frames(path_a, n)
-    frames_b = sample_frames(path_b, n)
-    value, _pairs = _psnr_from_frames(frames_a, frames_b)
-    return value
-
-
 def compare(src: Path | str, dst: Path | str,
             n: int = DEFAULT_SAMPLES) -> dict:
     """去重自检主入口：对比原片与处理后视频的相似度与画质。
@@ -174,85 +157,6 @@ def compare(src: Path | str, dst: Path | str,
         "psamples": pairs,
         "psnr": round(psnr, 3),
         "samples": len(frames_a),
-    }
-
-
-def _seq_with_pts(path: Path | str) -> tuple[list[np.ndarray], list[float]]:
-    """顺序解码全片，返回 (灰度帧列表, 每帧时间戳秒)。
-
-    不用 seek：按帧索引对齐在**变速/帧率抖动/抽帧**之后会错位（见 compare_aligned）。
-    只在需要时间戳对齐时调用，因此解码全片是可接受的代价（切片都是秒级短片）。
-    """
-    cap = cv2.VideoCapture(str(path))
-    if not cap.isOpened():
-        raise RuntimeError(f"无法打开视频（文件不存在或格式不支持）: {path}")
-    frames: list[np.ndarray] = []
-    stamps: list[float] = []
-    try:
-        while True:
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                break
-            t = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-            frames.append(_to_gray(frame))
-            stamps.append(t if stamps or t > 0 else float(len(frames) - 1) / 30.0)
-    finally:
-        cap.release()
-    if not frames:
-        raise RuntimeError(f"抽帧失败：{path}（读到 0 帧）")
-    return frames, stamps
-
-
-def _nearest(frames: list[np.ndarray], stamps: list[float],
-             targets: list[float]) -> list[np.ndarray]:
-    """对每个目标时间戳取最近的一帧（双指针，O(n+m)）。"""
-    out: list[np.ndarray] = []
-    j = 0
-    for t in targets:
-        while j + 1 < len(stamps) and abs(stamps[j + 1] - t) <= abs(stamps[j] - t):
-            j += 1
-        out.append(frames[j])
-    return out
-
-
-def compare_aligned(src: Path | str, dst: Path | str,
-                    n: int = DEFAULT_SAMPLES) -> dict:
-    """**按时间戳对齐**的compare —— 变速 / 帧率抖动 / 时长变化时必须用这个。
-
-    `compare` 按帧序号配对，一旦处理侧做了 setpts 变速或 fps 滤镜，两侧第 i 帧
-    就不再是同一时刻，pHash 会虚高、PSNR 会虚低（实测变速 1.037 时会误判为不达标）。
-    本函数先解出两边的帧时间戳，再在**同一批时间点**上各取最近帧比较，
-    这样测到的差异才是真实的画面差异。
-
-    返回同compare（多了 align="timestamp" 字段）。
-    """
-    fa, ta = _seq_with_pts(src)
-    fb, tb = _seq_with_pts(dst)
-
-    dur = min(ta[-1], tb[-1]) if ta and tb else 0.0
-    if dur <= 0:
-        raise RuntimeError("时间戳对齐失败：至少一侧没有有效时间戳")
-    # 目标时间点取两侧共有的时间范围，避开首尾（首尾常有黑场/编码边界误差）
-    span_lo, span_hi = ta[0], tb[-1]
-    usable = min(dur, max(span_hi - span_lo, 0.0))
-    if usable <= 0:
-        usable = max(dur, 0.001)
-    targets = [span_lo + usable * (i + 0.5) / n for i in range(n)]
-
-    ga = _nearest(fa, ta, targets)
-    gb = _nearest(fb, tb, targets)
-
-    prof_a = [phash(f) for f in ga]
-    prof_b = [phash(f) for f in gb]
-    dist = sum(phash_distance(x, y) for x, y in zip(prof_a, prof_b)) / n
-    psnr, _ = _psnr_from_frames(ga, gb)
-
-    return {
-        "phash_dist": round(dist, 3),
-        "psamples": n,
-        "psnr": round(psnr, 3),
-        "samples": n,
-        "align": "timestamp",
     }
 
 

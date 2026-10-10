@@ -1,7 +1,8 @@
 """切片流水线编排：场景分段 -> 人脸分流 -> 字幕擦除 = 最终切片。
 
-这是"切片"功能的完整实现，被 commands/slice_cmd 调用。
-其它功能（混剪/转场/查重）后续作为独立命令，复用本模块的 cut_clip / Manifest 等。
+这是「切片」功能的完整实现，被 commands/slice_cmd 调用。
+混剪（montage）、去重（dedup）、补跑擦除（cover）作为独立命令，各自复用
+本模块的 cut_clip / Manifest 等基础能力（见 commands/ 目录）。
 """
 from __future__ import annotations
 
@@ -12,17 +13,17 @@ import tempfile
 import threading
 import time
 from concurrent import futures
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .. import config
 from .faces import FaceStat, analyze_segment, decide_face
-from .ffmpeg import FFMPEG, VideoInfo, probe_video
+from .ffmpeg import FFMPEG, VideoInfo
 from .runtime import STOP
 from .scene import build_segments, detect_scenes
 from .subtitle import process_clip
-from .utils import fmt_bytes, fmt_dur, log
+from .utils import fmt_bytes, fmt_dur, log, run_cmd
 
 
 # ---------------------------------------------------------------------------
@@ -107,18 +108,17 @@ def video_done(stem: str) -> bool:
 
 
 def list_videos(limit: int | None = None) -> list[Path]:
-    """列出源目录全部 mp4。必须走 os.scandir（macOS find 会静默丢文件）。"""
+    """列出源目录全部 mp4（递归子目录）。
+
+    必须走文件系统遍历（macOS 的 `find -iname` 会静默丢文件），这里用 os.walk
+    （底层仍是 scandir）。素材常按平台分目录（如 抖音/快手），故递归收集。
+    """
     files: list[Path] = []
-    with os.scandir(str(config.SRC_DIR)) as it:
-        for entry in it:
-            try:
-                if not entry.is_file():
-                    continue
-            except OSError:
-                continue
-            if entry.name.lower().endswith(".mp4"):
-                files.append(Path(entry.path))
-    files.sort(key=lambda p: p.name)
+    for dirpath, _dirnames, filenames in os.walk(str(config.SRC_DIR)):
+        for fn in filenames:
+            if fn.lower().endswith(".mp4"):
+                files.append(Path(dirpath) / fn)
+    files.sort(key=lambda p: (str(p.parent), p.name))
     if limit is not None:
         files = files[:limit]
     return files
@@ -162,7 +162,7 @@ def cut_clip(info: VideoInfo, start: float, end: float, out_path: Path) -> tuple
         args += ["-c:a", "aac", "-b:a", "128k", "-ac", "2"]
     args += [str(tmp)]
 
-    rc, _out, err = _run(args, timeout=900)
+    rc, _out, err = run_cmd(args, timeout=900)
     if rc != 0 or not tmp.exists():
         if tmp.exists():
             try:
@@ -175,17 +175,6 @@ def cut_clip(info: VideoInfo, start: float, end: float, out_path: Path) -> tuple
     size = tmp.stat().st_size
     os.replace(str(tmp), str(out_path))  # 原子落盘
     return True, size
-
-
-def _run(args: list[str], timeout: int):
-    import subprocess  # noqa: PLC0415
-    try:
-        p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return -1, "", f"timeout after {timeout}s"
-    except FileNotFoundError as e:
-        return -1, "", f"executable not found: {e}"
-    return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
 
 
 # ---------------------------------------------------------------------------

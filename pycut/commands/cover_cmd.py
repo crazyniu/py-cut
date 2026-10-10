@@ -24,6 +24,8 @@ def register(subparsers) -> None:
         "cover", help="字幕擦除：对切片单独检测并擦除字幕（流水线第三步）")
     p.add_argument("--file", nargs="+", help="要处理的切片 mp4 路径（可多个）")
     p.add_argument("--all", action="store_true", help="处理桌面两个切片目录的全部切片")
+    p.add_argument("--src-dir", default="",
+                   help="要擦除字幕的视频目录（递归扫描所有 mp4；留空则用 --all/--file）")
     p.add_argument("--gateway", default=config.DEFAULT_GATEWAY,
                    choices=list(config.GATEWAYS.keys()),
                    help="起始网关：main=主网关 / backup=备用网关")
@@ -40,8 +42,8 @@ def register(subparsers) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
-    if not args.file and not args.all:
-        sys.exit("[错误] 需要 --file 或 --all")
+    if not args.file and not args.all and not args.src_dir:
+        sys.exit("[错误] 需要 --file、--all 或 --src-dir")
 
     install_signal_handlers()
     reset_stop()
@@ -49,7 +51,15 @@ def run(args: argparse.Namespace) -> int:
 
     llm = make_llm(args.gateway, args.llm_url, args.llm_key, args.llm_model,
                    use_fallback=not args.no_fallback)
-    clips = collect_clips([Path(x) for x in args.file] if args.file else None)
+    # --src-dir 优先：递归扫描指定目录下所有视频（不限切片桶结构）
+    if args.src_dir:
+        from ..core.scan import list_videos_recursive  # noqa: PLC0415
+        clips = list_videos_recursive(Path(args.src_dir).expanduser())
+        if not clips:
+            log(f"[范围] {args.src_dir} 下没有视频")
+            return 1
+    else:
+        clips = collect_clips([Path(x) for x in args.file] if args.file else None)
     if not clips:
         log("没有可处理的切片")
         return 1

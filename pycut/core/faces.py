@@ -7,7 +7,6 @@
 """
 from __future__ import annotations
 
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,6 @@ import cv2
 
 from .. import config
 from .ffmpeg import FFMPEG
-from .runtime import STOP
 from .utils import run_cmd
 
 

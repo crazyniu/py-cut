@@ -1,12 +1,10 @@
 """通用小工具：日志、格式化、命令执行。
 
-不依赖 cv2 / ffmpeg 之外的任何第三方库（纯标准库）。
+纯标准库，不依赖任何第三方库。
 """
 from __future__ import annotations
 
-import os
 import subprocess
-from typing import Any
 
 
 def log(msg: str) -> None:
@@ -55,22 +53,3 @@ def run_cmd(args: list[str], timeout: int) -> tuple[int, str, str]:
     out = p.stdout.decode("utf-8", "replace")
     err = p.stderr.decode("utf-8", "replace")
     return p.returncode, out, err
-
-
-def env_str(key: str, default: str) -> str:
-    """读取环境变量，空值回退 default。"""
-    return os.environ.get(key, default) or default
-
-
-def safe_listdir(path: Any) -> list[Any]:
-    """os.scandir 包装：macOS 的 find -iname 会静默丢文件，统一走 scandir。"""
-    import os as _os  # noqa: PLC0415
-
-    out: list[Any] = []
-    try:
-        with _os.scandir(str(path)) as it:
-            for entry in it:
-                out.append(entry)
-    except OSError:
-        pass
-    return out

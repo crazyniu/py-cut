@@ -56,23 +56,25 @@
 - **备用网关的用途是自动容灾**：主网关连续失败达 `config.LLM_FAILOVER_FAILS`（=3）次，
   `LLMClient` 自动切到备用网关并**粘住**（`_delegate`），后续调用都走备用，日志打印切换提示。
   `--no-fallback` 可关闭；传了 `--llm-url/--llm-key/--llm-model` 显式覆盖时不挂备用。
-  备用网关未配密钥时不切换（`config.backup_ready()` 判断）。
-  `config.key_ready()` / `config.gateway_summary()` / `config.gateways_summary()`
-  用于检查状态（**日志里绝不打印密钥本身**，占位值如 `sk-你的密钥` 视为未配置）。
+  备用网关未配密钥时不切换（`make_llm` 里用 `config.key_ready(other)` 判断）。
+  `config.key_ready()` / `config.gateway_summary()` 用于检查状态
+  （**日志里绝不打印密钥本身**，占位值如 `sk-你的密钥` 视为未配置）。
 - **参数两种入口（等价）**：
   - 命令行：`python3 pycut.py slice --file X --scene-th 0.35`
-  - 终端 TUI：直接 `python3 pycut.py`（无参数且为交互终端即进入），方向键选命令/改参数，R 运行。
+  - 终端 TUI：直接 `python3 pycut.py`（无参数且为交互终端即进入），走**引导式向导**。
     TUI 与 CLI 共用 `cli.build_parser()` 的参数定义，改一方另一方自动同步。
-- **TUI 必须做参数分级**（用户明确要求：不要把一堆参数甩给用户）：
-  - `tui.BASIC_PARAMS` 定义每个命令「**任务设置页**」显示哪些参数（目前 slice 只有
-    指定视频 / 是否擦除字幕 / 试跑 / 重跑四项），其余全部进「**高级参数页**」（按 `A` 切换）。
-  - **LLM / 网关 / 并发 / 阈值一律归高级页**，任务设置页不出现。
-  - `tui.DISPLAY` 提供中文显示名（argv 仍用原 flag）；`tui.INVERT_FLAGS` 处理反向开关
-    （`--no-sub` 在界面显示成正向的「切片时擦除字幕 [x]」，写入时再换算回 `--no-sub`）。
-  - 任务设置页末尾固定一项 `▶▶ 开始执行 <cmd>`；底部实时显示「将执行: …」argv 预览。
-  - 新增命令时**必须**同时在 `BASIC_PARAMS` / `DISPLAY` 里登记，否则新参数会落进高级页。
+- **TUI 是引导式向导，不甩一堆参数**（用户明确要求）：
+  - 主菜单 4 功能（切片 / 字幕擦除 / 去重 / 混剪），选中后进入「选目录 → 报视频数 →
+    选开关 → 确认执行」的分步向导，每步只问一个决定。
+  - 目录选择器 `tui._pick_dir` 是文件系统层级浏览器：从根目录 `/` 出发，`Enter` 进入
+    子目录、`←`/Backspace 返回上级、`Enter` 在「选择当前目录」上直接选定、`~` 跳主目录、
+    `/` 跳根目录。**不要改回预置候选目录列表**（用户反馈选不到目录、无法回上级）。
+  - 混剪向导用 `tui._multi_select` 多选爆款视频 + 每支设「裂变数量」，返回
+    `list[list[str]]`（多支成片 = 多个 argv），`run()` 循环执行。
+  - 每个功能最终生成 argv 交给 `cli.main` 执行，与命令行完全同源，无参数漂移。
+  - 新增功能时**必须**同步在 `tui.FEATURES` 登记主菜单项并写对应 `_wizard_*` 函数。
 
-## 4. 切片流水线（当前唯一落地功能）
+## 4. 切片流水线
 
 三步，顺序不可乱：
 1. **场景分段** → `core/scene.py`：`detect_scenes`（ffmpeg `select='gt(scene,TH)'`）+ `build_segments`（去重/合并过短/切分超长）。
@@ -98,7 +100,7 @@
 ## 6. 改动流程
 
 1. 读 `AGENTS.md` + 相关 `core/` 模块，确认复用点。
-2. 小步修改，**先 dry-run / 单视频试跑**再批量（如 `slice --file X --dry-run`，或 TUI 里勾选 dry-run）。
+2. 小步修改，**先 dry-run / 单视频试跑**再批量（如 `slice --file X --dry-run`）。
 3. 跑 `tools/verify.py` 做独立质检（不信任 slicer 自己的清单）。
 4. 改完更新 `README.md` / `ROADMAP.md` / 本文件（如有约定变化）。
 5. 提交 git（本仓库根目录 `pycut/` 已 `git init`）。

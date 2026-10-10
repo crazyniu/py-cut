@@ -31,7 +31,9 @@ def register(subparsers) -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     g = p.add_argument_group("范围")
     g.add_argument("--file", nargs="+", help="要处理的视频/切片路径（可多个）")
-    g.add_argument("--all", action="store_true", help="处理桌面两个切片目录的全部切片")
+    g.add_argument("--all", action="store_true", help="处理切片桶（有人脸/无人脸）的全部切片")
+    g.add_argument("--src-dir", default="",
+                   help="视频目录（递归扫描所有 mp4；优先于 --all）")
 
     g = p.add_argument_group("档位与开关")
     g.add_argument("--preset", default=config.DEDUP_DEFAULT_PRESET,
@@ -73,12 +75,19 @@ def _pick_srcs(args: argparse.Namespace) -> list[Path]:
         if missing:
             sys.exit(f"[错误] 文件不存在: {missing[0]}")
         return srcs
+    if args.src_dir:
+        # 递归扫描指定目录下所有视频（不限切片桶结构，也不要求 --all）
+        from ..core.scan import list_videos_recursive  # noqa: PLC0415
+        srcs = list_videos_recursive(Path(args.src_dir).expanduser())
+        if not srcs:
+            sys.exit(f"[错误] {args.src_dir} 下没有可处理的视频")
+        return srcs
     if args.all:
         clips = collect_clips(None)
         if not clips:
             sys.exit("[错误] 桌面两个切片目录里没有可处理的切片")
         return clips
-    sys.exit("[错误] 需要 --file 或 --all")
+    sys.exit("[错误] 需要 --file、--src-dir 或 --all")
 
 
 def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:

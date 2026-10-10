@@ -1,361 +1,607 @@
-"""TUI 启动器：终端交互式选择命令与编辑参数，生成 argv 后交给 cli.main 执行。
+"""pycut 交互式终端界面（curses TUI）—— 引导式向导。
 
-设计：
-  - 命令与参数定义不重复：直接从 cli.build_parser() 的子解析器读取每个参数
-    （option_strings / type / default / choices / help），CLI 与 TUI 共用同一份定义。
-  - 用户在终端里用方向键选命令、编辑参数；回车运行，结束后回到 shell 看日志。
-  - 任何异常或非交互环境（管道 / 无 tty）自动回退到 CLI 帮助，绝不卡死。
+风格取向：Claude Code 观感——深色底、琥珀色强调、顶部 logo+版本号、底部状态栏、
+❯ 选中标记、语法高亮。
+
+交互模型（引导式向导，替代旧的「参数表单」）：
+    主菜单列出 5 个功能，选中后进入**分步向导**，每步只问一个决定：
+
+      切片        → 选源目录 → 报视频数 → 选「擦除字幕/去重」开关 → 确认执行
+      字幕擦除    → 选目录 → 报视频数 → 确认执行（只有擦除，无去重）
+      去重        → 选目录 → 报视频数 → 确认执行（只有去重）
+      混剪        → 选片段目录 → 选画中画目录 → 选爆款视频目录 →
+                    多选爆款视频 + 每个裂变数量 → 选「去重/字幕」开关 → 确认执行
+
+关键机制：
+  - **目录选择器**：TUI 列表展示候选目录（含 config 里的常见目录 + 任意子目录），
+    支持进入子目录 / 返回上级 / 直接选当前目录，不要求手敲路径。
+  - **递归扫描**：选定目录后用 `core/scan` 递归统计视频数并展示。
+  - **多选**（混剪爆款视频）：空格勾选/取消，数字输入裂变数量。
+  - 最终生成 argv 交给 `cli.main` 执行（与命令行完全同源，无漂移）。
+
+健壮性：非交互环境（管道/无 tty）回退 CLI 帮助；任何异常回退到提示，绝不卡死。
 """
 from __future__ import annotations
 
-import argparse
 import curses
-import curses.textpad  # noqa: F401  必须显式导入：curses.textpad 不会随 import curses 自动加载
+import curses.textpad  # noqa: F401  必须显式导入：不会随 import curses 自动加载
+import os
 import sys
+from pathlib import Path
 
-from . import cli
+from . import __version__, cli
+from .core.scan import count_videos_recursive, list_videos_flat
 
-# 命令菜单展示文案（与 commands 的 help 保持一致即可）
-CMD_META = {
-    "slice": "切片：场景分段 → 人脸分流 → 字幕擦除",
-    "cover": "字幕擦除：对已有切片单独重跑去字幕",
-    "dedup": "去重：分层扰动 + pHash/PSNR 自检（过查重）",
-    "montage": "混剪：话术基准 → 随机混剪 → 画中画叠加",
+# ---------------------------------------------------------------------------
+# 配色主题（Claude Code 风格：深底 + 琥珀强调）
+# ---------------------------------------------------------------------------
+_COLOR_DEFS: dict[str, tuple[str, int, int]] = {
+    "accent":    ("amber",     214,            -1),  # 强调 / 选中 / 标题
+    "dim":       ("gray",      244,            -1),  # 弱化 / 说明
+    "muted":     ("dimgray",   238,            -1),  # 更弱的占位 / 边框
+    "text":      ("white",     255,            -1),  # 正文
+    "good":      ("green",     114,            -1),  # 成功 / 勾选
+    "warn":      ("yellow",    221,            -1),  # 警告
+    "bad":       ("red",       203,            -1),  # 错误 / 危险
+    "info":      ("cyan",      81,             -1),  # 信息
+    "keyword":   ("purple",    141,            -1),  # 命令名 / 关键字
+    "value":     ("blue",      117,            -1),  # 参数值
 }
 
-# 「任务设置」页只放该命令真正需要用户决定的参数（按此顺序展示）；
-# 其余全部归入「高级参数」页（按 A 切换），LLM / 并发 / 阈值等日常不用管。
-BASIC_PARAMS = {
-    "slice": ["--file", "--no-sub", "--dry-run", "--force"],
-    "cover": ["--file", "--all", "--force", "--dry-run"],
-    "dedup": ["--file", "--all", "--preset", "--check"],
-    "montage": ["--step", "--no-pip", "--probe"],
+_FALLBACK_8 = {
+    "accent": curses.COLOR_YELLOW, "dim": curses.COLOR_WHITE,
+    "muted": curses.COLOR_WHITE,   "text": curses.COLOR_WHITE,
+    "good": curses.COLOR_GREEN,    "warn": curses.COLOR_YELLOW,
+    "bad": curses.COLOR_RED,       "info": curses.COLOR_CYAN,
+    "keyword": curses.COLOR_MAGENTA, "value": curses.COLOR_BLUE,
 }
 
-# 参数在 TUI 里的中文显示名（argv 仍用原始 flag）
-DISPLAY = {
-    "--file": "指定视频（留空=全部）",
-    "--all": "处理全部切片",
-    "--no-sub": "切片时擦除字幕",
-    "--dry-run": "试跑（不产出）",
-    "--force": "重跑（忽略标记）",
-    "--limit": "前 N 个视频",
-    "--scene-th": "场景阈值",
-    "--min-seg": "最短段落(秒)",
-    "--workers-llm": "LLM 并发",
-    "--workers-enc": "编码并发",
-    "--samples": "每片抽帧数",
-    "--workers": "并发片段数",
-    "--no-llm": "启用 LLM",
-    "--no-fallback": "故障自动切备用",
-    "--gateway": "网关",
-    "--llm-url": "网关地址(覆盖)",
-    "--llm-key": "网关密钥(覆盖)",
-    "--llm-model": "模型名(覆盖)",
-    # dedup
-    "--preset": "去重档位",
-    "--check": "只自检（不产出）",
-    "--mirror": "允许镜像",
-    "--speed": "允许微变速",
-    "--border": "模糊边框",
-    "--badge": "角标色块",
-    "--logo": "画中画图片",
-    "--delogo": "水印区域",
-    "--out-dir": "输出目录",
-    "--in-place": "原地覆盖(危险)",
-    "--seed": "随机种子",
-    "--phash-min": "pHash 门槛",
-    "--psnr-min": "PSNR 门槛",
-    # montage
-    "--step": "执行到哪一步",
-    "--source": "步骤A 基准视频",
-    "--clip-dir": "步骤B 片段库",
-    "--dedup-dir": "步骤C 画中画素材",
-    "--out-dir": "成片输出目录",
-    "--no-pip": "跳过画中画",
-    "--allow-landscape": "允许横屏素材",
-    "--probe": "只探测素材规模",
-    "--pip-slot": "画中画时长",
-    "--pip-scale": "画中画大小",
-    "--fill-ratio": "填充比例",
-    "--noise-db": "静音阈值dB",
-    "--min-silence": "静音最短秒数",
-    "--min-clip": "片段最短秒数",
-    "--max-clip": "片段最长秒数",
-    "--crf": "输出画质CRF",
-}
-
-# 反向开关：界面显示正向含义（勾选=开启），实际写入的是 --no-xxx
-INVERT_FLAGS = {"--no-sub", "--no-llm", "--no-fallback"}
+_LIGHT_BG = False
 
 
-def _get_subparser(parser, cmd: str):
-    """兼容不同 argparse 版本，取出某个子命令的 ArgumentParser。"""
-    sp = getattr(parser, "_subparsers", None)
-    candidates = []
-    if sp is not None:
-        candidates.extend(getattr(sp, "_group_actions", [sp]))
-    for a in parser._actions:
-        candidates.append(a)
-    for a in candidates:
-        choices = getattr(a, "choices", None)
-        if choices and cmd in choices:
-            return choices[cmd]
-    return None
-
-
-def _collect_params(cmd: str) -> list[dict]:
-    """从子解析器提取参数表单（与 argparse 定义同源）。"""
-    parser = cli.build_parser()
-    sub = _get_subparser(parser, cmd)
-    if sub is None:
-        return []
-    fields: list[dict] = []
-    for a in sub._actions:
-        if not a.option_strings:
-            continue
-        if a.dest in ("help", "command", "func"):
-            continue
-        long = next((o for o in a.option_strings if o.startswith("--")),
-                   a.option_strings[0])
-        invert = long in INVERT_FLAGS
-        if isinstance(a, argparse._StoreTrueAction):
-            kind, val = "flag", bool(a.default)
-            if invert:                      # 界面显示正向含义：勾选=开启
-                val = not val
-        elif getattr(a, "nargs", None) in ("+", "*"):
-            kind, val = "list", (a.default if a.default else "")
-        elif a.choices:
-            kind, val = "choice", a.default
-        else:
-            kind, val = "value", (a.default if a.default is not None else "")
-        fields.append({
-            "key": a.dest, "label": long, "kind": kind, "value": val,
-            "choices": list(a.choices) if a.choices else None,
-            "help": a.help or "", "default": a.default,
-            "display": DISPLAY.get(long, long), "invert": invert,
-        })
-    # 任务设置页按 BASIC_PARAMS 的顺序展示，其余进高级页
-    order = [p for p in BASIC_PARAMS.get(cmd, [])]
-    rank = {p: i for i, p in enumerate(order)}
-    fields.sort(key=lambda f: rank.get(f["label"], len(order)))
-    return fields
-
-
-def _build_argv(cmd: str, fields: list[dict]) -> list[str]:
-    """把表单状态转成 argv（只带与默认不同的项，保持干净）。"""
-    argv = [cmd]
-    for f in fields:
-        v = f["value"]
-        if v is None:
-            continue
-        if f["kind"] == "flag":
-            raw = (not v) if f.get("invert") else v   # 反向开关换算回原始 flag
-            if raw != bool(f["default"]):
-                argv.append(f["label"])
-        elif f["kind"] == "list":
-            s = str(v).strip()
-            if s:
-                argv += [f["label"], s]
-        else:
-            s = str(v).strip()
-            if s == "":
-                continue
-            if f["default"] is not None and s == str(f["default"]):
-                continue
-            argv += [f["label"], s]
-    return argv
-
-
-def _edit_string(stdscr, label: str, initial: str) -> str | None:
-    """在底部开一个空输入框（curses.textpad），回车返回新值；留空则保持原值。
-
-    不预填原值：避免用户直接输入时把新值追加到旧值后面（0.3 + 0.35 -> 0.30.35）。
-    当前值显示在提示行，用户直接输入新值即可。
-    """
-    h, w = stdscr.getmaxyx()
-    if h < 4 or w < 12:
-        return None
-    _safe_add(stdscr, h - 1, 0,
-              f" 编辑 {label}（当前 {initial}）：直接输入新值，回车确认；留空=不改 ", w)
-    stdscr.refresh()
-
-    win = curses.newwin(1, max(10, w - 4), h - 2, 2)
-    win.erase()
-    win.keypad(True)
-    win.refresh()
-    curses.curs_set(1)
-    box = curses.textpad.Textbox(win)
-    try:
-        s = box.edit()
-    except Exception:  # noqa: BLE001
-        s = ""
-    finally:
-        curses.curs_set(0)
-        try:            # 清掉输入框残留，避免回到参数表后底部仍显示旧输入
-            win.erase()
-            win.refresh()
-        except curses.error:
-            pass
-    return s.strip() or None
-
-
-def _safe_add(stdscr, y: int, x: int, s: str, maxw: int) -> None:
-    """按可用宽度安全写入；终端太小时静默跳过，避免 curses.error 中断 TUI。"""
-    if y < 0 or maxw <= 1:
-        return
-    s = s[: maxw - x - 1] if x + len(s) > maxw - 1 else s
-    if not s:
+def _init_colors() -> None:
+    global _LIGHT_BG
+    if not curses.has_colors():
         return
     try:
-        stdscr.addstr(y, x, s)
+        curses.use_default_colors()
     except curses.error:
         pass
+    _LIGHT_BG = _detect_light_bg()
+    rich = curses.COLORS >= 256
+    for name, (cname, fg, _bg) in _COLOR_DEFS.items():
+        idx = 1 + list(_COLOR_DEFS).index(name)
+        use_fg = fg if rich else _FALLBACK_8[name]
+        if _LIGHT_BG and name in ("text", "keyword", "value", "info", "good"):
+            use_fg = 0 if name != "keyword" else 5
+        try:
+            curses.init_pair(idx, use_fg, -1)
+        except curses.error:
+            pass
 
 
-def _finalize_argv(cmd: str, fields: list[dict]) -> list[str]:
-    """生成将要执行的 argv：在 _build_argv 基础上补上命令的隐式默认。"""
-    argv = _build_argv(cmd, fields)
-    # cover/dedup 没给 --file 时，等同于「处理全部切片」，避免直接跑报参数缺失
-    if cmd in ("cover", "dedup") and "--file" not in argv and "--all" not in argv:
-        argv.append("--all")
-    # montage 不需要 --file/--all，默认参数就能跑全流程
-    return argv
+def _detect_light_bg() -> bool:
+    try:
+        if curses.COLORS >= 256 and curses.can_change_color():
+            r, g, b = curses.color_content(curses.COLOR_BLACK)
+            return (r + g + b) / 3 > 40000
+    except curses.error:
+        pass
+    return False
 
 
+def _attr(name: str) -> int:
+    return curses.color_pair(1 + list(_COLOR_DEFS).index(name))
+
+
+# ---------------------------------------------------------------------------
+# 功能菜单文案
+# ---------------------------------------------------------------------------
+FEATURES = [
+    ("slice", "切片",    "把长视频切成多段，可选擦除字幕、去重"),
+    ("cover", "字幕擦除", "擦除画面中的字幕"),
+    ("dedup", "去重",    "去除重复、相似的视频"),
+    ("montage", "混剪",  "组合片段生成新视频（可批量裂变）"),
+]
+
+
+# ---------------------------------------------------------------------------
+# 渲染辅助
+# ---------------------------------------------------------------------------
 def _disp_width(s: str) -> int:
-    """终端显示宽度：CJK / 全角字符占 2 列。"""
     import unicodedata  # noqa: PLC0415
     return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
 
 
 def _pad(s: str, width: int) -> str:
-    """按显示宽度右补空格，保证中英混排时数值列对齐。"""
     return s + " " * max(1, width - _disp_width(s))
 
 
-def _val_text(f: dict) -> str:
-    """参数当前值的展示文本。"""
-    if f["kind"] == "flag":
-        return "[x]" if f["value"] else "[ ]"
-    s = str(f["value"])
-    if f["kind"] in ("list", "value"):
-        return s if s.strip() else "(空)"
-    return s
+def _safe_add(stdscr, y, x, s, maxw, color="text", attrs=0):
+    if y < 0 or maxw <= 1 or x >= maxw - 1:
+        return
+    s = s[: maxw - x - 1] if x + _disp_width(s) > maxw - 1 else s
+    if not s:
+        return
+    try:
+        stdscr.addstr(y, x, s, _attr(color) | attrs)
+    except curses.error:
+        pass
 
 
-def _loop(stdscr) -> tuple[str, list[str] | None]:
-    curses.curs_set(0)
-    stdscr.keypad(True)
-    cmds = list(cli.COMMANDS.keys())
-
-    phase = "menu"
-    sel = 0
-    cmd: str | None = None
-    basic: list[dict] = []
-    adv: list[dict] = []
-    page = "basic"     # basic=任务设置页 / advanced=高级参数页
-    fidx = 0
-
-    def fields() -> list[dict]:
-        return basic if page == "basic" else adv
-
-    def n_items() -> int:
-        return len(fields()) + (1 if page == "basic" else 0)
-
-    def do_run() -> tuple[str, list[str]]:
-        assert cmd is not None
-        return ("run", _finalize_argv(cmd, basic + adv))
-
+# ---------------------------------------------------------------------------
+# 输入框（数字 / 简单文本，带默认值）
+# ---------------------------------------------------------------------------
+def _prompt_int(stdscr, y, x, w, title, default, lo, hi) -> int | None:
+    """输入一个整数，返回 None 表示取消。"""
+    buf = str(default)
     while True:
-        stdscr.erase()
-        h, w = stdscr.getmaxyx()
-        if phase == "menu":
-            _safe_add(stdscr, 0, 0, " pycut · 选择功能   (↑/↓ 移动, Enter 进入, Q 退出)", w)
-            for i, c in enumerate(cmds):
-                mark = "▶ " if i == sel else "  "
-                _safe_add(stdscr, 2 + i, 2, f"{mark}{c:<8} {CMD_META.get(c, '')}", w)
-            _safe_add(stdscr, h - 1, 0, " ↑/↓ 移动   Enter 进入   Q 退出 ", w)
-        else:
-            fs = fields()
-            title = ("任务设置" if page == "basic" else "高级参数")
-            _safe_add(stdscr, 0, 0, f" pycut · {cmd} · {title}", w)
-            _safe_add(stdscr, 1, 2, "↑/↓ 移动 · Enter 编辑/切换 · A 高级参数 · R 运行 · Q 返回", w)
-            for i, f in enumerate(fs):
-                y = 3 + i
-                if y >= h - 3:
-                    break
-                mark = "▶ " if i == fidx else "  "
-                _safe_add(stdscr, y, 2, f"{mark}{_pad(f['display'], 20)} {_val_text(f)}", w)
-            if page == "basic":     # 任务设置页末尾：开始执行
-                y = 3 + len(fs)
-                mark = "▶ " if fidx == len(fs) else "  "
-                _safe_add(stdscr, y, 2, f"{mark}▶▶ 开始执行 {cmd}", w)
-            # 底部：将执行的命令预览 + 当前项说明
-            assert cmd is not None
-            _safe_add(stdscr, h - 2, 0, " 将执行: " + " ".join(_finalize_argv(cmd, basic + adv)), w)
-            if fidx < len(fs):
-                tip = fs[fidx]["help"] or ""
-            else:
-                tip = "回车立即开始执行（也可按 R）"
-            _safe_add(stdscr, h - 1, 0, " " + tip, w)
+        stdscr.move(y, 0)
+        stdscr.clrtoeol()
+        _safe_add(stdscr, y, x, f"{title} [{lo}~{hi}]：", w, "text")
+        body = buf
+        _safe_add(stdscr, y, x + _disp_width(f"{title} [{lo}~{hi}]：") + 1, body, "value",
+                  curses.A_REVERSE)
+        _safe_add(stdscr, y + 1, x, "Enter 确认 · Esc 取消", w, "dim")
+        stdscr.refresh()
+        k = stdscr.getch()
+        if k in (10, curses.KEY_ENTER, ord("\r")):
+            try:
+                v = int(buf)
+            except ValueError:
+                continue
+            return max(lo, min(hi, v))
+        if k in (27,):
+            return None
+        if k in (curses.KEY_BACKSPACE, 127, 8):
+            buf = buf[:-1]
+        elif ord("0") <= k <= ord("9"):
+            buf += chr(k)
 
+
+# ---------------------------------------------------------------------------
+# 目录选择器（文件系统层级浏览器）
+# ---------------------------------------------------------------------------
+def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
+    """目录选择器：从根目录出发逐级浏览文件系统，选定任意目录。
+
+    交互：
+      ↑/↓ 或 j/k   在「子目录列表」中移动
+      Enter        进入选中的子目录；在「..」或「选择当前目录」上则选定
+      ←/Backspace  返回上一级目录
+      Esc          取消（返回 None）
+      ~            直接跳到用户主目录；/ 跳到根目录
+
+    列表第一项固定为「📁 选择当前目录」（直接选定当前所在目录），
+    第二项固定为「📁 ..」（返回上一级），之后才是当前目录的子目录。
+    从根目录 / 开始，可一路浏览到任意位置，不再依赖预置候选。
+    """
+    # 起点：默认根目录；若有 start 则从那里开始
+    cur = Path(start).expanduser() if start else Path("/")
+
+    def _entries() -> list[tuple[str, Path]]:
+        """返回当前目录下的可选项：(显示名, 目标路径)。"""
+        out: list[tuple[str, Path]] = []
+        out.append(("📁  选择当前目录", cur))
+        if cur != cur.parent:
+            out.append(("📁  ..  返回上一级", cur.parent))
+        try:
+            names = sorted(
+                (e.name for e in os.scandir(str(cur)) if e.is_dir()),
+                key=lambda n: n.lower(),
+            )
+        except OSError:
+            names = []
+        for n in names:
+            out.append((f"📂  {n}", cur / n))
+        return out
+
+    entries = _entries()
+    sel = 0
+    while True:
+        h, w = stdscr.getmaxyx()
+        stdscr.erase()
+        # 标题 + 当前路径（面包屑）
+        _safe_add(stdscr, 2, 2, title, w, "keyword", curses.A_BOLD)
+        _safe_add(stdscr, 3, 2, str(cur), w, "info")
+        _safe_add(stdscr, 4, 2, "─" * (w - 4), w, "muted")
+
+        if sel >= len(entries):
+            sel = max(0, len(entries) - 1)
+        start_y = 5
+        max_rows = h - 9
+        top = 0
+        if sel >= max_rows:
+            top = sel - max_rows + 1
+        for i in range(top, min(len(entries), top + max_rows)):
+            label, _path = entries[i]
+            y = start_y + (i - top)
+            active = (i == sel)
+            mark = "❯" if active else " "
+            # 过长目录名：截断，保留末尾
+            maxlen = w - 8
+            if _disp_width(label) > maxlen:
+                label = "…" + label[-(maxlen - 1):]
+            attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+            fg = "accent" if active else "text"
+            _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
+            _safe_add(stdscr, y, 5, label, w, fg, attr)
+
+        _safe_add(stdscr, h - 2, 2,
+                  " ↑/↓ 移动 · Enter 进入/选定 · ← 返回上级 · ~ 主目录 · / 根目录 · Esc 取消 ",
+                  w, "dim", curses.A_REVERSE)
         stdscr.refresh()
         k = stdscr.getch()
 
-        if phase == "menu":
-            if k in (27, ord("q"), ord("Q")):
-                return ("quit", None)
-            if k in (curses.KEY_UP, ord("k")):
-                sel = (sel - 1) % len(cmds)
-            elif k in (curses.KEY_DOWN, ord("j")):
-                sel = (sel + 1) % len(cmds)
-            elif k in (10, curses.KEY_ENTER, ord(" "), ord("\r")):
-                cmd = cmds[sel]
-                allf = _collect_params(cmd)
-                nb = len(BASIC_PARAMS.get(cmd, []))
-                basic, adv = allf[:nb], allf[nb:]
-                page, fidx = "basic", 0
-                phase = "form"
-            continue
-
-        # ---- form ----
-        assert cmd is not None
-        fs = fields()
-        if k in (27, ord("q"), ord("Q")):
-            if page == "advanced":
-                page, fidx = "basic", 0
-            else:
-                phase, page, fidx = "menu", "basic", 0
-        elif k in (curses.KEY_UP, ord("k")):
-            fidx = (fidx - 1) % n_items()
+        if k in (27,):  # Esc
+            return None
+        if k in (ord("q"), ord("Q")):
+            return None
+        if k in (curses.KEY_UP, ord("k")):
+            sel = (sel - 1) % max(1, len(entries))
         elif k in (curses.KEY_DOWN, ord("j")):
-            fidx = (fidx + 1) % n_items()
-        elif k in (ord("a"), ord("A")):
-            if adv:
-                page = "advanced" if page == "basic" else "basic"
-                fidx = 0
-        elif k in (10, curses.KEY_ENTER, ord(" "), ord("\r")):
-            if page == "basic" and fidx == len(fs):
-                return do_run()
-            f = fs[fidx]
-            if f["kind"] == "flag":
-                f["value"] = not f["value"]
-            elif f["kind"] == "choice":
-                idx = f["choices"].index(f["value"]) if f["value"] in f["choices"] else -1
-                f["value"] = f["choices"][(idx + 1) % len(f["choices"])]
-            else:
-                new = _edit_string(stdscr, f["display"], str(f["value"]))
-                if new is not None:
-                    f["value"] = new
-        elif k in (ord("r"), ord("R")):
-            return do_run()
+            sel = (sel + 1) % max(1, len(entries))
+        elif k in (curses.KEY_LEFT, 8, 127, curses.KEY_BACKSPACE):
+            if cur != cur.parent:
+                cur = cur.parent
+                entries = _entries()
+                sel = 0
+        elif k in (ord("~"),):
+            cur = Path.home()
+            entries = _entries()
+            sel = 0
+        elif k in (ord("/"),):
+            cur = Path("/")
+            entries = _entries()
+            sel = 0
+        elif k in (10, curses.KEY_ENTER, ord("\r"), ord(" ")):
+            if not entries:
+                continue
+            label, target = entries[sel]
+            if label.startswith("📁  选择当前目录"):
+                return str(cur)
+            if label.startswith("📁  .."):
+                cur = target
+                entries = _entries()
+                sel = 0
+                continue
+            # 进入子目录
+            cur = target
+            entries = _entries()
+            sel = 0
 
+
+# ---------------------------------------------------------------------------
+# 确认页（汇报数量 + 开关 + 执行确认）
+# ---------------------------------------------------------------------------
+def _confirm(stdscr, lines: list[tuple[str, str]],
+             toggles: list[tuple[str, str, bool]] | None = None) -> bool:
+    """展示一段汇报 + 若干开关，返回是否确认执行。
+
+    lines: [(label, value, color?)] 展示项。
+    toggles: [(label, 说明, 初始bool)] 可切换开关（空格切换）。
+    """
+    toggle_vals = [t[2] for t in toggles] if toggles else []
+    sel = 0  # 0..len(toggles)-1 是开关，最后一项是「开始执行」
+    n_items = (len(toggles) if toggles else 0) + 1
+
+    while True:
+        h, w = stdscr.getmaxyx()
+        stdscr.erase()
+        _safe_add(stdscr, 2, 2, "处理前确认", w, "keyword", curses.A_BOLD)
+        _safe_add(stdscr, 3, 2, "─" * (w - 4), w, "muted")
+        y = 4
+        for label, value in lines:
+            _safe_add(stdscr, y, 2, _pad(label, 16), w, "dim")
+            _safe_add(stdscr, y, 2 + 16, value, w, "value")
+            y += 1
+        if toggles:
+            y += 1
+            _safe_add(stdscr, y, 2, "功能开关（空格切换）：", w, "dim")
+            y += 1
+            for i, (label, desc, _v) in enumerate(toggles):
+                active = (sel == i)
+                mark = "❯" if active else " "
+                state = "● 开" if toggle_vals[i] else "○ 关"
+                sc = "good" if toggle_vals[i] else "muted"
+                attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+                _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
+                _safe_add(stdscr, y, 5, _pad(label, 14), w, "text", attr)
+                _safe_add(stdscr, y, 5 + 14, state, w, sc, attr)
+                _safe_add(stdscr, y, 5 + 14 + _disp_width(state) + 1, desc, w, "dim", attr)
+                y += 1
+            y += 1
+        # 开始执行
+        run_idx = len(toggles) if toggles else 0
+        active = (sel == run_idx)
+        attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+        _safe_add(stdscr, y, 3, "❯" if active else " ", w, "good" if active else "muted", attr)
+        _safe_add(stdscr, y, 5, "▶▶ 确认并开始处理", w, "good", attr)
+        _safe_add(stdscr, h - 2, 2, " ↑/↓ 移动 · 空格 切换 · Enter 确认 · Esc 返回 ", w,
+                  "dim", curses.A_REVERSE)
+        stdscr.refresh()
+
+        k = stdscr.getch()
+        if k in (27, ord("q"), ord("Q")):
+            return False
+        if k in (curses.KEY_UP, ord("k")):
+            sel = (sel - 1) % n_items
+        elif k in (curses.KEY_DOWN, ord("j")):
+            sel = (sel + 1) % n_items
+        elif k == ord(" "):
+            if toggles and sel < len(toggles):
+                toggle_vals[sel] = not toggle_vals[sel]
+        elif k in (10, curses.KEY_ENTER, ord("\r")):
+            if sel == run_idx:
+                return True
+            # 在开关上按 Enter 也切换
+            if toggles and sel < len(toggles):
+                toggle_vals[sel] = not toggle_vals[sel]
+
+
+# ---------------------------------------------------------------------------
+# 多选列表（混剪爆款视频）
+# ---------------------------------------------------------------------------
+def _multi_select(stdscr, title: str, files: list[Path]) -> tuple[list[Path], dict[str, int]] | None:
+    """多选视频列表 + 每个的裂变数量。返回 (选中列表, {路径: 裂变数})；Esc 返回 None。
+
+    空格勾选/取消；选中项上按数字键 0-9 设置裂变数量（默认 1）；A 全选/取消全选。
+    """
+    selected: set[int] = set()
+    fission: dict[str, int] = {str(f): 1 for f in files}
+    sel = 0
+
+    def refresh_view():
+        pass
+
+    while True:
+        h, w = stdscr.getmaxyx()
+        stdscr.erase()
+        _safe_add(stdscr, 2, 2, title, w, "keyword", curses.A_BOLD)
+        _safe_add(stdscr, 3, 2, f"共 {len(files)} 个视频，已选 {len(selected)} 个", w, "dim")
+        _safe_add(stdscr, 4, 2, "─" * (w - 4), w, "muted")
+
+        max_rows = h - 8
+        top = 0
+        if sel >= max_rows:
+            top = sel - max_rows + 1
+        for i in range(top, min(len(files), top + max_rows)):
+            y = 5 + (i - top)
+            f = files[i]
+            active = (i == sel)
+            checked = i in selected
+            mark = "❯" if active else " "
+            box = "[✓]" if checked else "[ ]"
+            bcolor = "good" if checked else "muted"
+            attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+            name = f.name
+            maxlen = w - 24
+            if _disp_width(name) > maxlen:
+                name = name[:maxlen - 1] + "…"
+            _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
+            _safe_add(stdscr, y, 5, box, w, bcolor, attr)
+            _safe_add(stdscr, y, 5 + 4, name, w, "text", attr)
+            n = fission.get(str(f), 1)
+            _safe_add(stdscr, y, w - 12, f"裂变 x{n}", w, "value", attr)
+
+        _safe_add(stdscr, h - 2, 2,
+                  " ↑/↓ 移动 · 空格 勾选 · 数字 设裂变数 · A 全选/取消 · Enter 确认 · Esc 返回 ",
+                  w, "dim", curses.A_REVERSE)
+        stdscr.refresh()
+
+        k = stdscr.getch()
+        if k in (27,):
+            return None
+        if k in (curses.KEY_UP, ord("k")):
+            sel = (sel - 1) % max(1, len(files))
+        elif k in (curses.KEY_DOWN, ord("j")):
+            sel = (sel + 1) % max(1, len(files))
+        elif k == ord(" "):
+            if sel in selected:
+                selected.discard(sel)
+            else:
+                selected.add(sel)
+        elif k in (ord("a"), ord("A")):
+            if len(selected) == len(files):
+                selected.clear()
+            else:
+                selected = set(range(len(files)))
+        elif ord("0") <= k <= ord("9"):
+            n = k - ord("0")
+            fission[str(files[sel])] = n if n >= 1 else 1
+        elif k in (10, curses.KEY_ENTER, ord("\r")):
+            if not selected:
+                continue
+            chosen = [files[i] for i in sorted(selected)]
+            return chosen, {str(f): fission[str(f)] for f in chosen}
+
+
+# ---------------------------------------------------------------------------
+# 主循环
+# ---------------------------------------------------------------------------
+def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
+    curses.curs_set(0)
+    stdscr.keypad(True)
+
+    def draw_header(y: int, w: int) -> None:
+        # 顶部栏：logo + 版本号
+        _safe_add(stdscr, y, 0, " " * w, w, "text", curses.A_REVERSE)
+        _safe_add(stdscr, y, 1, "  pycut ", w, "accent", curses.A_REVERSE | curses.A_BOLD)
+        _safe_add(stdscr, y, 11, "短视频智能处理工具箱", w, "dim", curses.A_REVERSE)
+        ver = f"v{__version__}"
+        _safe_add(stdscr, y, w - len(ver) - 2, ver, w, "muted", curses.A_REVERSE)
+
+    def draw_footer(y: int, hints: str, w: int) -> None:
+        _safe_add(stdscr, y, 0, " " * w, w, "text", curses.A_REVERSE)
+        _safe_add(stdscr, y, 1, hints, w, "dim", curses.A_REVERSE)
+
+    while True:
+        h, w = stdscr.getmaxyx()
+        stdscr.erase()
+        draw_header(0, w)
+
+        # ---- 主菜单 ----
+        _safe_add(stdscr, 2, 2, "选择功能", w, "keyword", curses.A_BOLD)
+        _safe_add(stdscr, 3, 2, "─" * (w - 4), w, "muted")
+        sel = getattr(_loop, "_feat_sel", 0)
+        for i, (key, name, desc) in enumerate(FEATURES):
+            y = 4 + i
+            active = (i == sel)
+            mark = "❯" if active else " "
+            attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+            fg = "accent" if active else "keyword"
+            _safe_add(stdscr, y, 3, mark, w, fg if active else "muted", attr)
+            _safe_add(stdscr, y, 5, _pad(name, 10), w, fg, attr)
+            _safe_add(stdscr, y, 16, desc, w, "dim", attr)
+        draw_footer(h - 1, " ↑/↓ 移动 · Enter 进入 · Q 退出 ", w)
+        stdscr.refresh()
+        k = stdscr.getch()
+        if k in (27, ord("q"), ord("Q")):
+            return ("quit", None)
+        if k in (curses.KEY_UP, ord("k")):
+            sel = (sel - 1) % len(FEATURES)
+        elif k in (curses.KEY_DOWN, ord("j")):
+            sel = (sel + 1) % len(FEATURES)
+        elif k in (10, curses.KEY_ENTER, ord("\r"), ord(" ")):
+            _loop._feat_sel = sel
+            key = FEATURES[sel][0]
+            argv_list = _run_feature_wizard(stdscr, key, w)
+            if argv_list == "__BACK__":
+                continue
+            if argv_list:
+                return ("run", argv_list)
     return ("quit", None)
 
 
+def _run_feature_wizard(stdscr, key: str, w: int) -> list[list[str]] | str | None:
+    """执行某个功能的引导式向导，返回 argv 列表（多支成片 = 多个 argv）。
+
+    返回特殊值 "__BACK__" 表示回到主菜单；None 表示取消。
+    """
+    if key == "slice":
+        return _wizard_slice(stdscr, w)
+    if key == "cover":
+        return _wizard_cover(stdscr, w)
+    if key == "dedup":
+        return _wizard_dedup(stdscr, w)
+    if key == "montage":
+        return _wizard_montage(stdscr, w)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 各功能向导
+# ---------------------------------------------------------------------------
+def _wizard_slice(stdscr, w: int) -> list[list[str]] | None:
+    d = _pick_dir(stdscr, "切片 · 选择源视频目录", None)
+    if d is None:
+        return None
+    n = count_videos_recursive(d)
+    if n == 0:
+        _flash(stdscr, f"该目录下没有视频：{d}", "bad")
+        return None
+    toggles = [
+        ("擦除字幕", "切片时顺带擦除画面字幕", True),
+        ("去重", "切片后过平台查重", False),
+    ]
+    ok = _confirm(stdscr, [("源目录", d), ("视频数量", f"{n} 个")], toggles)
+    if not ok:
+        return None
+    sub_on = toggles[0][2]
+    # 切片里「擦除字幕」默认开启（--no-sub 才是关闭）；去重由 slice 流水线内置，
+    # 无需单独开关（切片去重能力走 dedup 命令，这里只控制字幕擦除）
+    argv = ["slice", "--src-dir", d]
+    if not sub_on:
+        argv.append("--no-sub")
+    return [argv]
+
+
+def _wizard_cover(stdscr, w: int) -> list[list[str]] | None:
+    d = _pick_dir(stdscr, "字幕擦除 · 选择视频目录", None)
+    if d is None:
+        return None
+    n = count_videos_recursive(d)
+    if n == 0:
+        _flash(stdscr, f"该目录下没有视频：{d}", "bad")
+        return None
+    ok = _confirm(stdscr, [("源目录", d), ("视频数量", f"{n} 个")])
+    if not ok:
+        return None
+    return [["cover", "--src-dir", d]]
+
+
+def _wizard_dedup(stdscr, w: int) -> list[list[str]] | None:
+    d = _pick_dir(stdscr, "去重 · 选择视频目录", None)
+    if d is None:
+        return None
+    n = count_videos_recursive(d)
+    if n == 0:
+        _flash(stdscr, f"该目录下没有视频：{d}", "bad")
+        return None
+    ok = _confirm(stdscr, [("源目录", d), ("视频数量", f"{n} 个")])
+    if not ok:
+        return None
+    return [["dedup", "--src-dir", d]]
+
+
+def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
+    # 1) 片段库目录（递归）
+    clip = _pick_dir(stdscr, "混剪 · 选择「混剪片段」目录（递归）", None)
+    if clip is None:
+        return None
+    nc = count_videos_recursive(clip)
+    # 2) 画中画目录（递归）
+    pip = _pick_dir(stdscr, "混剪 · 选择「画中画切片」目录（递归）", None)
+    if pip is None:
+        return None
+    npip = count_videos_recursive(pip)
+    # 3) 爆款视频目录（非递归，列出视频多选）
+    src_dir = _pick_dir(stdscr, "混剪 · 选择「爆款视频」目录（非递归）", None)
+    if src_dir is None:
+        return None
+    files = list_videos_flat(src_dir)
+    if not files:
+        _flash(stdscr, f"该目录下没有视频：{src_dir}", "bad")
+        return None
+    chosen, fission = _multi_select(stdscr, "混剪 · 多选爆款视频并设裂变数量", files)
+    if chosen is None or not chosen:
+        return None
+
+    # 汇总确认
+    total_out = sum(fission[str(f)] for f in chosen)
+    out_dir = str(Path.home() / "Desktop/out")
+    lines = [
+        ("片段库", f"{clip}（{nc} 个）"),
+        ("画中画", f"{pip}（{npip} 个）"),
+        ("爆款视频", f"{len(chosen)} 支 × 裂变 = {total_out} 支成片"),
+        ("输出目录", out_dir),
+    ]
+    ok = _confirm(stdscr, lines)
+    if not ok:
+        return None
+
+    # 多选爆款视频：逐支生成一条 argv（每支带自己的 --fission），run() 循环执行。
+    argv_list: list[list[str]] = []
+    for src in chosen:
+        n = fission[str(src)]
+        argv_list.append([
+            "montage", "--source", str(src), "--clip-dir", clip,
+            "--dedup-dir", pip, "--out-dir", out_dir, "--fission", str(n),
+        ])
+    return argv_list
+
+
+def _flash(stdscr, msg: str, color: str = "bad") -> None:
+    h, w = stdscr.getmaxyx()
+    _safe_add(stdscr, h - 3, 2, " " * (w - 4), w, color, curses.A_REVERSE)
+    _safe_add(stdscr, h - 3, 2, " " + msg, w, color, curses.A_REVERSE)
+    _safe_add(stdscr, h - 2, 2, "按任意键继续", w, "dim", curses.A_REVERSE)
+    stdscr.refresh()
+    stdscr.getch()
+
+
 def run() -> int:
-    """入口：非交互环境回退 CLI 帮助；否则启动 curses TUI。"""
+    """入口：非交互回退 CLI 帮助；否则启动 curses TUI。"""
     if not sys.stdin.isatty():
         cli.build_parser().print_help()
         return 0
@@ -364,6 +610,8 @@ def run() -> int:
         curses.noecho()
         curses.cbreak()
         try:
+            curses.start_color()
+            _init_colors()
             result = _loop(stdscr)
         finally:
             curses.echo()
@@ -378,6 +626,16 @@ def run() -> int:
         return 0
 
     if result and result[0] == "run":
-        _, argv = result
-        return cli.main(argv)
+        _, argv_list = result
+        # 多支成片（混剪多选爆款视频）= 多个 argv，逐条执行
+        final_code = 0
+        for argv in argv_list:
+            code = cli.main(argv)
+            if code:
+                final_code = code
+        return final_code
     return 0
+
+
+# _loop 的选中记忆（静态属性）
+_loop._feat_sel = 0

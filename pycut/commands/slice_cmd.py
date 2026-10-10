@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 
 from .. import config
 from ..core.ffmpeg import VideoInfo, probe_video, self_check
@@ -41,6 +42,11 @@ def register(subparsers) -> None:
     p.add_argument("--llm-url", default=None, help="LLM 网关地址（覆盖预设）")
     p.add_argument("--llm-key", default=None, help="LLM API Key（覆盖预设）")
     p.add_argument("--llm-model", default=None, help="LLM 模型名（覆盖预设）")
+    g = p.add_argument_group("目录（可选，覆盖默认桌面切片桶）")
+    g.add_argument("--src-dir", default="",
+                   help="源视频目录（默认 config.SRC_DIR，递归扫描子目录 mp4）")
+    g.add_argument("--out-dir", default="",
+                   help="切片输出根目录（下建 有人脸/无人脸 子目录，默认桌面）")
     p.set_defaults(func=run)
 
 
@@ -60,6 +66,15 @@ def _pick_files(args: argparse.Namespace) -> list:
 def run(args: argparse.Namespace) -> int:
     install_signal_handlers()
     reset_stop()
+
+    # 运行时覆盖目录常量（不传参时保持默认桌面切片桶，不影响其它用法）
+    if args.src_dir:
+        config.SRC_DIR = Path(args.src_dir).expanduser()
+    if args.out_dir:
+        od = Path(args.out_dir).expanduser()
+        config.OUT_FACE = od / "有人脸"
+        config.OUT_NOFACE = od / "无人脸"
+        config.OUT_MANIFEST = od / "清单"
 
     t_all = time.time()
     cv2 = self_check()
