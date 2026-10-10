@@ -184,89 +184,109 @@ def run_pipeline(opts: MontageOptions) -> dict:
 
     # ---------------- 步骤C：画中画叠加 ----------------
     final = out_dir / (opts.out_name or f"混剪_{opts.source.stem}.mp4")
-    # C 步先写临时产物，FFmpeg 失败时不破坏上一次的合格成片。
+    # C/D/E 均写入独立工作文件，全部成功才发布最终成片。
+    working = final.with_name(
+        f"{final.stem}.working_{os.getpid()}_{threading.get_ident():x}.mp4")
     staged = final.with_name(
         f"{final.stem}.stage_{os.getpid()}_{threading.get_ident():x}.mp4")
-    if not opts.use_pip:
-        log("--- 步骤C：--no-pip，跳过画中画 ---")
-        cmd = ["-y", "-i", str(base), "-c", "copy", str(staged)]
-        if not _publish_stage([config.FFMPEG] + cmd, staged, final):
-            log("  [失败] 无声拷贝失败")
-            result["error"] = "步骤C 失败"
-            return result
-    else:
-        log("--- 步骤C：画中画叠加 ---")
-        pool = scan_dedup_pool(opts.dedup_dir, min_dur=opts.min_clip)
-        log(f"  画中画素材 {len(pool)} 条")
-        if not pool:
-            log("  [提示] 无画中画素材，直接输出步骤B 结果")
-            cmd = [config.FFMPEG, "-y", "-loglevel", "error", "-i", str(base),
-                   "-c", "copy", str(staged)]
-            if not _publish_stage(cmd, staged, final):
-                log("  [失败] 无画中画素材时的成片拷贝失败")
+    _unlink(working)
+    try:
+        if not opts.use_pip:
+            log("--- 步骤C：--no-pip，跳过画中画 ---")
+            cmd = ["-y", "-i", str(base), "-c", "copy", str(staged)]
+            if not _publish_stage([config.FFMPEG] + cmd, staged, working):
+                log("  [失败] 无声拷贝失败")
                 result["error"] = "步骤C 失败"
                 return result
         else:
-            timeline = plan_pip_timeline(pool, target, slot=opts.pip_slot,
-                                         seed=seed)
-            # 用户反馈「画中画不连续」：上游 plan_pip_timeline 每段之间固定留
-            # ~0.6s 空档，实测 19% 的时间画面上没有画中画。连续模式下重排时间轴，
-            # 让画中画**首尾相接**（gap=0），符合「全程都有」的观感。
-            if opts.pip_continuous:
-                timeline = _make_continuous(timeline, target)
-            cov = sum(t["duration"] for t in timeline)
-            log(f"  画中画 {len(timeline)} 段，累计 {cov:.1f}s / {target:.1f}s"
-                f"（覆盖率 {cov / target * 100:.0f}%"
-                f"{'，连续模式' if opts.pip_continuous else ''}）")
-            cmd = build_pip_cmd(base, timeline, staged, canvas=canvas,
-                                scale=opts.pip_scale, fps=config.MONTAGE_FPS,
-                                crf=opts.crf)
-            if not _publish_stage(cmd, staged, final):
-                log("  [失败] 画中画叠加失败")
-                result["error"] = "步骤C 失败"
-                return result
-            result["pip_count"] = len(timeline)
+            log("--- 步骤C：画中画叠加 ---")
+            pool = scan_dedup_pool(opts.dedup_dir, min_dur=opts.min_clip)
+            log(f"  画中画素材 {len(pool)} 条")
+            if not pool:
+                log("  [提示] 无画中画素材，直接输出步骤B 结果")
+                cmd = [config.FFMPEG, "-y", "-loglevel", "error", "-i", str(base),
+                       "-c", "copy", str(staged)]
+                if not _publish_stage(cmd, staged, working):
+                    log("  [失败] 无画中画素材时的成片拷贝失败")
+                    result["error"] = "步骤C 失败"
+                    return result
+            else:
+                timeline = plan_pip_timeline(pool, target, slot=opts.pip_slot,
+                                             seed=seed)
+                # 用户反馈「画中画不连续」：上游 plan_pip_timeline 每段之间固定留
+                # ~0.6s 空档，实测 19% 的时间画面上没有画中画。连续模式下重排时间轴，
+                # 让画中画**首尾相接**（gap=0），符合「全程都有」的观感。
+                if opts.pip_continuous:
+                    timeline = _make_continuous(timeline, target)
+                cov = sum(t["duration"] for t in timeline)
+                log(f"  画中画 {len(timeline)} 段，累计 {cov:.1f}s / {target:.1f}s"
+                    f"（覆盖率 {cov / target * 100:.0f}%"
+                    f"{'，连续模式' if opts.pip_continuous else ''}）")
+                cmd = build_pip_cmd(base, timeline, staged, canvas=canvas,
+                                    scale=opts.pip_scale, fps=config.MONTAGE_FPS,
+                                    crf=opts.crf)
+                if not _publish_stage(cmd, staged, working):
+                    log("  [失败] 画中画叠加失败")
+                    result["error"] = "步骤C 失败"
+                    return result
+                result["pip_count"] = len(timeline)
 
-    if not final.is_file() or final.stat().st_size < 1024:
-        log("  [失败] 成片未生成或文件异常")
-        result["error"] = "成片未生成或文件异常"
+        if not working.is_file() or working.stat().st_size < 1024:
+            log("  [失败] 成片未生成或文件异常")
+            result["error"] = "成片未生成或文件异常"
+            return result
+
+        # 以下操作仅修改工作文件，已存在的最终成片保持不变。
+
+        # ---------------- 步骤D：字幕烧录（可选） ----------------
+        # 顺序很关键：字幕烧录用 `-an`，所以**必须放在贴音轨之前**，
+        # 否则刚贴上的基准音轨会被字幕这一步的 -an 抹掉（实测踩过：成片又变静音）。
+        if opts.srt and Path(opts.srt).is_file():
+            log("--- 步骤D：字幕烧录 ---")
+            if _burn_subtitles(working, slots, canvas, opts):
+                log(f"  烧录后: {_size(working)}  {_duration(working):.2f}s")
+            else:
+                log("  [失败] 字幕烧录失败，未发布成片")
+                result["error"] = "步骤D 字幕烧录失败"
+                return result
+        elif opts.srt:
+            log(f"--- 步骤D：跳过（字幕文件不存在: {opts.srt}）---")
+
+        # ---------------- 步骤E：贴回基准视频的原始音轨（放最后） ----------------
+        # 步骤B/C/D 都用 -an（片段自带的声音是杂音，且字幕烧录会抹掉音轨），
+        # 但**基准视频的话术音频必须保留**——用户要求成片时长与话术对齐，
+        # 静音成片没法用。这里最后把基准音频贴回去，并按视频长度截断。
+        if opts.keep_audio and prof.has_audio:
+            log("--- 步骤E：贴回基准视频音轨（最后一步）---")
+            if _attach_audio(working, opts.source, opts.crf):
+                result["audio"] = True
+                log(f"  已贴回: {_size(working)}  {_duration(working):.2f}s")
+            else:
+                log("  [失败] 音轨贴回失败，未发布成片")
+                result["error"] = "步骤E 音轨贴回失败"
+                return result
+        elif not prof.has_audio:
+            log("--- 步骤E：跳过（基准视频无音轨）---")
+
+        duration = _duration(working)
+        if duration <= 0 or not working.is_file() or working.stat().st_size < 1024:
+            result["error"] = "最终工作产物无效，未覆盖原有成片"
+            log(f"  [失败] {result['error']}")
+            return result
+        try:
+            os.replace(str(working), str(final))
+        except OSError as exc:
+            result["error"] = f"发布最终成片失败: {exc}"
+            log(f"  [失败] {result['error']}")
+            return result
+        result["final"] = str(final)
+        result["final_duration"] = duration
+        log(f"  成片: {final.name}  {_size(final)}  {duration:.2f}s")
+
         return result
 
-    result["final"] = str(final)
-
-    # ---------------- 步骤D：字幕烧录（可选） ----------------
-    # 顺序很关键：字幕烧录用 `-an`，所以**必须放在贴音轨之前**，
-    # 否则刚贴上的基准音轨会被字幕这一步的 -an 抹掉（实测踩过：成片又变静音）。
-    if opts.srt and Path(opts.srt).is_file():
-        log("--- 步骤D：字幕烧录 ---")
-        if _burn_subtitles(Path(final), slots, canvas, opts):
-            log(f"  烧录后: {_size(final)}  {_duration(final):.2f}s")
-        else:
-            log("  [失败] 字幕烧录失败，保留无字幕版本")
-            result["error"] = "步骤D 字幕烧录失败"
-    elif opts.srt:
-        log(f"--- 步骤D：跳过（字幕文件不存在: {opts.srt}）---")
-
-    # ---------------- 步骤E：贴回基准视频的原始音轨（放最后） ----------------
-    # 步骤B/C/D 都用 -an（片段自带的声音是杂音，且字幕烧录会抹掉音轨），
-    # 但**基准视频的话术音频必须保留**——用户要求成片时长与话术对齐，
-    # 静音成片没法用。这里最后把基准音频贴回去，并按视频长度截断。
-    if opts.keep_audio and prof.has_audio:
-        log("--- 步骤E：贴回基准视频音轨（最后一步）---")
-        if _attach_audio(final, opts.source, opts.crf):
-            result["audio"] = True
-            log(f"  已贴回: {_size(final)}  {_duration(final):.2f}s")
-        else:
-            log("  [失败] 音轨贴回失败，成片保持静音")
-            result["error"] = "步骤E 音轨贴回失败"
-    elif not prof.has_audio:
-        log("--- 步骤E：跳过（基准视频无音轨）---")
-
-    result["final_duration"] = _duration(final)
-    log(f"  成片: {final.name}  {_size(final)}  {result['final_duration']:.2f}s")
-
-    return result
-
+    finally:
+        _unlink(working)
 
 def _burn_subtitles(video: Path, slots: list[tuple[float, float]],
                     canvas: tuple[int, int], opts: MontageOptions) -> bool:
