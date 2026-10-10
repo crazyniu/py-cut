@@ -25,10 +25,10 @@ pycut/
 ├── AGENTS.md               # 给 AI 协作的规范（务必先读，AI 工具自动识别）
 ├── README.md               # 本文件
 ├── docs/
-│   ├── ROADMAP.md          # 功能规划与实现状态
+│   ├── ROADMAP.md          # 产品能力与演进设计（不跟踪开发状态）
 │   ├── MONTAGE.md          # 混剪需求 + 素材实测 + 方案
 │   ├── DEDUP.md            # 去重需求 + 8 大模块 + 实测标定
-│   └── ISSUES.md           # 已知问题与未完成项（务必先读）
+│   └── ISSUES.md           # 工程限制与验证记录（不管理 Bug/Todo）
 ├── pycut/                  # 主包
 │   ├── cli.py              # 命令注册表 + 路由
 │   ├── tui.py              # 终端 TUI（导航 / 引导式向导 / 目录选择器）
@@ -56,7 +56,7 @@ pycut/
 │       ├── slice_cmd.py / cover_cmd.py / dedup_cmd.py / montage_cmd.py
 │       └── montage_pipeline.py  # 混剪五步编排
 ├── tools/verify.py         # 切片流水线独立质检
-└── tests/test_smoke.py     # 冒烟测试（8 项，无 pytest 也能跑）
+└── tests/                  # 回归测试与需明确启用的设备 smoke
 ```
 
 ## 运行环境
@@ -192,9 +192,9 @@ cp .env.example .env
 
 清单：`~/Desktop/切片_清单/切片清单_<时间戳>.csv`（utf-8-sig）+ `.json`。
 
-## 后续功能
+## 扩展能力与需求文档
 
-见 [docs/ROADMAP.md](docs/ROADMAP.md)：转场贴纸、去重剩余模块、AI 级字幕修复。
+长期产品需求见 [docs/ROADMAP.md](docs/ROADMAP.md)：段间转场、去重增强、AI 级字幕修复及 ASR 语义选片；具体任务统一引用 [GitHub Issues #19](https://github.com/natefox2017/py-cut/issues/19)，不在 Markdown 跟踪 Todo、负责人或进度。工程技术限制与复现记录见 [docs/ISSUES.md](docs/ISSUES.md)。
 已实现的三大功能（切片 / 去重 / 混剪）详见各文档：
 去重需求与实测标定见 [docs/DEDUP.md](docs/DEDUP.md)，
 混剪五步流程见 [docs/MONTAGE.md](docs/MONTAGE.md)。
