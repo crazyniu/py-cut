@@ -75,9 +75,17 @@ def list_dirs(root: Path) -> list[Path]:
     out: list[Path] = []
     try:
         for entry in os.scandir(str(root)):
-            p = Path(entry.path)
-            if entry.is_dir() and not _is_system_dir(p):
-                out.append(p)
+            try:
+                # 不跟随目录符号链接：/Volumes 上的链接可能指回 / 或父目录，
+                # 会让手动目录浏览陷入无限循环。真实挂载点仍是普通目录。
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                p = Path(entry.path)
+                if not _is_system_dir(p):
+                    out.append(p)
+            except OSError:
+                # 卷卸载或单项权限错误时继续列出其他可访问的目录。
+                continue
     except OSError:
         pass
     out.sort(key=lambda p: p.name.lower())
