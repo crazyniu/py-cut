@@ -19,6 +19,8 @@ from pathlib import Path
 from .. import config
 from ..core.dedup import (DedupOptions, process_batch, resolve_output_path,
                           write_report)
+from ..core.dedup_profiles import (ExplicitBoolean, ExplicitValue,
+                                   ProfileError, apply_account_profile)
 from ..core.ffmpeg import self_check
 from ..core.runtime import STOP, install_signal_handlers, reset_stop
 from ..core.subtitle import collect_clips
@@ -35,17 +37,24 @@ def register(subparsers) -> None:
     g.add_argument("--src-dir", default="",
                    help="视频目录（递归扫描所有 mp4；优先于 --all）")
 
+    g = p.add_argument_group("本地账号预设（不存储凭证）")
+    g.add_argument("--profile-file", default="",
+                   help="本地 JSON 配置文件（version=1，禁止密钥字段）")
+    g.add_argument("--account", default="",
+                   help="账号预设别名（须同时指定 --profile-file）")
+
     g = p.add_argument_group("档位与开关")
-    g.add_argument("--preset", default=config.DEDUP_DEFAULT_PRESET,
+    g.add_argument("--preset", action=ExplicitValue,
+                   default=config.DEDUP_DEFAULT_PRESET,
                    choices=list(config.DEDUP_PRESETS),
                    help="去重档位：light 轻度 / standard 标准 / aggressive 激进")
-    g.add_argument("--seed", type=int, default=0,
+    g.add_argument("--seed", type=int, action=ExplicitValue, default=0,
                    help="随机化种子（0=按文件路径自动派生；同 seed 结果可复现）")
-    g.add_argument("--mirror", action="store_true",
+    g.add_argument("--mirror", action=ExplicitBoolean, default=False,
                    help="允许水平镜像（有人脸朝向/文字的素材慎开，有人工复审风险）")
-    g.add_argument("--speed", action="store_true", help="允许微变速（音画同步微调）")
-    g.add_argument("--border", action="store_true", help="模糊边框填充（改构图）")
-    g.add_argument("--badge", action="store_true", help="右下角标色块")
+    g.add_argument("--speed", action=ExplicitBoolean, default=False, help="允许微变速（音画同步微调）")
+    g.add_argument("--border", action=ExplicitBoolean, default=False, help="模糊边框填充（改构图）")
+    g.add_argument("--badge", action=ExplicitBoolean, default=False, help="右下角标色块")
     g.add_argument("--logo", default="", help="画中画图片路径（贴纸/角标）")
     g.add_argument("--sticker", default="",
                    help="贴纸图片路径（背面半透明 + 边缘羽化的静态干扰层）")
@@ -58,11 +67,13 @@ def register(subparsers) -> None:
     g.add_argument("--check", action="store_true",
                    help="只自检：与已有去重产物比对 pHash/PSNR，不产出文件")
     g.add_argument("--no-report", action="store_true", help="不写 JSON 报告")
-    g.add_argument("--phash-min", type=float, default=0.0,
+    g.add_argument("--phash-min", type=float, action=ExplicitValue,
+                   default=0.0,
                    help="pHash 距离下限（0=自动使用当前 preset 的实测门槛；允许小数）")
-    g.add_argument("--psnr-min", type=float, default=config.DEDUP_MIN_PSNR,
+    g.add_argument("--psnr-min", type=float, action=ExplicitValue,
+                   default=config.DEDUP_MIN_PSNR,
                    help="PSNR 下限 dB（低于此值判为画质损失过大）")
-    g.add_argument("--workers", type=int, default=0,
+    g.add_argument("--workers", type=int, action=ExplicitValue, default=0,
                    help=f"并发数（0=用默认 {config.DEDUP_WORKERS}）")
     g.add_argument("--force", action="store_true", help="覆盖已存在的去重产物")
     p.set_defaults(func=run)
@@ -136,12 +147,21 @@ def run(args: argparse.Namespace) -> int:
     if args.check and args.in_place:
         log("[错误] --check 不能与 --in-place 合用：原始视频已覆盖后无法做源/产物比较")
         return 2
+    # Validate local profile before probing any video, accessing ffmpeg or
+    # performing writes. An invalid account must never silently use defaults.
+    try:
+        profile_snapshot = apply_account_profile(args)
+    except ProfileError as exc:
+        log(f"[账号预设错误] {exc}")
+        return 2
     install_signal_handlers()
     reset_stop()
     self_check(require_src=False)
 
     srcs = _pick_srcs(args)
     log(f"[范围] {len(srcs)} 个视频   档位 {args.preset}")
+    if profile_snapshot is not None:
+        log(f"[账号预设] {profile_snapshot['account']} · version={profile_snapshot['version']}")
 
     if args.check:
         return _check_only(srcs, args)
@@ -197,6 +217,12 @@ def run(args: argparse.Namespace) -> int:
             f"（灾难下限 {args.psnr_min:g}dB；几何改动掉到 20dB 属正常）")
     log(f"{'输出体积':<12}{out_bytes / 1024 / 1024:>9.1f}MB")
     log(f"{'处理耗时':<12}{fmt_dur(time.time() - t0):>10}  （视频总长 {fmt_dur(dur)}）")
+
+    if profile_snapshot is not None:
+        # Preserve effective options and their source for reproducible QA.
+        # The whitelist deliberately excludes output paths and credentials.
+        for item in items:
+            item["account_profile"] = profile_snapshot
 
     if not args.no_report:
         path = write_report(items)
