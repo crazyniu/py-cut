@@ -36,7 +36,7 @@ DEFAULT_MAX_DEPTH = 3
 SYSTEM_DIR_NAMES = {
     "system", "library", "private", "usr", "bin", "sbin",
     "opt", "etc", "tmp", "var", "dev", "cores", "net", "home",
-    "volumes", "proc", "sys", "lost+found",
+    "proc", "sys", "lost+found",
 }
 
 # 额外隐藏的常见非素材目录（无论层级，只要名字命中就跳过）
