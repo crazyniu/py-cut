@@ -19,12 +19,34 @@ import time
 from . import tui
 
 _ROOT = Path(__file__).resolve().parent.parent
-_CONTROL = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_OSC = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_MAX_LOG_CHARS = 4096
+_SECRET_FLAGS = ("--llm-key", "--api-key")
 
 
 def _sanitize(line: str) -> str:
-    """不可把子进程的控制序列原样写入 curses 画布。"""
-    return "".join(c for c in _CONTROL.sub("", line) if c.isprintable() or c == "\t")
+    """清理 CSI/OSC 控制序列，并限制单行长度以避免长日志耗尽内存。"""
+    safe = "".join(
+        c for c in _CONTROL.sub("", _OSC.sub("", line))
+        if c.isprintable() or c == "\t"
+    )
+    if len(safe) > _MAX_LOG_CHARS:
+        return safe[:_MAX_LOG_CHARS] + "… [日志行已截断]"
+    return safe
+
+
+def _redact(line: str, argv: list[str]) -> str:
+    """从子进程文本中遮盖显式传入的 API Key，避免回显泄漏。"""
+    for i, arg in enumerate(argv):
+        value = ""
+        if arg in _SECRET_FLAGS and i + 1 < len(argv):
+            value = argv[i + 1]
+        elif any(arg.startswith(flag + "=") for flag in _SECRET_FLAGS):
+            value = arg.partition("=")[2]
+        if value:
+            line = line.replace(value, "********")
+    return line
 
 
 def _display_command(argv: list[str]) -> str:
@@ -120,7 +142,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
     def _reader():
         assert proc.stdout is not None
         for line in proc.stdout:
-            events.put(_sanitize(line.rstrip("\r\n")))
+            events.put(_sanitize(_redact(line.rstrip("\r\n"), argv)))
         proc.stdout.close()
 
     reader = threading.Thread(target=_reader, daemon=True)
@@ -182,6 +204,8 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
 
 def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
     """按依赖顺序运行多个 argv；完成后展示结果，返回 (退出码, 是否退出 TUI)。"""
+    if not argv_list:
+        return 0, False
     history: deque[str] = deque(maxlen=600)
     code = 0
     cancelled = False
@@ -192,12 +216,19 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
         executed = i
         history.append(f"━━ 任务 {i}/{len(argv_list)}：{_display_command(argv)} ━━")
         code, cancelled = _run_one(stdscr, argv, i, len(argv_list), history)
+        if cancelled and not code:
+            code = 130
         if code:
             if i < len(argv_list):
                 history.append(f"[已停止] 后续 {len(argv_list) - i} 项未执行，防止使用旧产物")
             break
 
     status = "cancelled" if cancelled else ("error" if code else "success")
+    label = {"cancelled": "已中断", "error": "失败", "success": "成功"}[status]
+    history.append(
+        f"[执行结果] {label} · 已运行 {executed}/{len(argv_list)} 项 · "
+        f"跳过 {len(argv_list) - executed} 项 · 退出码 {code}"
+    )
     offset = 0
     stdscr.timeout(-1)
     while True:
