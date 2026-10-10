@@ -218,6 +218,18 @@ def _content_sig(path: Path) -> str:
     return h.hexdigest()
 
 
+def _full_content_sig(path: Path) -> str | None:
+    """完整文件内容摘要；仅读取弱指纹碰撞候选，读取失败不删除素材。"""
+    h = hashlib.blake2b(digest_size=32)
+    try:
+        with path.open("rb") as src:
+            for chunk in iter(lambda: src.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
+
+
 def _drop_duplicates(items: list[ClipItem]) -> tuple[list[ClipItem], int]:
     """去掉**内容完全相同**的重复素材（同一素材在库里存了多份）。
 
@@ -237,7 +249,6 @@ def _drop_duplicates(items: list[ClipItem]) -> tuple[list[ClipItem], int]:
         except OSError:
             pass
 
-    seen: set[str] = set()
     out: list[ClipItem] = []
     n_drop = 0
     for size in sorted(by_size):
@@ -245,12 +256,30 @@ def _drop_duplicates(items: list[ClipItem]) -> tuple[list[ClipItem], int]:
         if len(group) == 1:
             out.append(group[0])
             continue
+        # 首尾指纹只用于筛选候选：视频可以头尾相同而中间不同，
+        # 不能凭采样 MD5 宣称“字节完全一致”。只有弱指纹命中时
+        # 才流式读取全文件计算摘要，避免每条视频都做昂贵的全量 IO。
+        seen: dict[str, list[tuple[ClipItem, str | None]]] = {}
         for it in group:
-            sig = _content_sig(it.path)
-            if sig in seen:
+            weak_sig = _content_sig(it.path)
+            candidates = seen.setdefault(weak_sig, [])
+            if not candidates:
+                candidates.append((it, None))
+                out.append(it)
+                continue
+            full_sig = _full_content_sig(it.path)
+            duplicate = False
+            for index, (prev, prev_full) in enumerate(candidates):
+                if prev_full is None:
+                    prev_full = _full_content_sig(prev.path)
+                    candidates[index] = (prev, prev_full)
+                if full_sig is not None and full_sig == prev_full:
+                    duplicate = True
+                    break
+            if duplicate:
                 n_drop += 1
             else:
-                seen.add(sig)
+                candidates.append((it, full_sig))
                 out.append(it)
     return out, n_drop
 
@@ -617,8 +646,11 @@ def build_concat_cmd(items: list[dict], out: Path, canvas=None, fps=None,
     fps = fps or config.MONTAGE_FPS
 
     segs = _normalize_segments(items, canvas, fps, str(crf))
-    if not segs:
-        log("[混剪B] 没有任何可用分段，无法拼接")
+    # 之前任意失败片段会被静默丢弃，仍把剩下的片段发布为“成功混剪”。
+    # 当输入列表已经过过滤后，阶段1必须逐段完整产出；缺一段也拒绝发布。
+    if len(segs) != len(items):
+        log(f"[混剪B] 分段截取不完整：期望 {len(items)} 段，"
+            f"实际 {len(segs)} 段；已取消拼接")
         return [], Path()
 
     lst = _write_concat_list(segs)
@@ -674,8 +706,21 @@ def concat_clips(items: list[dict], out: Path, canvas=None, fps=None,
             log(f"  [拼接失败] {res['error']}")
             return res
 
-        os.replace(str(tmp), str(out))          # 成功后才落最终路径（原子替换）
-        dur = _probe_duration(out)
+        # 容器能写出文件不代表所有内容都拼进去了：曾实测 rc=0，
+        # 但拼接结果比预期短一大截。按每段最多约一帧舍入误差
+        # （另加 0.15s 封装余量）校验，不能改掉原有成片。
+        dur = _probe_duration(tmp)
+        fr = float(fps or config.MONTAGE_FPS)
+        tolerance = 0.15 + len(usable) / max(fr, 1.0)
+        if dur <= 0 or abs(dur - expect) > tolerance:
+            res["error"] = (
+                f"拼接时长异常：目标 {expect:.2f}s，"
+                f"实际 {dur:.2f}s，允许偏差 {tolerance:.2f}s"
+            )
+            log(f"  [拼接失败] {res['error']}")
+            return res
+
+        os.replace(str(tmp), str(out))          # 验证后再原子替换
         res.update(ok=True, duration=dur, seconds=round(time.time() - t0, 2))
         log(f"  [已产出] {out.name}  {dur:.2f}s  用时 {time.time() - t0:.1f}s")
         return res
