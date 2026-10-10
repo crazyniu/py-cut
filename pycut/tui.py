@@ -75,6 +75,22 @@ _LIGHT_8 = {
 }
 
 
+def _configure_esc_delay() -> None:
+    """Avoid ncurses' usual ~1s wait before a standalone Esc is delivered.
+
+    Keep enough time to decode arrow-key escape sequences on macOS terminals.
+    Honour users' explicit ESCDELAY environment setting.
+    """
+    if "ESCDELAY" in os.environ:
+        return
+    setter = getattr(curses, "set_escdelay", None)
+    if callable(setter):
+        try:
+            setter(75)
+        except (curses.error, ValueError):
+            pass
+
+
 def _init_colors() -> None:
     global _LIGHT_BG, _HAS_COLORS
     _HAS_COLORS = curses.has_colors()
@@ -204,45 +220,46 @@ def _small_screen(stdscr) -> bool:
     stdscr.erase()
     _safe_add(stdscr, 1, 2, "终端窗口太小", w, "warn", curses.A_BOLD)
     _safe_add(stdscr, 3, 2, f"当前 {w}×{h}，至少需要 60×14", w, "text")
-    _safe_add(stdscr, 5, 2, "请放大窗口 · Esc 返回 · Q 退出", w, "dim")
+    _safe_add(stdscr, 5, 2, "请放大窗口 · Esc 返回 · Q 取消/退出", w, "dim")
     stdscr.refresh()
     return True
 
 
 def _frame(stdscr, title: str, subtitle: str = "") -> None:
-    """Every view shares the same identity bar, breadcrumb and context rows."""
+    """Consistent, non-inverted CLI header, title, context and divider."""
     _h, w = stdscr.getmaxyx()
-    _safe_add(stdscr, 0, 0, " " * w, w, "text", curses.A_REVERSE)
-    _safe_add(stdscr, 0, 2, "◈  PYCUT", w, "accent", curses.A_REVERSE | curses.A_BOLD)
+    _safe_add(stdscr, 0, 2, "◈  pycut", w, "accent", curses.A_BOLD)
     version = f"v{__version__}"
-    _safe_add(stdscr, 0, max(20, w - _disp_width(version) - 3), version,
-              w, "dim", curses.A_REVERSE)
-    breadcrumb = title.replace(" · ", "  /  ", 1)
-    _safe_add(stdscr, 2, 2, _ellipsize(breadcrumb, w - 4), w,
-              "keyword", curses.A_BOLD)
-    _safe_add(stdscr, 3, 2, _ellipsize(subtitle, w - 4, tail=True), w, "info")
+    _safe_add(stdscr, 0, max(18, w - _disp_width(version) - 3),
+              version, w, "dim")
+    _safe_add(stdscr, 1, 2, "─" * max(0, w - 4), w, "muted")
+    _safe_add(stdscr, 2, 2,
+              _ellipsize(title.replace(" · ", "  /  ", 1), w - 4),
+              w, "text", curses.A_BOLD)
+    _safe_add(stdscr, 3, 2,
+              _ellipsize(subtitle, w - 4, tail=True), w, "dim")
     _safe_add(stdscr, 4, 2, "─" * max(0, w - 4), w, "muted")
 
 
 def _footer(stdscr, full: str, compact: str) -> None:
-    """A stable shortcut row; compact mode never hides Esc/return controls."""
+    """Show all essential keys, without a bright reversed terminal-wide bar."""
     h, w = stdscr.getmaxyx()
-    _safe_add(stdscr, h - 2, 0, " " * w, w, "dim", curses.A_REVERSE)
-    _safe_add(stdscr, h - 2, 2,
-              _ellipsize(compact if w < 80 else full, w - 4),
-              w, "dim", curses.A_REVERSE)
+    width = max(0, w - 4)
+    full = full.strip()
+    compact = compact.strip()
+    hint = full if _disp_width(full) <= width else compact
+    _safe_add(stdscr, h - 2, 2, _ellipsize(hint, width), w, "dim")
 
 
 def _home_brand(stdscr) -> None:
-    """A visible CLI-style identity lockup on spacious terminals."""
+    """One compact identity mark; the menu remains the dominant control."""
     _h, w = stdscr.getmaxyx()
     _safe_add(stdscr, 5, 3, "╭─────╮", w, "muted")
     _safe_add(stdscr, 6, 3, "│  ▶  │", w, "accent", curses.A_BOLD)
     _safe_add(stdscr, 7, 3, "╰─────╯", w, "muted")
-    _safe_add(stdscr, 5, 14, "P Y C U T", w, "accent", curses.A_BOLD)
-    _safe_add(stdscr, 6, 14, f"v{__version__}  ·  Terminal video workstation",
-              w, "text")
-    _safe_add(stdscr, 7, 14, "选择工作流程  /  Choose a workflow", w, "dim")
+    _safe_add(stdscr, 5, 14, "PYCUT", w, "accent", curses.A_BOLD)
+    _safe_add(stdscr, 6, 14, f"v{__version__}  ·  本地视频工具", w, "text")
+    _safe_add(stdscr, 7, 14, "选择现有处理流程", w, "dim")
     _safe_add(stdscr, 9, 2, "─" * max(0, w - 4), w, "muted")
 
 
@@ -378,7 +395,7 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
         if cur != cur.parent:
             items.append(("parent", "../  上一级", cur.parent))
         items.extend(("directory", f"{p.name}/", p) for p in list_dirs(cur))
-        items.append(("select", "✓  使用当前文件夹", cur))
+        items.append(("select", "使用当前文件夹", cur))
         return items
 
     entries = _entries()
@@ -416,9 +433,9 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
             kind, label, _target = entries[i]
             y = 5 + i - top
             active = i == sel
-            attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+            attr = curses.A_BOLD if active else curses.A_NORMAL
             icon = "✓" if kind == "select" else "↖" if kind == "parent" else "▸"
-            color = "good" if kind == "select" else "accent" if active else "text"
+            color = "accent" if active else "good" if kind == "select" else "dim" if kind == "parent" else "text"
             _safe_add(stdscr, y, 3, "❯" if active else " ", w,
                       "accent" if active else "muted", attr)
             _safe_add(stdscr, y, 5, icon, w, color, attr)
@@ -429,8 +446,8 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
                   f"子目录 {sum(kind == 'directory' for kind, _, _ in entries)} 个 · {sel + 1}/{len(entries)}",
                   w, "dim")
         _footer(stdscr,
-                " ↑↓ 选择 · Enter 打开/确认 · Space 使用当前目录 · ←/Backspace 上级 · ~ 主目录 · / 根 · Esc 返回 ",
-                "Esc返回 ←上级 Enter打开 Space选当前 ↑↓移动 ~主目录 /根")
+                "↑↓ 移动 · ← 返回上级 · →/Enter 打开 · Space 选择当前 · Esc 返回 · ~ 主目录 · / 根目录",
+                "↑↓移动  ←上级  →进入  Space选目录  Esc返回")
         stdscr.refresh()
 
         k = stdscr.getch()
@@ -453,13 +470,17 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
         elif k in (10, curses.KEY_ENTER, ord("\r"), curses.KEY_RIGHT, ord("l")):
             kind, _label, target = entries[sel]
             if kind == "select":
+                return str(cur)
+            if kind == "parent":
                 if k not in (curses.KEY_RIGHT, ord("l")):
-                    return str(cur)
-            elif kind == "parent":
-                old = cur
-                _change_dir(target, focus_child=old)
+                    old = cur
+                    _change_dir(target, focus_child=old)
             else:
                 _change_dir(target)
+        elif k in (curses.KEY_PPAGE,):
+            sel = max(0, sel - max_rows)
+        elif k in (curses.KEY_NPAGE,):
+            sel = min(len(entries) - 1, sel + max_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -524,7 +545,7 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
                 mark = "❯" if active else " "
                 state = "● 开" if toggle_vals[i] else "○ 关"
                 sc = "good" if toggle_vals[i] else "muted"
-                attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+                attr = curses.A_BOLD if active else curses.A_NORMAL
                 _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
                 _safe_add(stdscr, y, 5, _pad(label, 12), w, "text", attr)
                 _safe_add(stdscr, y, 17, state, w, sc, attr)
@@ -534,27 +555,30 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
             y += 1
 
         active = sel == len(toggle_vals)
-        attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+        attr = curses.A_BOLD if active else curses.A_NORMAL
         _safe_add(stdscr, y, 3, "❯" if active else " ",
                   w, "good" if active else "muted", attr)
         _safe_add(stdscr, y, 5, "▶▶ 确认并开始处理", w, "good", attr)
         _footer(stdscr,
-                " ↑/↓ 移动 · 空格 切换 · PgUp/PgDn 查看摘要 · Enter 确认 · Esc 返回 ",
-                "↑↓选项  空格切换  PgDn摘要  Enter确认  Esc返回")
+                "↑↓ 选项 · ←/Esc 返回 · → 到确认 · Space 切换 · Enter 确认 · PgUp/PgDn 摘要",
+                "↑↓选项  ←返回  →确认  Space切换  Enter执行")
         stdscr.refresh()
 
         k = stdscr.getch()
-        if k in (27, ord("q"), ord("Q")):
+        if k in (27, curses.KEY_LEFT, 127, 8, ord("q"), ord("Q")):
             return False
-        if k in (curses.KEY_PPAGE, 339):
+        if k in (curses.KEY_RIGHT,):
+            # Right chooses the confirmation control; only Enter starts jobs.
+            sel = len(toggle_vals)
+        elif k in (curses.KEY_PPAGE, 339):
             summary_offset = max(0, summary_offset - visible_rows)
         elif k in (curses.KEY_NPAGE, 338):
             summary_offset = min(max(0, len(lines) - visible_rows),
                                  summary_offset + visible_rows)
         elif k in (curses.KEY_UP, ord("k")):
-            sel = (sel - 1) % n_items
+            sel = max(0, sel - 1)
         elif k in (curses.KEY_DOWN, ord("j")):
-            sel = (sel + 1) % n_items
+            sel = min(n_items - 1, sel + 1)
         elif k == ord(" ") and sel < len(toggle_vals):
             toggle_vals[sel] = not toggle_vals[sel]
             if out_vals is not None:
@@ -609,22 +633,24 @@ def _multi_select(stdscr, title: str, files: list[Path],
             mark = "❯" if active else " "
             box = "[✓]" if checked else "[ ]"
             bcolor = "good" if checked else "muted"
-            attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+            attr = curses.A_BOLD if active else curses.A_NORMAL
             name = f.name
             name = _ellipsize(name, w - 24)
             _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
             _safe_add(stdscr, y, 5, box, w, bcolor, attr)
-            _safe_add(stdscr, y, 5 + 4, name, w, "text", attr)
+            _safe_add(stdscr, y, 5 + 4, name, w,
+                      "accent" if active else "text", attr)
             n = fission.get(str(f), 1)
             _safe_add(stdscr, y, w - 12, f"裂变 x{n}", w, "value", attr)
 
         _footer(stdscr,
-                " ↑/↓ 移动 · 空格 勾选 · E 设裂变数(1~99) · A 全选 · Enter 确认 · Esc 返回 ",
-                "↑↓移动  空格勾选  E数量  A全选  Enter确认  Esc返回")
+                "↑↓ 移动 · Space 多选 · ←/Esc 返回 · →/Enter 下一步 · E 裂变数量 · A 全选",
+                "↑↓移动  Space多选  ←返回  →下一步  E数量")
         stdscr.refresh()
 
         k = stdscr.getch()
-        if k in (27, ord("q"), ord("Q")):
+        if k in (27, curses.KEY_LEFT, curses.KEY_BACKSPACE, 127, 8,
+                 ord("q"), ord("Q")):
             return None
         if k in (curses.KEY_UP, ord("k")):
             sel = max(0, sel - 1)
@@ -648,7 +674,7 @@ def _multi_select(stdscr, title: str, files: list[Path],
                 fission[p] = n
         elif ord("1") <= k <= ord("9"):
             fission[str(files[sel])] = k - ord("0")
-        elif k in (10, curses.KEY_ENTER, ord("\r")):
+        elif k in (10, curses.KEY_ENTER, ord("\r"), curses.KEY_RIGHT, ord("l")):
             if not selected:
                 continue
             chosen = [files[i] for i in sorted(selected)]
@@ -659,7 +685,7 @@ def _multi_select(stdscr, title: str, files: list[Path],
 # 主循环
 # ---------------------------------------------------------------------------
 def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
-    """Main menu: Back stays here; only Q explicitly exits the application."""
+    """Up/down moves, Right/Enter opens, Back never exits the home screen."""
     try:
         curses.curs_set(0)
     except curses.error:
@@ -670,42 +696,38 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
     while True:
         h, w = stdscr.getmaxyx()
         if _small_screen(stdscr):
-            # Back on the final (home) page must not close the process.
             if stdscr.getch() in (ord("q"), ord("Q")):
                 return ("quit", None)
             continue
+
         stdscr.erase()
-        _frame(stdscr, "选择功能", "本地视频工作台  /  选择一个处理流程")
+        _frame(stdscr, "选择功能", "↑↓ 移动  ·  → / Enter 进入")
         spacious = h >= 20
         if spacious:
             _home_brand(stdscr)
         menu_y = 11 if spacious else 5
+        row_step = 2 if h >= 29 else 1
 
         for i, (key, name, desc) in enumerate(FEATURES):
-            y = menu_y + i
+            y = menu_y + i * row_step
             active = i == feat_sel
-            attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
-            fg = "accent" if active else "keyword"
-            _safe_add(stdscr, y, 3, "❯" if active else " ", w,
-                      "accent" if active else "muted", attr)
-            _safe_add(stdscr, y, 5, f"{i + 1:02d}  ", w, "dim", attr)
-            _safe_add(stdscr, y, 9, _pad(name, 10), w, fg, attr)
-            _safe_add(stdscr, y, 20, desc, w, "dim", attr)
+            attrs = curses.A_BOLD if active else curses.A_NORMAL
+            _safe_add(stdscr, y, 3, "▌" if active else " ", w,
+                      "accent" if active else "muted")
+            _safe_add(stdscr, y, 5, f"{i + 1:02d}", w, "dim")
+            _safe_add(stdscr, y, 9, _pad(name, 10), w,
+                      "accent" if active else "text", attrs)
+            _safe_add(stdscr, y, 20, _ellipsize(desc, w - 23), w,
+                      "text" if active else "dim")
 
         key, name, _desc = FEATURES[feat_sel]
-        if spacious:
-            _safe_add(stdscr, 16, 3, f"当前选择  /  {name}", w,
-                      "accent", curses.A_BOLD)
-            if h >= 22:
-                _safe_add(stdscr, 17, 3, FEATURE_HINTS[key], w, "text")
-        elif h >= 17:
-            _safe_add(stdscr, 11, 2, "─" * max(0, w - 4), w, "muted")
-            _safe_add(stdscr, 12, 3, f"当前选择  /  {name}", w,
-                      "accent", curses.A_BOLD)
-            _safe_add(stdscr, 13, 3, FEATURE_HINTS[key], w, "text")
+        summary_y = menu_y + len(FEATURES) * row_step + 1
+        if summary_y < h - 3:
+            _safe_add(stdscr, summary_y, 3,
+                      f"当前：{name}  ·  {FEATURE_HINTS[key]}", w, "dim")
         _footer(stdscr,
-                f" ↑↓ 移动 · 1-{len(FEATURES)} 快速进入 · Enter 选择 · Esc 返回主菜单 · Q 退出 ",
-                f"Esc返回 Q退出 ↑↓移动 1-{len(FEATURES)}快捷 Enter进入")
+                f"↑↓ 移动 · →/Enter 进入 · 1-{len(FEATURES)} 快捷键 · Q 退出",
+                f"↑↓移动  →进入  1-{len(FEATURES)}快捷  Q退出")
         stdscr.refresh()
 
         k = stdscr.getch()
@@ -715,20 +737,19 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
             feat_sel = max(0, feat_sel - 1)
         elif k in (curses.KEY_DOWN, ord("j")):
             feat_sel = min(len(FEATURES) - 1, feat_sel + 1)
-        elif k in (10, curses.KEY_ENTER, ord("\r"), ord(" ")) or (
+        elif k in (10, curses.KEY_ENTER, ord("\r"),
+                   curses.KEY_RIGHT, ord("l")) or (
             ord("1") <= k < ord("1") + len(FEATURES)
         ):
             if ord("1") <= k < ord("1") + len(FEATURES):
                 feat_sel = k - ord("1")
             _loop._feat_sel = feat_sel
-            key = FEATURES[feat_sel][0]
-            argv_list = _run_feature_wizard(stdscr, key, w)
+            argv_list = _run_feature_wizard(stdscr, FEATURES[feat_sel][0], w)
             if argv_list == "__BACK__":
                 continue
             if argv_list:
                 return ("run", argv_list)
-        # Esc/Left/Backspace are intentionally no-ops at the root menu.
-        # They never call curses.endwin() or terminate the application.
+        # Esc/left/backspace and space do not exit or launch from the home menu.
         _loop._feat_sel = feat_sel
 
 
@@ -974,6 +995,7 @@ def run() -> int:
         return 0
 
     def _app(stdscr) -> int:
+        _configure_esc_delay()
         _init_colors()
         final_code = 0
         while True:

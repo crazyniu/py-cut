@@ -57,7 +57,7 @@ class NavigationTests(unittest.TestCase):
         with mock.patch.object(tui.curses, "curs_set"):
             self.assertEqual(tui._loop(screen), ("quit", None))
         drawn = "\n".join(s for _, _, s in screen.printed)
-        self.assertIn("P Y C U T", drawn)
+        self.assertIn("PYCUT", drawn)
         self.assertIn(f"v{__version__}", drawn)
 
     def test_home_back_keys_do_not_exit_or_run_jobs(self):
