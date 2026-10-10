@@ -76,15 +76,14 @@ def list_dirs(root: Path) -> list[Path]:
         return []
     out: list[Path] = []
     try:
-        with os.scandir(str(root)) as entries:
-            for entry in entries:
-                try:
-                    # 单层列举不会递归进入链接；目录链接也应像普通目录显示。
-                    if entry.is_dir(follow_symlinks=True):
-                        out.append(Path(entry.path))
-                except OSError:
-                    # 已卸载的卷、失效的链接或权限错误不影响其他目录。
-                    continue
+        for entry in os.scandir(str(root)):
+            try:
+                # 单层列举不会递归进入链接；目录链接也应像普通目录显示。
+                if entry.is_dir(follow_symlinks=True):
+                    out.append(Path(entry.path))
+            except OSError:
+                # 已卸载的卷、失效的链接或权限错误不影响其他目录。
+                continue
     except OSError:
         pass
     out.sort(key=lambda p: (p.name.casefold(), p.name))
