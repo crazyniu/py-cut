@@ -292,19 +292,22 @@ def _burn_subtitles(video: Path, slots: list[tuple[float, float]],
         f"BorderStyle={config.MONTAGE_SUB_BORDER_STYLE}")
 
     out = video.with_name(video.stem + "_sub.mp4")
-    cmd = build_subtitle_cmd(video, Path(ass_path), out, crf=opts.crf,
-                             fps=config.MONTAGE_FPS)
-    if not _run(cmd):
-        _unlink(subtitle_tmp_path(out))
-        return False
-    tmp = subtitle_tmp_path(out)
-    if not tmp.is_file() or tmp.stat().st_size < 1024:
-        log("  [失败] 字幕烧录产物异常")
-        _unlink(tmp)
-        return False
-    os.replace(str(tmp), str(video))   # 原子替换回原成片路径
-    _unlink(ass_path)
-    return True
+    try:
+        cmd = build_subtitle_cmd(video, Path(ass_path), out, crf=opts.crf,
+                                 fps=config.MONTAGE_FPS)
+        if not _run(cmd):
+            _unlink(subtitle_tmp_path(out))
+            return False
+        tmp = subtitle_tmp_path(out)
+        if not tmp.is_file() or tmp.stat().st_size < 1024:
+            log("  [失败] 字幕烧录产物异常")
+            _unlink(tmp)
+            return False
+        os.replace(str(tmp), str(video))   # 原子替换回原成片路径
+        return True
+    finally:
+        # 烧录失败也不能把 ASS 中间产物一直留在磁盘上。
+        _unlink(ass_path)
 
 
 # ---------------------------------------------------------------------------
