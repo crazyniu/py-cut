@@ -164,5 +164,84 @@ class CoverSafetyTests(unittest.TestCase):
                              [["cover", "--src-dir", "/a"]])
 
 
+    def test_failed_frame_extraction_does_not_mark_clip_as_clean(self):
+        with tempfile.TemporaryDirectory() as td:
+            clip = Path(td) / "clip.mp4"
+            clip.write_bytes(b"source")
+            model = SimpleNamespace(
+                enabled=True, ask_vision=mock.Mock(return_value=None))
+            info = {"format=duration": "12.0", "stream=width": "720",
+                    "stream=height": "1280"}
+            with mock.patch.object(subtitle, "probe_scalar",
+                                   side_effect=lambda p, entry: info[entry]), \
+                 mock.patch.object(subtitle, "_grab_frame", return_value=False), \
+                 mock.patch.object(subtitle, "log"):
+                self.assertEqual(subtitle.process_clip(model, clip), "fail")
+            self.assertFalse(subtitle._marker(clip).exists())
+            model.ask_vision.assert_not_called()
+
+    def test_verified_negative_replies_can_mark_no_subtitles(self):
+        with tempfile.TemporaryDirectory() as td:
+            clip = Path(td) / "clip.mp4"
+            clip.write_bytes(b"source")
+            model = SimpleNamespace(
+                enabled=True, ask_vision=mock.Mock(
+                    return_value={"has_subtitle": False, "box": None}))
+            info = {"format=duration": "12.0", "stream=width": "720",
+                    "stream=height": "1280"}
+            with mock.patch.object(subtitle, "probe_scalar",
+                                   side_effect=lambda p, entry: info[entry]), \
+                 mock.patch.object(subtitle, "_grab_frame", return_value=True), \
+                 mock.patch.object(subtitle.cv2, "imread", return_value=object()), \
+                 mock.patch.object(subtitle, "log"):
+                self.assertEqual(subtitle.process_clip(model, clip), "nosub")
+            self.assertTrue(subtitle._marker(clip).is_file())
+            self.assertEqual(model.ask_vision.call_count, subtitle.SAMPLES)
+
+    def test_partial_llm_failure_and_malformed_positive_do_not_mark_clean(self):
+        with tempfile.TemporaryDirectory() as td:
+            clip = Path(td) / "clip.mp4"
+            clip.write_bytes(b"source")
+            info = {"format=duration": "12.0", "stream=width": "720",
+                    "stream=height": "1280"}
+            cases = [
+                [{"has_subtitle": False}, None, None, None, None],
+                [{"has_subtitle": True, "box": None}]
+                 + [{"has_subtitle": False}] * 4,
+            ]
+            for responses in cases:
+                model = SimpleNamespace(
+                    enabled=True,
+                    ask_vision=mock.Mock(side_effect=responses))
+                with mock.patch.object(subtitle, "probe_scalar",
+                                       side_effect=lambda p, entry: info[entry]), \
+                     mock.patch.object(subtitle, "_grab_frame", return_value=True), \
+                     mock.patch.object(subtitle.cv2, "imread", return_value=object()), \
+                     mock.patch.object(subtitle, "log"):
+                    self.assertEqual(subtitle.process_clip(model, clip), "fail")
+                self.assertFalse(subtitle._marker(clip).exists())
+
+    def test_one_valid_subtitle_detection_remains_actionable(self):
+        with tempfile.TemporaryDirectory() as td:
+            clip = Path(td) / "clip.mp4"
+            clip.write_bytes(b"source")
+            info = {"format=duration": "12.0", "stream=width": "720",
+                    "stream=height": "1280"}
+            model = SimpleNamespace(
+                enabled=True, ask_vision=mock.Mock(side_effect=[
+                    {"has_subtitle": True, "box": [0.2, 0.6, 0.8, 0.72],
+                     "text": "标题"},
+                    None, None, None, None]))
+            with mock.patch.object(subtitle, "probe_scalar",
+                                   side_effect=lambda p, entry: info[entry]), \
+                 mock.patch.object(subtitle, "_grab_frame", return_value=True), \
+                 mock.patch.object(subtitle.cv2, "imread", return_value=object()), \
+                 mock.patch.object(subtitle, "cover_clip", return_value=True) as cover, \
+                 mock.patch.object(subtitle, "log"):
+                self.assertEqual(subtitle.process_clip(model, clip), "covered")
+            cover.assert_called_once()
+            self.assertTrue(subtitle._marker(clip).is_file())
+
+
 if __name__ == "__main__":
     unittest.main()
