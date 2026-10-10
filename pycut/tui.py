@@ -4,21 +4,19 @@
 ❯ 选中标记、语法高亮。
 
 交互模型（引导式向导，替代旧的「参数表单」）：
-    主菜单列出 5 个功能，选中后进入**分步向导**，每步只问一个决定：
+    主菜单列出 4 个视频处理功能，选中后进入**分步向导**，每步只问一个决定：
 
       切片        → 选源目录 → 报视频数 → 选「擦除字幕/去重」开关 → 确认执行
       字幕擦除    → 选目录 → 报视频数 → 确认执行（只有擦除，无去重）
       去重        → 选目录 → 报视频数 → 确认执行（只有去重）
       混剪        → 选片段目录 → 选画中画目录 → 选爆款视频目录 →
                     多选爆款视频 + 每个裂变数量 → 确认执行
-      查素材      → 选起点目录 → 输入关键词 → 滚动查看匹配的视频路径
 
 关键机制：
   - **目录选择器**：文件系统层级浏览器，从根目录出发逐级浏览，进入子目录 /
     返回上级 / 直接选当前目录，自动过滤系统级目录与隐藏目录，不要求手敲路径。
   - **递归扫描**：选定目录后用 `core/scan` 递归统计视频数并展示（最多下探 3 层）。
   - **多选**（混剪爆款视频）：空格勾选/取消，数字输入裂变数量。
-  - **查素材**：按关键词递归搜索视频文件名，滚动查看结果路径。
   - 最终生成 argv 交给 `cli.main` 执行（与命令行完全同源，无漂移）。
 
 健壮性：非交互环境（管道/无 tty）回退 CLI 帮助；任何异常回退到提示，绝不卡死。
@@ -32,8 +30,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, cli
-from .core.scan import (count_videos_recursive, list_dirs, list_videos_flat,
-                        search_videos)
+from .core.scan import count_videos_recursive, list_dirs, list_videos_flat
 
 # ---------------------------------------------------------------------------
 # 配色主题（Claude Code 风格：深底 + 琥珀强调）
@@ -131,7 +128,6 @@ FEATURES = [
     ("cover", "字幕擦除", "擦除画面中的字幕"),
     ("dedup", "去重",    "去除重复、相似的视频"),
     ("montage", "混剪",  "组合片段生成新视频（可批量裂变）"),
-    ("search", "查素材",  "按关键词搜索视频素材"),
 ]
 
 FEATURE_HINTS = {
@@ -139,7 +135,6 @@ FEATURE_HINTS = {
     "cover": "选择视频目录 → 自动检测并擦除字幕",
     "dedup": "选择素材目录 → 运行画面处理及相似度自检",
     "montage": "选素材库 → 选画中画 → 选择多支基准视频",
-    "search": "中文 / 英文关键词搜索 → macOS Finder 定位",
 }
 
 
@@ -249,13 +244,17 @@ def _prompt_int(stdscr, y, x, w, title, default, lo, hi) -> int | None:
     while True:
         h, screen_w = stdscr.getmaxyx()
         if _small_screen(stdscr):
-            if stdscr.getch() == 27:
+            if stdscr.getch() in (27, ord("q"), ord("Q")):
                 return None
             continue
         line_y = min(y, h - 4)
         w = screen_w
-        stdscr.move(line_y, 0)
-        stdscr.clrtoeol()
+        try:
+            stdscr.move(line_y, 0)
+            stdscr.clrtoeol()
+        except curses.error:
+            # Terminal may resize between measuring its height and moving the cursor.
+            continue
         prompt = f"{title} [{lo}~{hi}]："
         _safe_add(stdscr, line_y, x, prompt, w, "text")
         bx = x + _disp_width(prompt) + 1
@@ -653,7 +652,8 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
         pass  # 少数终端不支持隐藏光标，仍允许使用 TUI。
     stdscr.keypad(True)
 
-    feat_sel = getattr(_loop, "_feat_sel", 0)  # 选中项只初始化一次，循环内保持
+    # Clamp the saved position when the available menu items change.
+    feat_sel = max(0, min(getattr(_loop, "_feat_sel", 0), len(FEATURES) - 1))
     while True:
         h, w = stdscr.getmaxyx()
         if _small_screen(stdscr):
@@ -679,8 +679,8 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
             _safe_add(stdscr, 12, 3, f"当前选择  /  {name}", w, "accent", curses.A_BOLD)
             _safe_add(stdscr, 13, 3, FEATURE_HINTS[key], w, "text")
             _safe_add(stdscr, 15, 3, "每个向导会先展示处理范围，确认后才执行。", w, "dim")
-        _footer(stdscr, " ↑/↓ 移动 · 1-5 快速进入 · Enter 选择 · Q 退出 ",
-                "↑↓移动  1-5快捷  Enter选择  Q退出")
+        _footer(stdscr, f" ↑/↓ 移动 · 1-{len(FEATURES)} 快速进入 · Enter 选择 · Q 退出 ",
+                f"↑↓移动  1-{len(FEATURES)}快捷  Enter选择  Q退出")
         stdscr.refresh()
         k = stdscr.getch()
         if k in (27, ord("q"), ord("Q")):
@@ -690,9 +690,9 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
         elif k in (curses.KEY_DOWN, ord("j")):
             sel = (sel + 1) % len(FEATURES)
         elif k in (10, curses.KEY_ENTER, ord("\r"), ord(" ")) or (
-            ord("1") <= k <= ord("5")
+            ord("1") <= k < ord("1") + len(FEATURES)
         ):
-            if ord("1") <= k <= ord("5"):
+            if ord("1") <= k < ord("1") + len(FEATURES):
                 sel = k - ord("1")
             _loop._feat_sel = sel
             key = FEATURES[sel][0]
@@ -719,8 +719,6 @@ def _run_feature_wizard(stdscr, key: str, w: int) -> list[list[str]] | str | Non
         return _wizard_dedup(stdscr, w)
     if key == "montage":
         return _wizard_montage(stdscr, w)
-    if key == "search":
-        return _wizard_search(stdscr, w)
     return None
 
 
@@ -843,77 +841,6 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
         ])
     return argv_list
 
-
-def _wizard_search(stdscr, w: int) -> None:
-    """查询视频素材：选起点目录 → 输入关键词 → 滚动查看匹配的视频路径。
-
-    这是查看型功能，不生成 argv、不执行处理，看完按 Esc/Q 回到主菜单。
-    """
-    start = _pick_dir(stdscr, "查素材 · 选择搜索起点目录", None)
-    if start is None:
-        return None
-    kw = _prompt_text(stdscr, 4, 2, w, "输入视频关键词（文件名）")
-    if kw is None or not kw.strip():
-        _flash(stdscr, "关键词为空，已取消", "dim")
-        return None
-    files = search_videos(start, kw.strip())
-    if not files:
-        _flash(stdscr, f"未找到匹配「{kw.strip()}」的视频", "warn")
-        return None
-
-    # 结果列表（滚动查看）
-    sel = 0
-    n = len(files)
-    while True:
-        h, w2 = stdscr.getmaxyx()
-        if _small_screen(stdscr):
-            if stdscr.getch() in (27, ord("q"), ord("Q")):
-                return None
-            continue
-        stdscr.erase()
-        _frame(stdscr, f"查素材 · 「{kw.strip()}」共 {n} 个", f"搜索起点: {start}")
-        # Reserve h-3 for the full path and h-2 for the shortcut bar.
-        max_rows = max(1, h - 9)
-        top = 0
-        if sel >= max_rows:
-            top = sel - max_rows + 1
-        for i in range(top, min(n, top + max_rows)):
-            y = 5 + (i - top)
-            p = files[i]
-            active = (i == sel)
-            mark = "❯" if active else " "
-            # 显示：文件名（加粗）+ 相对目录（弱化）
-            disp = p.name
-            disp = _ellipsize(disp, w2 - 8)
-            attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
-            fg = "accent" if active else "text"
-            _safe_add(stdscr, y, 3, mark, w2, "accent" if active else "muted", attr)
-            _safe_add(stdscr, y, 5, disp, w2, fg, attr)
-            # 在文件右侧显示父目录（弱化，方便定位）
-            _safe_add(stdscr, y, 5 + _disp_width(disp) + 1, str(p.parent), w2,
-                      "dim", attr)
-        _safe_add(stdscr, h - 3, 2,
-                  _clip(str(files[sel]), max(0, w2 - 6), tail=True), w2, "info")
-        _footer(stdscr, " ↑/↓ 滚动 · Enter/O Finder 中定位 · Esc/Q 返回主菜单 ",
-                "↑↓浏览  Enter/O定位  Esc/Q返回")
-        stdscr.refresh()
-        k = stdscr.getch()
-        if k in (27, ord("q"), ord("Q")):
-            return None
-        if k in (curses.KEY_UP, ord("k")):
-            sel = (sel - 1) % max(1, n)
-        elif k in (curses.KEY_DOWN, ord("j")):
-            sel = (sel + 1) % max(1, n)
-        elif k in (10, curses.KEY_ENTER, ord("\r"), ord("o"), ord("O")):
-            if sys.platform != "darwin":
-                _flash(stdscr, "Finder 定位仅支持 macOS", "warn")
-                continue
-            import subprocess  # noqa: PLC0415
-            try:
-                subprocess.Popen(["open", "-R", str(files[sel])],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except OSError as exc:
-                _flash(stdscr, f"无法打开 Finder：{exc}", "bad")
 
 
 def _flash(stdscr, msg: str, color: str = "bad") -> None:

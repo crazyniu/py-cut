@@ -96,6 +96,29 @@ class FissionTests(unittest.TestCase):
             tui._prompt_int(tiny, 20, 2, 100, "裂变", 1, 1, 99)
         )
 
+    def test_integer_editor_recovers_from_cursor_move_during_resize(self):
+        screen = Screen([ord("2"), 10])
+        original_move = screen.move
+        attempts = [0]
+
+        def flaky_move(y, x):
+            attempts[0] += 1
+            if attempts[0] == 1:
+                raise curses.error("window resized")
+            return original_move(y, x)
+
+        screen.move = flaky_move
+        self.assertEqual(
+            tui._prompt_int(screen, 8, 2, 100, "裂变", 1, 1, 99), 2
+        )
+        self.assertGreaterEqual(attempts[0], 2)
+
+    def test_integer_editor_can_exit_tiny_terminal_with_q(self):
+        self.assertIsNone(tui._prompt_int(
+            Screen([ord("q")], size=(10, 40)),
+            8, 2, 100, "裂变", 1, 1, 99,
+        ))
+
     def test_empty_file_list_skips_indexing(self):
         self.assertIsNone(tui._multi_select(Screen([]), "混剪", []))
 

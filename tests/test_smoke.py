@@ -74,18 +74,17 @@ def test_dedup_registered():
 
 
 def test_tui_wizard_structure():
-    """向导式 TUI 结构：5 功能齐全、目录扫描工具可用、混剪支持裂变。"""
+    """向导式 TUI 结构：4 个处理功能、内部目录读取、混剪裂变。"""
     import pycut.tui as tui  # noqa: PLC0415
     from pycut.core import scan  # noqa: PLC0415
 
-    # 主菜单应有 5 个功能（切片/字幕擦除/去重/混剪/查素材）
+    # 主菜单仅有 4 个视频处理功能，不提供独立“查素材”页面
     names = [f[1] for f in tui.FEATURES]
-    assert names == ["切片", "字幕擦除", "去重", "混剪", "查素材"]
+    assert names == ["切片", "字幕擦除", "去重", "混剪"]
     # 目录扫描工具
     assert hasattr(scan, "count_videos_recursive")
     assert hasattr(scan, "list_videos_flat")
     assert hasattr(scan, "list_dirs")
-    assert hasattr(scan, "search_videos")
     # 递归深度限制默认 3 层
     assert scan.DEFAULT_MAX_DEPTH == 3
     # 混剪支持 --fission 裂变（直接解析验证）
