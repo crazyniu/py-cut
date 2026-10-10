@@ -66,7 +66,7 @@ class SceneSafetyTests(unittest.TestCase):
                                  skipped=False)
         info = lambda p: SimpleNamespace(path=p, stem=p.stem)
         llm = SimpleNamespace(calls=0, failures=0, switched_to=None)
-        manifest = SimpleNamespace(csv_path=Path("/tmp/manifest.csv"))
+        manifest = SimpleNamespace(csv_path=Path("/tmp/manifest.csv"), close=mock.Mock())
         with mock.patch.object(slice_cmd, "install_signal_handlers"), \
              mock.patch.object(slice_cmd, "reset_stop"), \
              mock.patch.object(slice_cmd, "self_check", return_value=object()), \
@@ -84,7 +84,7 @@ class SceneSafetyTests(unittest.TestCase):
             self.assertEqual(slice_cmd.run(args), 2)
         self.assertEqual(process.call_count, 2)
         mf.assert_called_once()
-        manifest.close.assert_called_once() if hasattr(manifest.close, "assert_called_once") else None
+        manifest.close.assert_called_once()
 
 
 if __name__ == "__main__":
