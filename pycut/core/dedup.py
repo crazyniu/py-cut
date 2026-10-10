@@ -27,7 +27,8 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import config
-from .dedup_presets import build_params, derive_seed, video_bitrate_for_seed
+from .dedup_presets import (build_params, derive_seed, ken_burns_for_seed,
+                            video_bitrate_for_seed)
 from .ffmpeg import FFMPEG, FFPROBE, VideoInfo, probe_scalar, probe_video
 from .fingerprint import compare
 from .runtime import STOP
@@ -65,6 +66,7 @@ class DedupOptions:
     border: bool = False
     badge: bool = False
     vary_bitrate: bool = False         # M1：默认 CRF，显式启用时使用 seed 派生 ABR 目标
+    ken_burns: bool = False            # M2：默认关闭动态缩放/平移，不改现有滤镜
     logo: str = ""
     delogo: str = ""                   # 可见水印位置 "x,y,w,h"，走 delogo 滤镜
     sticker: str = ""                   # 贴纸图片路径（背面半透明 + 边缘羽化）
@@ -214,6 +216,39 @@ def build_video_chain(params: dict, info: VideoInfo) -> list[str] | None:
     return _build_chain(params, info)
 
 
+def _ken_burns_chain(params: dict, info: VideoInfo) -> list[str]:
+    """逐帧放大后裁回原画幅；不改变原始 PTS/FPS 或音轨。
+
+    不使用 zoompan（它可引入固定输出 fps/帧数变化），而用
+    scale(eval=frame) 的 t 动画再 crop 固定 W×H。
+    两方向余量始终非负，crop 坐标位于 [5%,95%]，不会露出黑边。
+    """
+    w, h = int(info.width), int(info.height)
+    direction = str(params.get("ken_burns_direction") or "")
+    zoom = float(params.get("ken_burns_zoom_start") or 0.0)
+    delta = float(params.get("ken_burns_zoom_delta") or 0.0)
+    period = float(params.get("ken_burns_period") or 0.0)
+    if w < 16 or h < 16 or direction not in ("lr", "rl", "tb", "bt"):
+        raise ValueError("Ken Burns 需要有效视频尺寸和方向")
+    if not (1.0 < zoom <= 1.1 and 0 < delta <= 0.1 and period >= 0.05
+            and math.isfinite(period)):
+        raise ValueError("Ken Burns 的缩放幅度或运动周期无效")
+
+    # 余弦缓入缓出，缩放倍率始终 >=1；过滤器 eval=frame 保持 1 输入帧 → 1 输出帧。
+    zexpr = f"({zoom:.4f}+{delta:.4f}*(1-cos(PI*t/{period:.3f}))/2)"
+    sx = f"trunc(iw*{zexpr}/2)*2"
+    sy = f"trunc(ih*{zexpr}/2)*2"
+    step = f"cos(PI*t/{period:.3f})"
+    forward = f"(0.5-0.45*{step})"
+    backward = f"(0.5+0.45*{step})"
+    fx = forward if direction == "lr" else (backward if direction == "rl" else "0.5")
+    fy = forward if direction == "tb" else (backward if direction == "bt" else "0.5")
+    return [
+        f"scale=w='{sx}':h='{sy}':eval=frame",
+        f"crop={w}:{h}:x='(in_w-out_w)*{fx}':y='(in_h-out_h)*{fy}'",
+    ]
+
+
 def _build_chain(params: dict, info: VideoInfo) -> list[str]:
     """线性滤镜链（单路视频即可完成的部分）。
 
@@ -282,6 +317,10 @@ def _build_chain(params: dict, info: VideoInfo) -> list[str]:
 
     if geo:
         chain.append(f"scale={W}:{H}")
+
+    # 现有几何改动先归位到源尺寸，再施加 Ken Burns；不开关时零额外滤镜。
+    if params.get("ken_burns_direction"):
+        chain.extend(_ken_burns_chain(params, info))
 
     # --- 像素 / 色彩层 ---
     bright = float(params.get("brightness") or 0.0)
@@ -718,6 +757,16 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
             params["video_bitrate_shift_pct"] = shift
             params["summary"] = str(params.get("summary", "")).replace(
                 f"重编码 CRF={params.get('crf')}", f"重编码 ABR={bitrate}")
+        if opts.ken_burns:
+            motion = ken_burns_for_seed(seed, info.duration)
+            params.update(motion)
+            params["summary"] = (
+                str(params.get("summary", ""))
+                + f"；Ken Burns {motion['ken_burns_direction']} "
+                  f"{motion['ken_burns_zoom_start']:.4f}"
+                  f"+{motion['ken_burns_zoom_delta']:.4f} "
+                  f"{motion['ken_burns_period']:.3f}s"
+            )
         item.params = params
 
         # --- 只自检模式：不产出，比对 src 与「已存在的去重产物」---
