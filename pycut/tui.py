@@ -111,6 +111,14 @@ FEATURES = [
     ("search", "查素材",  "按关键词搜索视频素材"),
 ]
 
+FEATURE_HINTS = {
+    "slice": "场景分段 → 人脸分流 → 可选字幕擦除 / 去重",
+    "cover": "选择视频目录 → 自动检测并擦除字幕",
+    "dedup": "选择素材目录 → 运行画面处理及相似度自检",
+    "montage": "选素材库 → 选画中画 → 选择多支基准视频",
+    "search": "中文 / 英文关键词搜索 → macOS Finder 定位",
+}
+
 
 # ---------------------------------------------------------------------------
 # 渲染辅助
@@ -283,7 +291,8 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
         return out
 
     entries = _entries()
-    sel = 0
+    # 从根目录浏览时默认落在第一个子目录，避免误按 Enter 直接选择 /。
+    sel = 2 if len(entries) > 2 else 0
     while True:
         h, w = stdscr.getmaxyx()
         if _small_screen(stdscr):
@@ -527,20 +536,11 @@ def _multi_select(stdscr, title: str, files: list[Path]) -> tuple[list[Path], di
 # 主循环
 # ---------------------------------------------------------------------------
 def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
-    curses.curs_set(0)
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass  # 少数终端不支持隐藏光标，仍允许使用 TUI。
     stdscr.keypad(True)
-
-    def draw_header(y: int, w: int) -> None:
-        # 顶部栏：logo + 版本号
-        _safe_add(stdscr, y, 0, " " * w, w, "text", curses.A_REVERSE)
-        _safe_add(stdscr, y, 1, "  pycut ", w, "accent", curses.A_REVERSE | curses.A_BOLD)
-        _safe_add(stdscr, y, 11, "短视频智能处理工具箱", w, "dim", curses.A_REVERSE)
-        ver = f"v{__version__}"
-        _safe_add(stdscr, y, w - len(ver) - 2, ver, w, "muted", curses.A_REVERSE)
-
-    def draw_footer(y: int, hints: str, w: int) -> None:
-        _safe_add(stdscr, y, 0, " " * w, w, "text", curses.A_REVERSE)
-        _safe_add(stdscr, y, 1, hints, w, "dim", curses.A_REVERSE)
 
     feat_sel = getattr(_loop, "_feat_sel", 0)  # 选中项只初始化一次，循环内保持
     while True:
@@ -555,13 +555,22 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
         for i, (key, name, desc) in enumerate(FEATURES):
             y = 5 + i
             active = (i == sel)
-            mark = "❯" if active else " "
             attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
             fg = "accent" if active else "keyword"
-            _safe_add(stdscr, y, 3, mark, w, fg if active else "muted", attr)
-            _safe_add(stdscr, y, 5, _pad(name, 10), w, fg, attr)
-            _safe_add(stdscr, y, 16, desc, w, "dim", attr)
-        draw_footer(h - 1, " ↑/↓ 移动 · Enter 进入 · Q 退出 ", w)
+            _safe_add(stdscr, y, 3, "❯" if active else " ", w,
+                      "accent" if active else "muted", attr)
+            _safe_add(stdscr, y, 5, f"{i + 1:02d}  ", w, "dim", attr)
+            _safe_add(stdscr, y, 9, _pad(name, 10), w, fg, attr)
+            _safe_add(stdscr, y, 20, desc, w, "dim", attr)
+        if h >= 17:
+            key, name, _desc = FEATURES[sel]
+            _safe_add(stdscr, 11, 2, "─" * max(0, w - 4), w, "muted")
+            _safe_add(stdscr, 12, 3, f"当前选择  /  {name}", w, "accent", curses.A_BOLD)
+            _safe_add(stdscr, 13, 3, FEATURE_HINTS[key], w, "text")
+            _safe_add(stdscr, 15, 3, "每个向导会先展示处理范围，确认后才执行。", w, "dim")
+        _safe_add(stdscr, h - 2, 2,
+                  " ↑/↓ 移动 · 1-5 快速进入 · Enter 选择 · Q 退出 ",
+                  w, "dim", curses.A_REVERSE)
         stdscr.refresh()
         k = stdscr.getch()
         if k in (27, ord("q"), ord("Q")):
@@ -570,7 +579,11 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
             sel = (sel - 1) % len(FEATURES)
         elif k in (curses.KEY_DOWN, ord("j")):
             sel = (sel + 1) % len(FEATURES)
-        elif k in (10, curses.KEY_ENTER, ord("\r"), ord(" ")):
+        elif k in (10, curses.KEY_ENTER, ord("\r"), ord(" ")) or (
+            ord("1") <= k <= ord("5")
+        ):
+            if ord("1") <= k <= ord("5"):
+                sel = k - ord("1")
             _loop._feat_sel = sel
             key = FEATURES[sel][0]
             argv_list = _run_feature_wizard(stdscr, key, w)
@@ -765,8 +778,11 @@ def _wizard_search(stdscr, w: int) -> None:
             # 在文件右侧显示父目录（弱化，方便定位）
             _safe_add(stdscr, y, 5 + _disp_width(disp) + 1, str(p.parent), w2,
                       "dim", attr)
+        _safe_add(stdscr, h - 3, 2,
+                  _clip(str(files[sel]), max(0, w2 - 6), tail=True), w2, "info")
         _safe_add(stdscr, h - 2, 2,
-                  " ↑/↓ 滚动 · Esc/Q 返回主菜单 ", w2, "dim", curses.A_REVERSE)
+                  " ↑/↓ 滚动 · Enter/O Finder 中定位 · Esc/Q 返回主菜单 ",
+                  w2, "dim", curses.A_REVERSE)
         stdscr.refresh()
         k = stdscr.getch()
         if k in (27, ord("q"), ord("Q")):
@@ -775,6 +791,16 @@ def _wizard_search(stdscr, w: int) -> None:
             sel = (sel - 1) % max(1, n)
         elif k in (curses.KEY_DOWN, ord("j")):
             sel = (sel + 1) % max(1, n)
+        elif k in (10, curses.KEY_ENTER, ord("\r"), ord("o"), ord("O")):
+            if sys.platform != "darwin":
+                _flash(stdscr, "Finder 定位仅支持 macOS", "warn")
+                continue
+            import subprocess  # noqa: PLC0415
+            try:
+                subprocess.Popen(["open", "-R", str(files[sel])],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError as exc:
+                _flash(stdscr, f"无法打开 Finder：{exc}", "bad")
 
 
 def _flash(stdscr, msg: str, color: str = "bad") -> None:
