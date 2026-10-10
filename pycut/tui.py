@@ -29,7 +29,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, cli
+from . import __version__, cli, config
 from .core.scan import count_videos_recursive, list_dirs, list_videos_flat
 
 # ---------------------------------------------------------------------------
@@ -827,6 +827,17 @@ def _wizard_dedup(stdscr, w: int) -> list[list[str]] | None:
             return [["dedup", "--src-dir", d]]
 
 
+def _count_sticker_images(folder: Path) -> int:
+    """Count available stickers for the existing montage overlay."""
+    if not folder.is_dir():
+        return 0
+    try:
+        return sum(p.is_file() and p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")
+                   for p in folder.rglob("*"))
+    except OSError:
+        return 0
+
+
 def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     """Five existing steps with reversible navigation and preserved selection.
 
@@ -842,6 +853,9 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     clip_count = 0
     pip_count = 0
     selection: tuple[list[Path], dict[str, int]] | None = None
+    sticker_dir = Path(config.MONTAGE_STICKER_DIR)
+    sticker_count = 0
+    sticker_prompted = False
     step = 0
 
     while True:
@@ -864,7 +878,9 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
                     continue
             elif step == 1:
                 pip_count = count_videos_recursive(selected)
-                # A blank PiP directory is supported by the original pipeline.
+                if pip_count == 0:
+                    _flash(stdscr, f"画中画目录没有视频：{selected}", "bad")
+                    continue
             else:
                 files = list_videos_flat(selected)
                 if not files:
@@ -892,6 +908,21 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
 
         assert selection is not None
         assert all(d is not None for d in directories)
+        # Keep the existing reversible five-step navigation; the optional
+        # sticker directory is prompted at final review only when needed.
+        if not sticker_prompted:
+            sticker_count = _count_sticker_images(sticker_dir)
+            if sticker_count == 0:
+                chosen_dir = _pick_dir(
+                    stdscr, "混剪 · 选择贴纸目录（Esc 不叠贴纸）", None)
+                if chosen_dir is not None:
+                    candidate = Path(chosen_dir)
+                    sticker_count = _count_sticker_images(candidate)
+                    if sticker_count == 0:
+                        _flash(stdscr, f"目录没有 PNG/JPG/WEBP 贴纸：{candidate}", "bad")
+                        continue
+                    sticker_dir = candidate
+            sticker_prompted = True
         clip, pip, src_dir = directories
         chosen, fission = selection
         total_out = sum(fission[str(f)] for f in chosen)
@@ -899,6 +930,8 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
         lines = [
             ("片段库", f"{clip}（{clip_count} 个）"),
             ("画中画", f"{pip}（{pip_count} 个）"),
+            ("贴纸", f"{sticker_dir}（{sticker_count} 张）"
+             if sticker_count else "未配置（不叠贴纸）"),
             ("爆款视频", f"{len(chosen)} 支 × 裂变 = {total_out} 支成片"),
             ("输出目录", out_dir),
         ]
@@ -911,11 +944,16 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
         # Preserve the existing argv/CLI contract exactly.
         argv_list: list[list[str]] = []
         for src in chosen:
-            argv_list.append([
+            argv = [
                 "montage", "--source", str(src), "--clip-dir", clip,
                 "--dedup-dir", pip, "--out-dir", out_dir,
-                "--fission", str(fission[str(src)]),
-            ])
+            ]
+            if sticker_count:
+                argv.extend(["--sticker-dir", str(sticker_dir)])
+            else:
+                argv.append("--no-sticker")
+            argv.extend(["--fission", str(fission[str(src)])])
+            argv_list.append(argv)
         return argv_list
 
 

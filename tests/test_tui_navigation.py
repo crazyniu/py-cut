@@ -150,6 +150,7 @@ class NavigationTests(unittest.TestCase):
              mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
              mock.patch.object(tui, "_multi_select",
                                return_value=selection) as multiselect, \
+             mock.patch.object(tui, "_count_sticker_images", return_value=1), \
              mock.patch.object(tui, "_confirm", side_effect=[False, True]):
             commands = tui._wizard_montage(Screen([]), 100)
         self.assertEqual(len(commands), 1)
@@ -169,6 +170,7 @@ class NavigationTests(unittest.TestCase):
              mock.patch.object(tui, "count_videos_recursive", return_value=1), \
              mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
              mock.patch.object(tui, "_multi_select", return_value=selection), \
+             mock.patch.object(tui, "_count_sticker_images", return_value=1), \
              mock.patch.object(tui, "_confirm", return_value=True):
             commands = tui._wizard_montage(Screen([]), 100)
         self.assertEqual(picker.call_count, 5)

@@ -534,7 +534,8 @@ def _write_concat_list(files: list[Path]) -> Path:
 
 def _seg_cmd(src: Path, offset: float, take: float, out: Path,
              canvas=None, fps=None, crf: str = CRF_DEFAULT,
-             mirror: bool = False, speed: float = 1.0) -> list[str]:
+             mirror: bool = False, speed: float = 1.0,
+             frames: int | None = None) -> list[str]:
     """单段截取：双 seek（输入侧粗 + 输出侧精）+ 适配画布 + 静音 + libx264。
 
     `mirror` / `speed` 是可选的画面扰动（由调用方按 seed 决定，保持参数默认值即
@@ -559,12 +560,16 @@ def _seg_cmd(src: Path, offset: float, take: float, out: Path,
         pre.append("hflip")
     if pre:
         chain = ",".join(pre + [chain])
+    if frames is not None:
+        # 累计舍入的帧预算可避免多片拼接后产生每段一帧的时长漂移。
+        chain += ",tpad=stop_mode=clone:stop_duration=1"
     return [
         FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
         "-ss", f"{coarse:.3f}", "-i", str(src),   # 输入侧粗 seek（回退 COARSE_BACKOFF）
         "-ss", f"{fine:.3f}",                      # 输出侧精 seek 补回来
         "-t", f"{max(0.0, float(take)):.3f}",
         "-vf", chain,
+        *([] if frames is None else ["-frames:v", str(frames)]),
         *_enc_args(out, fps, crf),
     ]
 
@@ -585,6 +590,9 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
         return []
 
     segs: list[Path] = []
+    planned_seconds = 0.0
+    assigned_frames = 0
+    frame_rate = float(fps or config.MONTAGE_FPS)
     for i, d in enumerate(items):
         it = d.get("item")
         if it is None or d.get("take", 0.0) <= 0:
@@ -594,11 +602,15 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
         # 关键：`take` 是**成片里该段占多长**；加速后源素材要取更久，
         # 否则 setpts 压缩后段长会不足，成片总时长就会短于目标。
         src_take = float(d["take"]) * (speed if speed > 1.0 else 1.0)
+        planned_seconds += float(d["take"])
+        cumulative_frames = round(planned_seconds * frame_rate)
+        frames = max(1, cumulative_frames - assigned_frames)
+        assigned_frames = cumulative_frames
         timeout = min(ENC_TIMEOUT_MAX,
                       max(ENC_TIMEOUT_MIN, int(src_take * ENC_TIMEOUT_PER_SEC)))
         rc, _o, err = run_cmd(
             _seg_cmd(it.path, d["offset"], src_take, seg, canvas, fps, crf,
-                     mirror=bool(d.get("mirror")), speed=speed),
+                     mirror=bool(d.get("mirror")), speed=speed, frames=frames),
             timeout=timeout)
         if rc != 0 or not seg.is_file() or seg.stat().st_size < 1024:
             msg = err.strip().splitlines()[-1] if err.strip() else "无输出"
@@ -606,7 +618,7 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
             continue
 
         # 贴纸叠加：段级叠加（拼接后再加就分不清哪段配哪张了）。
-        # items 里带 "sticker" 才叠；失败保留无贴纸版本，不影响整批。
+        # items 里带 "sticker" 才叠；明确选择后叠加失败不得静默发布无贴纸成片。
         stk = d.get("sticker")
         if stk:
             from .montage_sticker import apply_sticker_to_file  # noqa: PLC0415
@@ -616,8 +628,12 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
                     scale_ratio=config.MONTAGE_STICKER_SCALE,
                     margin_ratio=config.MONTAGE_STICKER_MARGIN,
                     opacity=config.MONTAGE_STICKER_OPACITY,
-                    seed=i * 7919 + 13, chance=1.0):
+                    seed=i * 7919 + 13, chance=1.0,
+                    sticker=Path(stk)):
                 d["sticker_applied"] = True
+            else:
+                log(f"  [段{i}] 已指定贴纸但叠加失败: {stk}")
+                return []
         # 段间亮度淡化在标准化和段级贴纸完成后执行，原片段不重叠也不裁短。
         if seam_fade > 0 and len(items) > 1:
             faded = None

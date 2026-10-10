@@ -125,7 +125,8 @@ class TUIIntegrationTests(unittest.TestCase):
         selection = ([first, second], {str(first): 12, str(second): 2})
         with mock.patch.object(tui, "_pick_dir",
                                side_effect=["/tmp/clips", "/tmp/pip", "/tmp/video"]), \
-             mock.patch.object(tui, "count_videos_recursive", side_effect=[4, 0]), \
+             mock.patch.object(tui, "count_videos_recursive", side_effect=[4, 3]), \
+             mock.patch.object(tui, "_count_sticker_images", return_value=1), \
              mock.patch.object(tui, "list_videos_flat", return_value=[first, second]), \
              mock.patch.object(tui, "_multi_select", return_value=selection), \
              mock.patch.object(tui, "_confirm", return_value=True):
@@ -138,6 +139,27 @@ class TUIIntegrationTests(unittest.TestCase):
             self.assertEqual(args.clip_dir, "/tmp/clips")
             self.assertEqual(args.dedup_dir, "/tmp/pip")
             self.assertEqual(args.fission, count)
+
+    def test_montage_exposes_existing_custom_sticker_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            sticker_root = Path(temp) / "stickers"
+            sticker_root.mkdir()
+            (sticker_root / "logo.png").write_bytes(b"placeholder")
+            video = Path("/tmp/video/one.mp4")
+            selection = ([video], {str(video): 1})
+            with mock.patch.object(tui, "_pick_dir", side_effect=[
+                     "/tmp/clips", "/tmp/pip", "/tmp/video", str(sticker_root)]), \
+                 mock.patch.object(tui, "count_videos_recursive", return_value=2), \
+                 mock.patch.object(tui, "_count_sticker_images",
+                                   side_effect=[0, 1]), \
+                 mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
+                 mock.patch.object(tui, "_multi_select", return_value=selection), \
+                 mock.patch.object(tui, "_confirm", return_value=True):
+                commands = tui._wizard_montage(FakeScreen(), 100)
+        self.assertEqual(len(commands), 1)
+        args = cli.build_parser().parse_args(commands[0])
+        self.assertEqual(args.sticker_dir, str(sticker_root))
+        self.assertFalse(args.no_sticker)
 
     def test_montage_cancel_before_confirm_never_builds_jobs(self):
         with mock.patch.object(tui, "_pick_dir", side_effect=["/tmp/clips", None, None]), \

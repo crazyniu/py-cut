@@ -245,7 +245,7 @@ MONTAGE_SILENCE_MIN_DUR = 0.35      # 静音最短持续秒数，短于此不算
 MONTAGE_SEG_MIN_DUR = 0.8
 # 语音段最长保留时长（超过则截断，防止一句长话铺满全屏）
 MONTAGE_SEG_MAX_DUR = 8.0
-MONTAGE_TARGET_FILL_RATIO = 0.98    # 拼接后目标时长 = 基准时长 × 该系数（留一点余量补齐）
+MONTAGE_TARGET_FILL_RATIO = 1.0     # 成片必须与基准视频等长；不能静默缩短 2%
 
 # 片段挑选（步骤B）
 MONTAGE_CLIP_MIN_DUR = 1.2          # 太短的片段不用（会闪）
