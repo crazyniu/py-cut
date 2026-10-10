@@ -390,5 +390,82 @@ class CoreSafetyTests(unittest.TestCase):
             self.assertFalse(ass_path.exists())
 
 
+    def test_montage_dedup_compares_full_files_on_partial_hash_collision(self):
+        from pycut.core import montage_clips
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            chunk = 1 << 20
+            first = root / "first.mp4"
+            second = root / "second.mp4"
+            copy = root / "copy.mp4"
+            first.write_bytes(b"A" * chunk + b"B" * 128 + b"Z" * chunk)
+            second.write_bytes(b"A" * chunk + b"C" * 128 + b"Z" * chunk)
+            copy.write_bytes(first.read_bytes())
+            entries = [
+                montage_clips.ClipItem(
+                    path=p, duration=5.0, width=720, height=1280, has_audio=False)
+                for p in (first, second, copy)
+            ]
+            self.assertEqual(
+                montage_clips._content_sig(first),
+                montage_clips._content_sig(second),
+                "test inputs must deliberately collide on sampled head/tail",
+            )
+            unique, count = montage_clips._drop_duplicates(entries)
+            self.assertEqual(count, 1)
+            self.assertEqual({v.path for v in unique}, {first, second})
+
+    def test_montage_aborts_if_any_clip_encoding_is_missing(self):
+        from pycut.core import montage_clips
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = root / "out.mp4"
+            input_rows = [
+                {"item": object(), "offset": 0.0, "take": 2.0},
+                {"item": object(), "offset": 0.0, "take": 3.0},
+            ]
+            with mock.patch.object(montage_clips, "_normalize_segments",
+                                   return_value=[root / "0000.mp4"]), \
+                 mock.patch.object(montage_clips, "_write_concat_list") as write_list, \
+                 mock.patch.object(montage_clips, "log"):
+                cmd, _listing = montage_clips.build_concat_cmd(
+                    input_rows, out, (720, 1280), 30)
+            self.assertEqual(cmd, [])
+            write_list.assert_not_called()
+            self.assertFalse(out.exists())
+
+    def test_montage_truncated_concat_must_not_replace_existing_video(self):
+        from pycut.core import montage_clips
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = root / "video.mp4"
+            out.write_bytes(b"older" * 300)
+            concat_list = root / "concat.txt"
+            concat_list.write_text("file 'segment.mp4'\n", encoding="utf-8")
+            inputs = [{"item": object(), "take": 2.0},
+                      {"item": object(), "take": 3.0}]
+            def encode(_argv, timeout):
+                staged = out.with_name(
+                    f"{out.stem}.tmp_{__import__('os').getpid()}{out.suffix}")
+                staged.write_bytes(b"new" * 600)
+                return 0, "", ""
+            with mock.patch.object(montage_clips, "build_concat_cmd",
+                                   return_value=(["fake-ffmpeg"], concat_list)), \
+                 mock.patch.object(montage_clips, "run_cmd", side_effect=encode), \
+                 mock.patch.object(montage_clips, "_probe_duration",
+                                   return_value=2.25), \
+                 mock.patch.object(montage_clips, "_seg_dir",
+                                   return_value=root / "segment_tmp"), \
+                 mock.patch.object(montage_clips, "log"):
+                result = montage_clips.concat_clips(
+                    inputs, out, canvas=(720, 1280), fps=30)
+            self.assertFalse(result["ok"])
+            self.assertIn("拼接时长异常", result["error"])
+            self.assertEqual(out.read_bytes(), b"older" * 300)
+            self.assertFalse(concat_list.exists())
+            self.assertFalse(out.with_name(
+                f"{out.stem}.tmp_{__import__('os').getpid()}{out.suffix}").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
