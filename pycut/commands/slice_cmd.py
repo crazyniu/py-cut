@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 from .. import config
@@ -72,6 +73,15 @@ def _pick_files(args: argparse.Namespace) -> list:
     return files
 
 
+def _colliding_stems(files: list[Path]) -> list[list[Path]]:
+    """不同输入绝不能在同名输出目录互相覆盖（含 macOS 大小写不敏感目录）。"""
+    by_stem: dict[str, list[Path]] = {}
+    for path in files:
+        name = unicodedata.normalize("NFC", path.stem).casefold()
+        by_stem.setdefault(name, []).append(path)
+    return [group for group in by_stem.values() if len(group) > 1]
+
+
 def run(args: argparse.Namespace) -> int:
     install_signal_handlers()
     reset_stop()
@@ -95,6 +105,15 @@ def run(args: argparse.Namespace) -> int:
     if not files:
         log("[错误] 所选范围内没有可处理的 MP4 视频")
         return 1
+
+    collisions = _colliding_stems(files)
+    if collisions:
+        log("[错误] 以下源视频文件名重复，都会写入相同的切片输出目录：")
+        for group in collisions[:5]:
+            for path in group:
+                log(f"  {path}")
+        log("为防止不同视频切片互相覆盖，本次任务未开始。请先调整重复源文件名。")
+        return 2
 
     llm = make_llm(args.gateway, args.llm_url, args.llm_key, args.llm_model,
                    enabled=not args.no_llm,
@@ -177,7 +196,10 @@ def _summary(results, llm, manifest, t_detect, t_enc, t_all) -> int:
     log(f"{'LLM 调用':<12}{llm.calls:>10}  {llm_note}")
     log(f"{'清单':<12}{manifest.csv_path}")
     log("=" * 62)
-    # 任何切割 / 字幕失败都不能被误报成成功，避免 TUI 继续执行后续去重。
+    # 任何切割、字幕失败或用户中断都不能误报成功，以免继续后续去重。
+    if _stopped():
+        log("[中断] 任务未完整完成，退出码 130")
+        return 130
     sub_failed = sum(r.sub_fail for r in results)
     if tot_fail or sub_failed:
         log(f"[失败] 切片错误 {tot_fail}，字幕处理错误 {sub_failed}")
