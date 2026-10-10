@@ -1,6 +1,6 @@
-# dedup —— 视频去重（过平台查重）需求与技术方��
+# dedup —— 视频去重需求与技术方案
 
-> **状态：规划中（本期只出需求，不开发代码）**
+> 本文仅记录长期需求、架构与已知技术边界，实时任务/问题/验收由 [GitHub Issues #19](https://github.com/natefox2017/py-cut/issues/19) 跟踪，不在此记录开发状态。
 > 定位：一个**独立子命令**，对已有视频/切片做技术层扰动，降低被抖音、视频号等平台
 > 判为「重复内容」而被限流/降权的概率。
 > 本文是所有去重相关技术方案的**唯一汇总处**，开发时按本文落地。
@@ -248,7 +248,7 @@ PSNR 掉到 13~25dB 属正常，画面观感没问题（已抽帧人工确认）
 
 ---
 
-## 7. 命令与交互设计（规划）
+## 7. 命令与交互设计
 
 ```bash
 # 对单个切片去重（标准档）
@@ -273,7 +273,7 @@ TUI 中（引导式向导）：选目录 → 报视频数 → 确认执行；处
 
 ---
 
-## 8. 代码落地时的目录规划（未来开发用）
+## 8. 模块架构与扩展接口
 
 ```
 pycut/
@@ -291,37 +291,27 @@ pycut/
 
 ---
 
-## 9. 开发分期
+## 9. 能力设计边界和需求引用
 
-| 阶段 | 内容 |
-|---|---|
-| **P0** | M1 容器层、M3 色彩像素层、M2 几何层、M6 音频变调、seed 随机化、pHash/PSNR 自检、JSON 报告、CLI+TUI 入口 |
-| **P1** | M5 结构层（转场/贴纸/画中画/边框/分屏）、M4 时间层（变速/关键帧）、M7 可见水印（delogo/removelogo） |
-| **P2** | M7 暗水印检测与破坏、M8 文本层改写、VMAF 画质门禁、账号矩阵参数表 |
+第 3 节的八大模块是产品目标，不代表已实现或已验收。命令行为必须以代码为准；
+具体交付计划、负责人、Todo、PR 和测试状态只在 [GitHub Issues](https://github.com/natefox2017/py-cut/issues) 中维护。
 
-### 当前实现状态（对齐上方分期，2026-10-10 核对）
+### 技术契约
 
-| 模块 | 已实现 | 未实现 |
-|---|---|---|
-| M1 容器 | 重编码(CRF)、清元数据、自定义 encoder tag、非标分辨率、帧率微调、GOP 随机 | 码率浮动（只用了 CRF） |
-| M2 几何 | 边缘微裁、微缩放、微旋转、水平镜像 | 梯形变形（**已停用**，见第 6 节）、Ken Burns |
-| M3 像素 | 亮度/对比度/饱和度、色相、通道增益、微噪、微锐化 | — |
-| M4 时间 | 变速（含变速时长的时长容差放宽）、帧率微调 | 抽帧、关键帧重排、片段倒放 |
-| M5 结构 | 模糊边框填充、角标色块、画中画、**贴纸**（半透明+边缘羽化） | 转场 xfade、分屏/拼屏、片头片尾差异化 |
-| M6 音频 | 变调（保时长）、变速（音画同步） | 换 BGM、叠环境音、重新配音 |
-| M7 水印 | 可见水印 `delogo` | removelogo(mask)、暗水印检测与破坏 |
-| M8 文本 | — | OCR/ASR 文案改写（需接 ASR/OCR，已知是九源仙红线审核点） |
+- **M1 容器**：新增码率变化必须保留原有 CRF 默认；按 seed 可复现，不应降低成片完整性。实现需求 [#21](https://github.com/natefox2017/py-cut/issues/21)。
+- **M2 几何**：动态 Ken Burns 应保持正确画幅，透视变形仍禁用；需求 [#22](https://github.com/natefox2017/py-cut/issues/22)。
+- **M4 时间**：抽帧、重排、倒放需处理时间戳、时长、音轨同步；需求 [#23](https://github.com/natefox2017/py-cut/issues/23)。
+- **M5 结构**：xfade/分屏/片头片尾需对输入段、时长、失败回滚有明确规则；需求 [#24](https://github.com/natefox2017/py-cut/issues/24)。
+- **M6 音频**：新 BGM、环境音与用户配音须按明确的输入授权和流映射规则工作；需求 [#25](https://github.com/natefox2017/py-cut/issues/25)。
+- **M7 水印**：可见 mask 修复需验证滤镜与素材授权 [#26](https://github.com/natefox2017/py-cut/issues/26)；暗水印先做可重复、可检测的研究 [#27](https://github.com/natefox2017/py-cut/issues/27)，不得直接保证效果。
+- **M8 文本**：OCR/ASR 的改写候选必须带来源和人工审核，需求 [#30](https://github.com/natefox2017/py-cut/issues/30)。
+- **自检/配置**：可选 VMAF 质量门禁与合法值标定 [#31](https://github.com/natefox2017/py-cut/issues/31)；多账号本地配置的优先级与安全边界 [#32](https://github.com/natefox2017/py-cut/issues/32)。
 
-实际会生成的滤镜共 16 个：
-`rotate crop scale eq hue colorchannelmixer noise unsharp fps setpts delogo drawbox overlay gblur split boxblur geq colorchannelmixer(投影)`
-+ 音频 `asetrate atempo`。
-
-> ⚠️ **本表需与实现同步维护**。新增/停用某项能力时必须回来更新这张表，
-> 否则文档会变成"看起来都有、实际没有"的承诺清单。
-> 另见 [`ISSUES.md`](ISSUES.md) §1.1（能力缺口）与 §4（踩过的坑）。
+现有滤镜实现的接口与相互依赖需通过 `pycut/core/dedup.py`、
+`pycut/core/dedup_presets.py`、`pycut/core/fingerprint.py` 与真实 ffmpeg 探测核对，
+不应从模块需求表推断当前代码一定会调用哪种滤镜。
 
 ---
-
 ## 10. 风险与红线
 
 1. **不承诺 100% 过审**：平台模型持续升级，本方案目标是降低相似度。
