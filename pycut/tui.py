@@ -13,8 +13,8 @@
                     多选爆款视频 + 每个裂变数量 → 确认执行
 
 关键机制：
-  - **目录选择器**：文件系统层级浏览器，从根目录出发逐级浏览，进入子目录 /
-    返回上级 / 直接选当前目录，自动过滤系统级目录与隐藏目录，不要求手敲路径。
+  - **目录选择器**：macOS 使用系统原生文件夹选择对话框；其他桌面使用开源 Tk 原生目录选择。
+    操作系统负责浏览、快捷位置和挂载盘，不再自行维护目录树。
   - **递归扫描**：选定目录后用 `core/scan` 递归统计视频数并展示（最多下探 3 层）。
   - **多选**（混剪爆款视频）：空格勾选/取消，数字输入裂变数量。
   - 最终生成 argv 交给 `cli.main` 执行（与命令行完全同源，无漂移）。
@@ -26,12 +26,12 @@ from __future__ import annotations
 import curses
 import curses.textpad  # noqa: F401  必须显式导入：不会随 import curses 自动加载
 import os
-import shlex
 import sys
 from pathlib import Path
 
 from . import __version__, cli, config
-from .core.scan import count_videos_recursive, list_dirs, list_videos_flat
+from .core.scan import count_videos_recursive, list_videos_flat
+from .folder_picker import choose_directory
 
 # ---------------------------------------------------------------------------
 # 配色主题（Claude Code 风格：深底 + 琥珀强调）
@@ -388,235 +388,44 @@ def _prompt_text(stdscr, y, x, w, title, default="", *, validate=None) -> str | 
 
 
 
-def _mount_directory(home: Path) -> Path:
-    """Directory containing mounted disks; macOS uses /Volumes."""
-    if sys.platform == "darwin":
-        return Path("/Volumes")
-    candidates = (
-        Path("/run/media") / home.name,
-        Path("/media") / home.name,
-        Path("/run/media"),
-        Path("/media"),
-        Path("/mnt"),
-    )
-    return next((p for p in candidates if p.is_dir()), Path("/media"))
-
-
-def _resolve_directory_path(raw: str, current: Path) -> Path:
-    """Validate pasted/typed paths without executing shell commands.
-
-    Accept native paths, ~ and environment variables, and the quotes or
-    escaped spaces produced when dragging a folder into a macOS terminal.
-    Relative paths are interpreted within the currently browsed directory.
-    """
-    value = raw.strip()
-    if not value:
-        raise ValueError("请输入文件夹路径")
-    candidates = [value]
-    try:
-        words = shlex.split(value)
-    except ValueError:
-        words = []
-    if len(words) == 1 and words[0] != value:
-        candidates.append(words[0])
-
-    home = Path.home()
-    # A Finder-style path pasted without its first slash (e.g. "Users/apple")
-    # looks relative, but from /Users/apple it would wrongly become
-    # /Users/apple/Users/apple. Prefer the genuine home prefix when it exists.
-    try:
-        home_from_root = home.relative_to(home.anchor)
-    except ValueError:
-        home_from_root = Path()
-    for candidate in candidates:
-        expanded = Path(os.path.expandvars(candidate)).expanduser()
-        folders: list[Path] = []
-        if not expanded.is_absolute() and not candidate.startswith(("./", "../")):
-            prefix = home_from_root.parts
-            if prefix and expanded.parts[:len(prefix)] == prefix:
-                folders.append(Path(home.anchor) / expanded)
-        folders.append(expanded if expanded.is_absolute() else current / expanded)
-        for folder in folders:
-            try:
-                if folder.is_dir():
-                    return folder
-            except OSError:
-                continue
-    # A file should not silently be treated as a usable input directory.
-    expanded = Path(os.path.expandvars(candidates[-1])).expanduser()
-    last = expanded if expanded.is_absolute() else current / expanded
-    try:
-        if last.is_file():
-            raise ValueError("路径指向文件，请选择文件夹")
-    except OSError:
-        pass
-    raise ValueError("目录不存在或无权访问，请检查路径")
-
-
-# ---------------------------------------------------------------------------
-# 目录选择器（文件系统层级浏览器）
-# ---------------------------------------------------------------------------
 def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
-    """Browse folders like a regular file picker.
+    """Choose ONE folder using the platform's established file dialog.
 
-    Enter opens a folder (or confirms the last "use this folder" row);
-    Backspace/Left goes to its parent, Esc goes back to the wizard.
-    Space confirms the currently displayed directory. The default is home,
-    with ~ and / for home/root, 1-5 for common locations, P for pasted paths.
+    Mac: system-native directory chooser (with disks, sidebar and Cmd+Shift+G).
+    Other desktops: open-source Tk native directory chooser.
+    No hand-maintained filesystem tree, path concatenation or shortcut keys.
+    Esc/Cancel returns to the previous wizard step without starting work.
     """
     home = Path.home()
-    cur = Path(start).expanduser() if start is not None else home
-    if not cur.is_dir():
-        cur = home if home.is_dir() else Path("/")
+    initial = Path(start).expanduser() if start is not None else home
+    try:
+        if not initial.is_dir():
+            initial = home
+    except OSError:
+        initial = home
 
-    browse_error = ""
+    stdscr.erase()
+    _frame(stdscr, title, "请在系统文件夹选择窗口中选择目录；取消可返回上一页")
+    stdscr.refresh()
 
-    def _entries() -> list[tuple[str, str, Path]]:
-        nonlocal browse_error
-        browse_error = ""
-        items: list[tuple[str, str, Path]] = []
-        if cur != cur.parent:
-            items.append(("parent", "../  上一级", cur.parent))
-        try:
-            dirs = list_dirs(cur, raise_on_error=True)
-        except OSError as exc:
-            dirs = []
-            browse_error = f"无法读取子目录：{exc.strerror or type(exc).__name__}"
-        items.extend(("directory", f"{p.name}/", p) for p in dirs)
-        items.append(("select", "使用当前文件夹", cur))
-        return items
+    try:
+        selected = choose_directory(title, initial)
+    except (OSError, RuntimeError) as exc:
+        _flash(stdscr, f"打开系统文件夹选择窗口失败：{exc}", "bad")
+        return None
 
-    entries = _entries()
-    message = ""
-    # Initial opening favours a child folder. On returning from a confirmation
-    # page, focus the already chosen directory instead of entering it again.
-    sel = (len(entries) - 1 if start is not None else
-           next((i for i, item in enumerate(entries)
-                 if item[0] == "directory"), len(entries) - 1))
+    if not selected:
+        return None
 
-    def _change_dir(target: Path, *, focus_child: Path | None = None) -> bool:
-        nonlocal cur, entries, sel
-        try:
-            if not target.is_dir():
-                return False
-        except OSError:
-            return False
-        cur = target
-        entries = _entries()
-        # After entering a directory, Enter a second time selects it.
-        # After moving up, highlight the child we just left.
-        sel = next((i for i, (kind, _label, path) in enumerate(entries)
-                    if kind == "directory" and path == focus_child),
-                   len(entries) - 1)
-        return True
-
-    while True:
-        h, w = stdscr.getmaxyx()
-        if _small_screen(stdscr):
-            if stdscr.getch() in (27, ord("q"), ord("Q")):
-                return None
-            continue
-        stdscr.erase()
-        _frame(stdscr, title, str(cur))
-
-        sel = min(sel, len(entries) - 1)
-        max_rows = max(1, h - 9)
-        top = min(max(0, sel - max_rows + 1), max(0, len(entries) - max_rows))
-        for i in range(top, min(len(entries), top + max_rows)):
-            kind, label, _target = entries[i]
-            y = 5 + i - top
-            active = i == sel
-            attr = curses.A_BOLD if active else curses.A_NORMAL
-            icon = "✓" if kind == "select" else "↖" if kind == "parent" else "▸"
-            color = "accent" if active else "good" if kind == "select" else "dim" if kind == "parent" else "text"
-            _safe_add(stdscr, y, 3, "❯" if active else " ", w,
-                      "accent" if active else "muted", attr)
-            _safe_add(stdscr, y, 5, icon, w, color, attr)
-            _safe_add(stdscr, y, 8, _ellipsize(label, w - 12, tail=False), w,
-                      color, attr)
-
-        shortcuts = ("1 主目录   2 桌面   3 文档   4 下载   5 挂载磁盘   P 粘贴路径"
-                     if w >= 86 else
-                     "1主目录  2桌面  3文档  4下载  5磁盘  P路径")
-        _safe_add(stdscr, h - 4, 2, shortcuts, w, "info")
-        count = sum(kind == "directory" for kind, _, _ in entries)
-        home_parts = Path(*home.parts[1:])
-        repeated_home = home / home_parts
-        duplicated = (len(home_parts.parts) >= 2 and
-                      (cur == repeated_home or repeated_home in cur.parents))
-        status = (message or browse_error or
-                  ("当前路径疑似重复用户目录 · 按 1 返回主目录"
-                   if duplicated else
-                   "当前目录没有可见的子文件夹 · 按 1 返回主目录"
-                   if count == 0 else
-                   f"子目录 {count} 个 · {sel + 1}/{len(entries)}"))
-        _safe_add(stdscr, h - 3, 2, status, w,
-                  "warn" if browse_error or duplicated else
-                  "bad" if message else "dim")
-        _footer(stdscr,
-                "↑↓ 移动 · ← 上级 · →/Enter 打开 · Space 选择当前 · Esc 返回",
-                "↑↓移动  ←上级  →打开  Space选目录  Esc返回")
-        stdscr.refresh()
-
-        k = stdscr.getch()
-        if k in (27, ord("q"), ord("Q")):
-            return None
-        if k in (ord("1"), ord("2"), ord("3"), ord("4"), ord("5")):
-            shortcuts = {
-                ord("1"): home,
-                ord("2"): home / "Desktop",
-                ord("3"): home / "Documents",
-                ord("4"): home / "Downloads",
-                ord("5"): _mount_directory(home),
-            }
-            target = shortcuts[k]
-            message = "" if _change_dir(target) else f"目录不存在或无权访问：{target}"
-            continue
-        if k in (ord("p"), ord("P")):
-            chosen: Path | None = None
-
-            def _validate(raw: str) -> str | None:
-                nonlocal chosen
-                try:
-                    chosen = _resolve_directory_path(raw, cur)
-                except ValueError as exc:
-                    return str(exc)
-                return None
-
-            value = _prompt_text(stdscr, h - 7, 2, w, "粘贴目录路径",
-                                 validate=_validate)
-            if value is not None and chosen is not None:
-                message = "" if _change_dir(chosen) else "目录已失效，请重新选择"
-            continue
-        message = ""
-        if k in (curses.KEY_UP, ord("k")):
-            sel = max(0, sel - 1)
-        elif k in (curses.KEY_DOWN, ord("j")):
-            sel = min(len(entries) - 1, sel + 1)
-        elif k in (curses.KEY_LEFT, curses.KEY_BACKSPACE, 127, 8, ord("h")):
-            if cur != cur.parent:
-                old = cur
-                _change_dir(cur.parent, focus_child=old)
-        elif k == ord("~"):
-            _change_dir(home)
-        elif k == ord("/"):
-            _change_dir(Path("/"))
-        elif k == ord(" "):
-            return str(cur)
-        elif k in (10, curses.KEY_ENTER, ord("\r"), curses.KEY_RIGHT, ord("l")):
-            kind, _label, target = entries[sel]
-            if kind == "select":
-                return str(cur)
-            if kind == "parent":
-                if k not in (curses.KEY_RIGHT, ord("l")):
-                    old = cur
-                    _change_dir(target, focus_child=old)
-            else:
-                _change_dir(target)
-        elif k in (curses.KEY_PPAGE,):
-            sel = max(0, sel - max_rows)
-        elif k in (curses.KEY_NPAGE,):
-            sel = min(len(entries) - 1, sel + max_rows)
+    folder = Path(selected).expanduser()
+    try:
+        valid = folder.is_absolute() and folder.is_dir()
+    except OSError:
+        valid = False
+    if not valid:
+        _flash(stdscr, "所选目录不存在、已卸载或无权限访问，请重新选择", "bad")
+        return None
+    return str(folder)
 
 
 # ---------------------------------------------------------------------------
