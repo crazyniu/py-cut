@@ -390,18 +390,52 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
 
     parts = [f"[0:v]{head}[bg]"]
     cur = "bg"
+    # --- 四角阴影：尺寸不变，只让边缘融进主画面 ---
+    # 实测直接 overlay 是生硬矩形块。这里在 PiP 自身上加一圈渐变 alpha
+    # （边缘与四角最透明、中心不透明）+ 一层向外扩散的黑色投影，
+    # 让它看起来「浮」在主画面上而不是「贴」上去。
+    # 羽化带取画中画短边的 22%（太窄看不出融合，太宽会吃掉画面内容）。
+    fade = max(6, int(pip_w * (config.MONTAGE_PIP_FEATHER or 0.22)))
+    sh = max(2, int(pip_w * (config.MONTAGE_PIP_SHADOW or 0.035)))   # 投影扩散
+    # 边缘权重：四边到边距的 min 连乘（中心=1，边缘=0，四角两个方向都小→更透明）
+    fw = (f"min(1\\,min(X\\,W-1-X)/{fade})*min(1\\,min(Y\\,H-1-Y)/{fade})")
     for i, e in enumerate(entries):
         start = e["start"]
         # enable 的结束点同样截断：宁可区间略短，也不能让 overlay 在素材
         # 已播完的瞬间还开着（那正是黑屏出现的时刻）。
         end = start + min(e["duration"], e["duration"] - 0.001)
+        # PiP 本体：四角羽化的 alpha（尺寸不变，只改边缘透明度）。
+        # setpts=PTS-STARTPTS+起点**必须保留**：overlay 靠主流时间戳去次流队列
+        # 配对，不平移时间轴的话，等 enable 打开时次流早已播完 -> 黑屏/错位。
         parts.append(
-            f"[{i + 1}:v]fps={fps},scale={pip_w}:-2,setsar=1,format=yuva420p,"
-            f"setpts=PTS-STARTPTS+{_ms(start)}/TB[pp{i}]")
+            f"[{i + 1}:v]fps={fps},scale={pip_w}:-2,setsar=1,format=rgba,"
+            f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
+            f"a='alpha(X,Y)*{fw}',"
+            f"setpts=PTS-STARTPTS+{_ms(start)}/TB[pp{i}]"
+        )
+        # 投影层：同一张 PiP 的纯黑副本，向外扩散 sh 像素并整体压低 alpha
         parts.append(
-            f"[{cur}][pp{i}]overlay=x=W-w-{margin_x}:y={margin_y}"
+            f"[pp{i}]split=2[pi{i}][ps{i}];"
+            # 纯黑副本 + 扩散（boxblur 产生柔和外扩）
+            f"[ps{i}]colorchannelmixer=rr=0:gg=0:bb=0,"
+            f"boxblur={sh}:1,format=rgba,"
+            f"geq=r='0':g='0':b='0':"
+            f"a='{float(config.MONTAGE_PIP_SHADOW_ALPHA or 0.45):.2f}'[sh{i}]"
+        )
+        # 把「投影」和「本体」预先合成为一路（hstack 不合适，这里用
+        # 两个 overlay 顺序作用于同一 enable 区间）：
+        # 先叠纯黑扩散副本（阴影），再叠羽化后的本体。只做一次最终 overlay，
+        # 避免两个 enable 区间重复计算带来的时序错位。
+        parts.append(
+            f"[{cur}][sh{i}]overlay=x=W-w-{margin_x}:y={margin_y}:"
+            f"enable='between(t,{_ms(start)},{_ms(end)})'"
+            f":eof_action=repeat:shortest=0[sv{i}]"
+        )
+        parts.append(
+            f"[sv{i}][pi{i}]overlay=x=W-w-{margin_x}:y={margin_y}"
             f":enable='between(t,{_ms(start)},{_ms(end)})'"
-            f":eof_action=repeat:shortest=0[v{i}]")
+            f":eof_action=repeat:shortest=0[v{i}]"
+        )
         cur = f"v{i}"
     parts.append(f"[{cur}]null[vout]")
     fcomplex = ";".join(parts)
