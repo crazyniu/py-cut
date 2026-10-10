@@ -1,5 +1,7 @@
-# pycut 运行依赖
-# 其余能力（LLM 调用、.env 解析、命令行/TUI）全部走 Python 标准库，不引第三方包。
-# 版本用 >=：本机已装 cv2 4.13.0 / numpy 2.4.6 时 pip 直接判定已满足，不会重复安装。
+# pycut runtime dependencies
 numpy>=1.26
 opencv-python>=4.8
+# Pure terminal folder dialog (Textual, MIT); no GUI/Tk dependencies
+textual-fspicker==1.0.1
+# Python on Windows has no built-in curses module
+windows-curses>=2.4; sys_platform == "win32"

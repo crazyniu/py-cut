@@ -32,17 +32,30 @@ if [ ! -f .env ]; then
   fi
 fi
 
-# ---------- 3. 依赖：缺 cv2/numpy 才装，避免每次无谓联网 ----------
+# ---------- 3. 检查核心依赖与纯 TUI 目录组件 ----------
+# CLI 只需核心视频依赖；TUI 另外使用成熟的 textual-fspicker。
+IS_TUI=0
+if [ "$#" -eq 0 ] || [ "${1:-}" = "tui" ]; then
+  IS_TUI=1
+fi
+REQUIRED_IMPORTS='import cv2, numpy'
+if [ "$IS_TUI" -eq 1 ]; then
+  REQUIRED_IMPORTS='import cv2, numpy, textual, textual_fspicker'
+fi
 if [ -f requirements.txt ]; then
-  if "$PY" -c "import cv2, numpy" >/dev/null 2>&1; then
-    echo "[pycut] 依赖已就绪 (cv2/numpy)"
+  if "$PY" -c "$REQUIRED_IMPORTS" >/dev/null 2>&1; then
+    echo '[pycut] 运行依赖已就绪'
   else
-    echo "[pycut] 安装依赖 requirements.txt ..."
-    "$PY" -m pip install -q --disable-pip-version-check -r requirements.txt \
-      || echo "[pycut] 警告: pip 安装失败，尝试继续（可能离线且已装过）"
+    echo '[pycut] 安装缺失依赖 requirements.txt ...'
+    "$PY" -m pip install -q --disable-pip-version-check -r requirements.txt || \
+      echo '[pycut] 警告: pip 安装失败，可能无网络或不可安装依赖'
   fi
 fi
-
+if [ "$IS_TUI" -eq 1 ] && ! "$PY" -c 'import textual, textual_fspicker' >/dev/null 2>&1; then
+  echo '[pycut] 错误: 缺少纯终端目录选择组件 textual-fspicker'
+  echo "        运行: $PY -m pip install -r requirements.txt"
+  exit 1
+fi
 # ---------- 4. 硬校验 cv2（没有就别往下跑，切片必然失败）----------
 if ! "$PY" -c "import cv2" >/dev/null 2>&1; then
   echo "[pycut] 错误: 当前解释器 ($PY) 没有 cv2。"

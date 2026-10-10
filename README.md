@@ -149,9 +149,10 @@ cp .env.example .env
 | 去重 | 选目录 → 报视频数 → 确认执行（只有去重） |
 | 混剪 | 选片段目录 → 选画中画目录 → 选爆款视频目录 → 多选视频+设裂变数 → 必要时选贴纸目录 → 确认执行 |
 
-- **目录选择器（使用成熟方案，不自写目录树）**：macOS 直接调用系统原生 **选择文件夹** 对话框（AppleScript `choose folder`）；其他桌面系统使用 Python 标准库提供的开源 Tk `tkinter.filedialog.askdirectory(mustexist=True)`。首次打开默认当前系统用户主目录 `Path.home()`，回到前一步会从刚才的目录重新打开。只有选择并确认已存在的目录才继续处理；取消则返回上一步，不会退出程序或执行视频处理。
-- **macOS 文件夹操作**：在系统对话框左侧位置栏打开 **桌面、文档、下载**，以及 **位置 / 外接磁盘**；可用 `⌘⇧G`（Command+Shift+G）输入或粘贴完整绝对路径，再由系统选择文件夹。默认不显示名称以 `.` 开头的隐藏目录。无需在 TUI 中使用 `1–5` / `P` 等旧的自制目录快捷键，不再有重复拼接 `/Users/apple/Users/apple` 的路径解析。
-- **依赖与异常**：macOS 使用系统自带 `osascript`，不安装任何额外 Python 包；其他图形桌面使用系统 Python 可用的 Tk。选中的目录会再次确认是否存在，以避免外接硬盘在对话框打开期间被卸载。如果系统图形对话框不可用，会在 TUI 显示明确错误并返回，不会悄悄跳到错误目录。
+- **目录选择器（全平台纯 TUI）**：使用 MIT 开源 [Textual](https://github.com/Textualize/textual) + [textual-fspicker](https://github.com/davep/textual-fspicker) 的 `SelectDirectory`，替代之前的 macOS GUI/Tk 和手写 curses 目录树。**不弹图形窗口**，全程在原终端内显示；切换时暂停原 curses 画面，选完、取消或出错都会恢复主 TUI。macOS、Linux、Windows 共用同一套选择界面。首次默认当前系统用户的 `Path.home()`，返回上一向导会从上一次目录开始。
+- **快捷目录**：目录选择页 `1` 主目录、`2` 桌面、`3` 文档、`4` 下载、`5` 挂载磁盘；macOS 使用 `/Volumes`，Linux 优先系统挂载路径，Windows 由开源组件显示磁盘列表。快捷键只改变当前浏览目录，不会自动开始视频任务；原有点前缀隐藏目录默认不显示。
+- **粘贴完整路径**：在 Textual 目录选择页按 `P` 或 `Tab` 将焦点移至路径输入框，直接粘贴绝对路径、`~/...`、相对目录或中文空格路径后按 `Enter`，只有真实存在的目录可跳转。使用 `↑↓` 浏览、`Enter` 进入子目录、`Backspace`/`←` 返回上级，在选择按钮上确认当前目录，`Esc` 取消并返回此前的向导步骤。目录选择界面由开源组件维护，不再有之前 `/Users/apple/Users/apple` 的自造路径拼接。
+- **跨平台启动**：安装依赖 `python -m pip install -r requirements.txt` 后，在 macOS/Linux 用 `./run.sh`，在 Windows PowerShell 用 `python -m pycut` 或 `py -3 -m pycut`。Windows 通过 `windows-curses` 兼容现有主界面，文件夹选择由 Textual 负责。使用 Python 3.13 或项目所支持的版本。
 - **内部素材统计**：各处理向导最多下探 3 层；切片仅统计可处理的 MP4，执行端显式传 `--max-depth 3`，确保确认数量与处理集合一致。CLI 默认仍保持原有无限递归，也可指定 `--max-depth N`
 - **混剪多选**：空格勾选，`E` 编辑每支裂变数（1～99），数字 1～9 可快捷设置，`A` 全选/取消；确认页展示总产出数量，输出到桌面 `out` 目录
 - **统一快捷键**：终端 TUI 的主菜单和混剪多选页继续使用 `↑/↓` 上下移动、`←` 返回、`→` 进入；`Space` 在混剪视频列表勾选/取消**多个视频**。系统文件夹对话框使用操作系统原生按键；`→` 在最终确认页只聚焦操作按钮，必须显式 `Enter` 才会开始处理。
