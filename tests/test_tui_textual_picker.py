@@ -66,7 +66,7 @@ class AdapterTests(unittest.TestCase):
                                    steps.append("textual") or Path("/tmp/folder")
                                )):
             selected = folder_picker.choose_directory("folder", Path("/tmp"))
-        self.assertEqual(selected, "/tmp/folder")
+        self.assertEqual(selected, str(Path("/tmp/folder")))
         self.assertEqual(steps, ["save", "suspend", "textual", "restore"])
 
     def test_curses_restored_when_user_cancels(self):
