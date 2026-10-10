@@ -70,12 +70,12 @@ class TUIIntegrationTests(unittest.TestCase):
             target.mkdir()
             # 初始焦点位于第一个子目录，Enter 进入后再 Enter 选定。
             self.assertEqual(
-                tui._pick_dir(FakeScreen([10, 10]), "选择目录", start=root),
+                tui._pick_dir(FakeScreen([curses.KEY_UP, 10, 10]), "选择目录", start=root),
                 str(target),
             )
             # 在子目录按左方向键返回，然后选当前目录。
             self.assertEqual(
-                tui._pick_dir(FakeScreen([curses.KEY_LEFT, 10]), "选择目录", start=target),
+                tui._pick_dir(FakeScreen([curses.KEY_LEFT, ord(" ")]), "选择目录", start=target),
                 str(root),
             )
             self.assertIsNone(
@@ -111,7 +111,7 @@ class TUIIntegrationTests(unittest.TestCase):
     def test_no_video_short_circuits_before_confirm(self):
         for wizard in (tui._wizard_cover, tui._wizard_dedup):
             with self.subTest(wizard=wizard.__name__), \
-                 mock.patch.object(tui, "_pick_dir", return_value="/tmp/empty"), \
+                 mock.patch.object(tui, "_pick_dir", side_effect=["/tmp/empty", None]), \
                  mock.patch.object(tui, "count_videos_recursive", return_value=0), \
                  mock.patch.object(tui, "_flash") as flash, \
                  mock.patch.object(tui, "_confirm") as confirm:
@@ -124,9 +124,9 @@ class TUIIntegrationTests(unittest.TestCase):
         second = Path("/tmp/video/second.mp4")
         selection = ([first, second], {str(first): 12, str(second): 2})
         with mock.patch.object(tui, "_pick_dir",
-                               side_effect=["/tmp/clips", "/tmp/pip", None, "/tmp/video"]), \
-             mock.patch.object(tui.config, "MONTAGE_STICKER_DIR", Path("/__no_stickers__")), \
+                               side_effect=["/tmp/clips", "/tmp/pip", "/tmp/video"]), \
              mock.patch.object(tui, "count_videos_recursive", side_effect=[4, 3]), \
+             mock.patch.object(tui, "_count_sticker_images", return_value=1), \
              mock.patch.object(tui, "list_videos_flat", return_value=[first, second]), \
              mock.patch.object(tui, "_multi_select", return_value=selection), \
              mock.patch.object(tui, "_confirm", return_value=True):
@@ -146,16 +146,14 @@ class TUIIntegrationTests(unittest.TestCase):
             sticker_root.mkdir()
             (sticker_root / "logo.png").write_bytes(b"placeholder")
             video = Path("/tmp/video/one.mp4")
-            with mock.patch.object(tui, "_pick_dir",
-                                   side_effect=["/tmp/clips", "/tmp/pip",
-                                                str(sticker_root), "/tmp/video"]), \
-                 mock.patch.object(tui.config, "MONTAGE_STICKER_DIR",
-                                   Path(temp) / "missing_default"), \
-                 mock.patch.object(tui, "count_videos_recursive",
-                                   side_effect=[2, 3]), \
+            selection = ([video], {str(video): 1})
+            with mock.patch.object(tui, "_pick_dir", side_effect=[
+                     "/tmp/clips", "/tmp/pip", "/tmp/video", str(sticker_root)]), \
+                 mock.patch.object(tui, "count_videos_recursive", return_value=2), \
+                 mock.patch.object(tui, "_count_sticker_images",
+                                   side_effect=[0, 1]), \
                  mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
-                 mock.patch.object(tui, "_multi_select",
-                                   return_value=([video], {str(video): 1})), \
+                 mock.patch.object(tui, "_multi_select", return_value=selection), \
                  mock.patch.object(tui, "_confirm", return_value=True):
                 commands = tui._wizard_montage(FakeScreen(), 100)
         self.assertEqual(len(commands), 1)
@@ -164,7 +162,7 @@ class TUIIntegrationTests(unittest.TestCase):
         self.assertFalse(args.no_sticker)
 
     def test_montage_cancel_before_confirm_never_builds_jobs(self):
-        with mock.patch.object(tui, "_pick_dir", side_effect=["/tmp/clips", None]), \
+        with mock.patch.object(tui, "_pick_dir", side_effect=["/tmp/clips", None, None]), \
              mock.patch.object(tui, "count_videos_recursive", return_value=4), \
              mock.patch.object(tui, "_confirm") as confirm, \
              mock.patch.object(tui, "_multi_select") as multi:
@@ -180,7 +178,7 @@ class TUIIntegrationTests(unittest.TestCase):
         # The former search shortcut "5" must not dispatch an unavailable item.
         with mock.patch.object(tui.curses, "curs_set"), \
              mock.patch.object(tui, "_run_feature_wizard") as dispatch:
-            result = tui._loop(FakeScreen([ord("5"), 27]))
+            result = tui._loop(FakeScreen([ord("5"), 27, ord("q")]))
         self.assertEqual(result, ("quit", None))
         dispatch.assert_not_called()
 
@@ -201,7 +199,7 @@ class TUIIntegrationTests(unittest.TestCase):
             FakeScreen([27], size=tiny), "混剪", [Path("/tmp/a.mp4")]
         ))
         with mock.patch.object(tui.curses, "curs_set"):
-            self.assertEqual(tui._loop(FakeScreen([27], size=tiny))[0], "quit")
+            self.assertEqual(tui._loop(FakeScreen([27, ord("q")], size=tiny))[0], "quit")
         self.assertIsNone(
             tui._pick_dir(FakeScreen([27], size=tiny), "路径", start=Path("/"))
         )
