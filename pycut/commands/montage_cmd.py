@@ -52,8 +52,8 @@ def register(subparsers) -> None:
                         "（如 1.mp4 → 1.srt）；也可直接指定 .srt 路径；传空串则不烧字幕")
     g.add_argument("--no-sub", action="store_true", help="不烧字幕")
     g.add_argument("--crf", default="20", help="输出 libx264 CRF（越小越清晰）")
-    g.add_argument("--probe", type=int, default=0,
-                   help="只探测素材库规模（片段数/竖屏数/时长分布）后退出，不处理")
+    g.add_argument("--probe", nargs="?", const=1, type=int, default=0,
+                   help="只探测素材库规模后退出；可直接使用 --probe（兼容 --probe 1）")
 
     g = p.add_argument_group("画面扰动")
     g.add_argument("--mirror-chance", type=float, default=0.35,
@@ -93,6 +93,9 @@ def _probe_library(clip_dir: Path, allow_landscape: bool, workers: int) -> int:
     from ..core.montage_clips import scan_library  # noqa: PLC0415
 
     log(f"[探测] 片段库: {clip_dir}")
+    if not clip_dir.is_dir():
+        log(f"  [错误] 素材目录不存在: {clip_dir}")
+        return 1
     all_files = [p for p in clip_dir.rglob("*")
                  if p.suffix.lower() in (".mp4", ".mov", ".m4v")]
     log(f"  文件总数(含横屏): {len(all_files)}")
@@ -106,9 +109,9 @@ def _probe_library(clip_dir: Path, allow_landscape: bool, workers: int) -> int:
         portrait = [p for p in all_files if _is_portrait(p)]
         log(f"  其中竖屏 9:16: {len(portrait)} 条（横屏 {len(all_files) - len(portrait)} 条已排除）")
         log(f"  竖屏且时长合规: {len(items)} 条")
-        if not items:
-            log("  ✗ 没有可用素材")
-            return 1
+    if not items:
+        log("  [错误] 没有可用素材")
+        return 1
 
     durs = sorted(i.duration for i in items)
     if durs:
@@ -141,7 +144,7 @@ def _resolve_srt(args: argparse.Namespace, source: Path) -> str:
     if raw in ("", None):
         return ""
     if raw != "auto":
-        return str(raw)
+        return str(Path(raw).expanduser())
     candidate = source.with_suffix(".srt")
     if candidate.is_file():
         log(f"[字幕] 自动配对: {candidate.name}")
@@ -154,10 +157,13 @@ def _resolve_srt(args: argparse.Namespace, source: Path) -> str:
 def _is_portrait(p: Path) -> bool:
     """按侧边比粗判竖屏（用于 --probe 统计，不做精确探测，快）。"""
     import subprocess  # noqa: PLC0415
-    r = subprocess.run(
-        [config.FFPROBE, "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=width,height", "-of", "csv=p=0", str(p)],
-        capture_output=True, text=True, timeout=30)
+    try:
+        r = subprocess.run(
+            [config.FFPROBE, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", str(p)],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
     out = r.stdout.strip().splitlines()
     if not out:
         return False
@@ -172,14 +178,21 @@ def _is_portrait(p: Path) -> bool:
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.fission < 1:
+        log("[错误] --fission 必须为正整数")
+        return 2
     install_signal_handlers()
     reset_stop()
     self_check(require_src=False)
 
-    source = Path(args.source) if args.source else config.MONTAGE_SRC
-    clip_dir = Path(args.clip_dir) if args.clip_dir else config.MONTAGE_CLIP_DIR
-    dedup_dir = Path(args.dedup_dir) if args.dedup_dir else config.MONTAGE_DEDUP_DIR
-    out_dir = Path(args.out_dir) if args.out_dir else config.MONTAGE_OUT
+    source = Path(args.source).expanduser() if args.source else config.MONTAGE_SRC
+    clip_dir = Path(args.clip_dir).expanduser() if args.clip_dir else config.MONTAGE_CLIP_DIR
+    dedup_dir = Path(args.dedup_dir).expanduser() if args.dedup_dir else config.MONTAGE_DEDUP_DIR
+    out_dir = Path(args.out_dir).expanduser() if args.out_dir else config.MONTAGE_OUT
+
+    # --probe 只检查片段库，不需要基准视频、字幕或已有成片。
+    if args.probe:
+        return _probe_library(clip_dir, args.allow_landscape, args.workers)
 
     if not source.is_file():
         sys.exit(f"[错误] 步骤A 基准视频不存在: {source}")
@@ -187,9 +200,6 @@ def run(args: argparse.Namespace) -> int:
     # 字幕配对：默认 auto=与基准视频同目录同名 .srt（1.mp4 -> 1.srt）。
     # 用户显式传 --srt 路径时优先用；传空串（--srt ""）或 --no-sub 则不烧字幕。
     srt = _resolve_srt(args, source)
-
-    if args.probe:
-        return _probe_library(clip_dir, args.allow_landscape, args.workers)
 
     t0 = time.time()
     canvas = config.MONTAGE_CANVAS
