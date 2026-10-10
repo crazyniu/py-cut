@@ -41,28 +41,52 @@ def register(subparsers) -> None:
     p.set_defaults(func=run)
 
 
+def _pick_clips(args: argparse.Namespace) -> list[Path]:
+    """返回去重后的 MP4 列表；显式文件缺失必须报错，不能悄悄跳过。"""
+    if args.src_dir:
+        from ..core.scan import list_videos_recursive  # noqa: PLC0415
+        selected = [
+            p for p in list_videos_recursive(Path(args.src_dir).expanduser())
+            if p.suffix.lower() == ".mp4"
+        ]
+    elif args.file:
+        selected = [Path(p).expanduser() for p in args.file]
+        for file in selected:
+            if not file.is_file():
+                raise ValueError(f"输入文件不存在或不是普通文件: {file}")
+            if file.suffix.lower() != ".mp4":
+                raise ValueError(f"字幕擦除只支持 MP4 文件: {file}")
+    else:
+        selected = collect_clips(None)
+
+    # 同一个文件通过别名或重复参数出现时，不能并行写相同临时文件。
+    unique: dict[Path, Path] = {}
+    for file in selected:
+        unique.setdefault(file.resolve(), file)
+    return list(unique.values())
+
+
 def run(args: argparse.Namespace) -> int:
     if not args.file and not args.all and not args.src_dir:
-        sys.exit("[错误] 需要 --file、--all 或 --src-dir")
+        log("[错误] 需要 --file、--all 或 --src-dir")
+        return 2
+    if args.workers < 1 or args.samples < 1:
+        log("[错误] --workers 和 --samples 都必须是正整数")
+        return 2
+    try:
+        clips = _pick_clips(args)
+    except (ValueError, OSError) as exc:
+        log(f"[错误] {exc}")
+        return 2
+    if not clips:
+        log("[错误] 所选范围没有可处理的 MP4 视频")
+        return 1
 
     install_signal_handlers()
     reset_stop()
     self_check(require_src=False)
-
     llm = make_llm(args.gateway, args.llm_url, args.llm_key, args.llm_model,
                    use_fallback=not args.no_fallback)
-    # --src-dir 优先：递归扫描指定目录下所有视频（不限切片桶结构）
-    if args.src_dir:
-        from ..core.scan import list_videos_recursive  # noqa: PLC0415
-        clips = list_videos_recursive(Path(args.src_dir).expanduser())
-        if not clips:
-            log(f"[范围] {args.src_dir} 下没有视频")
-            return 1
-    else:
-        clips = collect_clips([Path(x) for x in args.file] if args.file else None)
-    if not clips:
-        log("没有可处理的切片")
-        return 1
     log(f"[范围] {len(clips)} 个切片")
 
     t0 = time.time()
@@ -96,4 +120,7 @@ def run(args: argparse.Namespace) -> int:
     log(f"{'LLM 调用':<10}{llm.calls:>6}   {note}")
     log(f"{'总耗时':<10}{time.time() - t0:>6.1f}s")
     log("=" * 56)
+    if STOP.flag:
+        log("[中断] 字幕擦除未完成")
+        return 130
     return 0 if stat["fail"] == 0 else 2
