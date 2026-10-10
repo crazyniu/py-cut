@@ -44,6 +44,8 @@ def _redact(line: str, argv: list[str]) -> str:
             value = argv[i + 1]
         elif any(arg.startswith(flag + "=") for flag in _SECRET_FLAGS):
             value = arg.partition("=")[2]
+        if value and len(value) < 4 and value in line:
+            return "[日志已隐藏：包含敏感参数]"
         if value:
             line = line.replace(value, "********")
     return line
