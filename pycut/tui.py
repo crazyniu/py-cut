@@ -75,6 +75,22 @@ _LIGHT_8 = {
 }
 
 
+def _configure_esc_delay() -> None:
+    """Avoid ncurses' usual ~1s wait before a standalone Esc is delivered.
+
+    Keep enough time to decode arrow-key escape sequences on macOS terminals.
+    Honour users' explicit ESCDELAY environment setting.
+    """
+    if "ESCDELAY" in os.environ:
+        return
+    setter = getattr(curses, "set_escdelay", None)
+    if callable(setter):
+        try:
+            setter(75)
+        except (curses.error, ValueError):
+            pass
+
+
 def _init_colors() -> None:
     global _LIGHT_BG, _HAS_COLORS
     _HAS_COLORS = curses.has_colors()
@@ -204,7 +220,7 @@ def _small_screen(stdscr) -> bool:
     stdscr.erase()
     _safe_add(stdscr, 1, 2, "终端窗口太小", w, "warn", curses.A_BOLD)
     _safe_add(stdscr, 3, 2, f"当前 {w}×{h}，至少需要 60×14", w, "text")
-    _safe_add(stdscr, 5, 2, "请放大窗口 · Esc 返回 · Q 退出", w, "dim")
+    _safe_add(stdscr, 5, 2, "请放大窗口 · Esc 返回 · Q 取消/退出", w, "dim")
     stdscr.refresh()
     return True
 
@@ -941,6 +957,7 @@ def run() -> int:
         return 0
 
     def _app(stdscr) -> int:
+        _configure_esc_delay()
         _init_colors()
         final_code = 0
         while True:
