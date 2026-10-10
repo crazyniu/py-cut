@@ -165,7 +165,7 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
     log(f"{'总耗时':<10}{time.time() - t0:>6.1f}s")
     log("=" * 56)
     if args.vmaf and not args.no_report:
-        report = Path(args.out_dir).expanduser() if args.out_dir else config.DEDUP_OUT_DIR
+        report = Path(args.out_dir).expanduser() if args.out_dir else config.DEDUP_OUT
         try:
             report.mkdir(parents=True, exist_ok=True)
             target = report / "vmaf-check.json"
