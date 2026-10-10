@@ -426,11 +426,11 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
                       color, attr)
 
         _safe_add(stdscr, h - 3, 2,
-                  f"目录 {len(list_dirs(cur))} 个 · {sel + 1}/{len(entries)}",
+                  f"子目录 {sum(kind == 'directory' for kind, _, _ in entries)} 个 · {sel + 1}/{len(entries)}",
                   w, "dim")
         _footer(stdscr,
                 " ↑↓ 选择 · Enter 打开/确认 · Space 使用当前目录 · ←/Backspace 上级 · ~ 主目录 · / 根 · Esc 返回 ",
-                "↑↓选择 Enter打开 Space选当前 ←上级 ~主目录 /根 Esc返回")
+                "Esc返回 ←上级 Enter打开 Space选当前 ↑↓移动 ~主目录 /根")
         stdscr.refresh()
 
         k = stdscr.getch()
@@ -705,7 +705,7 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
             _safe_add(stdscr, 13, 3, FEATURE_HINTS[key], w, "text")
         _footer(stdscr,
                 f" ↑↓ 移动 · 1-{len(FEATURES)} 快速进入 · Enter 选择 · Esc 返回主菜单 · Q 退出 ",
-                f"↑↓移动 1-{len(FEATURES)}快捷 Enter进入 Esc返回 Q退出")
+                f"Esc返回 Q退出 ↑↓移动 1-{len(FEATURES)}快捷 Enter进入")
         stdscr.refresh()
 
         k = stdscr.getch()
