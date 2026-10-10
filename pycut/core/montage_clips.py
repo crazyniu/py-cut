@@ -569,7 +569,7 @@ def _seg_cmd(src: Path, offset: float, take: float, out: Path,
     ]
 
 
-def _normalize_segments(items: list[dict], canvas, fps, crf: str) -> list[Path]:
+def _normalize_segments(items: list[dict], canvas, fps, crf: str,\n                        seam_fade: float = 0.0) -> list[Path]:
     """阶段1：每段按 offset/take 双 seek 精确截取，并统一成一致的流参数。
 
     统一后的段才能喂给 concat demuxer——这正是本模块不用 inpoint/outpoint 的原因。
@@ -617,12 +617,39 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str) -> list[Path]:
                     opacity=config.MONTAGE_STICKER_OPACITY,
                     seed=i * 7919 + 13, chance=1.0):
                 d["sticker_applied"] = True
+        # 段间亮度淡化在标准化和段级贴纸完成后执行，原片段不重叠也不裁短。
+        if seam_fade > 0 and len(items) > 1:
+            from .montage_transitions import (build_seam_fade_cmd,
+                                               probe_segment_duration)
+            try:
+                real_duration = probe_segment_duration(seg)
+                faded = seg.with_name(f"{seg.stem}_fade.mp4")
+                cmd = build_seam_fade_cmd(
+                    seg, faded, duration=real_duration, seconds=seam_fade,
+                    first=(i == 0), last=(i == len(items) - 1),
+                    fps=fps, crf=crf)
+                if cmd:
+                    frc, _fo, ferr = run_cmd(cmd, timeout=timeout)
+                    if frc != 0 or not faded.is_file() or faded.stat().st_size < 1024:
+                        raise RuntimeError(
+                            ferr.strip().splitlines()[-1] if ferr.strip()
+                            else "转场输出缺失")
+                    faded_duration = probe_segment_duration(faded)
+                    if abs(faded_duration - real_duration) > 0.15 + 1 / max(float(fps or config.MONTAGE_FPS), 1):
+                        raise RuntimeError("转场前后片段时长不一致")
+                    os.replace(faded, seg)
+            except (OSError, ValueError, RuntimeError) as exc:
+                log(f"  [段{i}] 转场失败: {exc}")
+                return []
+            finally:
+                if 'faded' in locals() and faded.is_file():
+                    faded.unlink()
         segs.append(seg)
     return segs
 
 
 def build_concat_cmd(items: list[dict], out: Path, canvas=None, fps=None,
-                     crf: str = "20") -> tuple[list[str], Path]:
+                     crf: str = "20", seam_fade: float = 0.0) -> tuple[list[str], Path]:
     """用 concat demuxer 拼接成单条静音视频（**两阶段**，原因见模块 docstring 实测）。
 
     本函数先在 `config.MONTAGE_TMP/seg_<pid>/` 下执行**阶段1**（每段双 seek 精确截取
@@ -645,7 +672,7 @@ def build_concat_cmd(items: list[dict], out: Path, canvas=None, fps=None,
     canvas = canvas or config.MONTAGE_CANVAS
     fps = fps or config.MONTAGE_FPS
 
-    segs = _normalize_segments(items, canvas, fps, str(crf))
+    segs = _normalize_segments(items, canvas, fps, str(crf), seam_fade=seam_fade)
     # 之前任意失败片段会被静默丢弃，仍把剩下的片段发布为“成功混剪”。
     # 当输入列表已经过过滤后，阶段1必须逐段完整产出；缺一段也拒绝发布。
     if len(segs) != len(items):
@@ -664,7 +691,7 @@ def build_concat_cmd(items: list[dict], out: Path, canvas=None, fps=None,
 
 
 def concat_clips(items: list[dict], out: Path, canvas=None, fps=None,
-                 crf: str = CRF_DEFAULT) -> dict:
+                 crf: str = CRF_DEFAULT, seam_fade: float = 0.0) -> dict:
     """执行拼接并原子替换到 `out`，返回结果 dict（供命令层汇总/写清单）。
 
     流程：`build_concat_cmd` → ffmpeg → 校验产物 → `os.replace(tmp, out)` → 清理
@@ -690,7 +717,7 @@ def concat_clips(items: list[dict], out: Path, canvas=None, fps=None,
             res["error"] = f"输出目录创建失败: {e}"
             return res
 
-        cmd, lst = build_concat_cmd(usable, out, canvas, fps, str(crf))
+        cmd, lst = build_concat_cmd(usable, out, canvas, fps, str(crf),\n                                    seam_fade=seam_fade)
         if not cmd or not lst.is_file():
             res["error"] = "拼接命令构造失败（分段截取全部失败）"
             return res
