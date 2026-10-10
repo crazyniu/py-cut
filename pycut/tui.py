@@ -379,7 +379,7 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
         if cur != cur.parent:
             items.append(("parent", "../  上一级", cur.parent))
         items.extend(("directory", f"{p.name}/", p) for p in list_dirs(cur))
-        items.append(("select", "✓  使用当前文件夹", cur))
+        items.append(("select", "使用当前文件夹", cur))
         return items
 
     entries = _entries()
@@ -417,9 +417,9 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
             kind, label, _target = entries[i]
             y = 5 + i - top
             active = i == sel
-            attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+            attr = curses.A_BOLD if active else curses.A_NORMAL
             icon = "✓" if kind == "select" else "↖" if kind == "parent" else "▸"
-            color = "good" if kind == "select" else "accent" if active else "text"
+            color = "accent" if active else "good" if kind == "select" else "dim" if kind == "parent" else "text"
             _safe_add(stdscr, y, 3, "❯" if active else " ", w,
                       "accent" if active else "muted", attr)
             _safe_add(stdscr, y, 5, icon, w, color, attr)
@@ -430,8 +430,8 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
                   f"子目录 {sum(kind == 'directory' for kind, _, _ in entries)} 个 · {sel + 1}/{len(entries)}",
                   w, "dim")
         _footer(stdscr,
-                " ↑↓ 选择 · Enter 打开/确认 · Space 使用当前目录 · ←/Backspace 上级 · ~ 主目录 · / 根 · Esc 返回 ",
-                "Esc返回 ←上级 Enter打开 Space选当前 ↑↓移动 ~主目录 /根")
+                "↑↓ 移动 · ← 返回上级 · →/Enter 打开 · Space 选择当前 · Esc 返回 · ~ 主目录 · / 根目录",
+                "↑↓移动  ←上级  →进入  Space选目录  Esc返回")
         stdscr.refresh()
 
         k = stdscr.getch()
@@ -454,13 +454,17 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
         elif k in (10, curses.KEY_ENTER, ord("\r"), curses.KEY_RIGHT, ord("l")):
             kind, _label, target = entries[sel]
             if kind == "select":
+                return str(cur)
+            if kind == "parent":
                 if k not in (curses.KEY_RIGHT, ord("l")):
-                    return str(cur)
-            elif kind == "parent":
-                old = cur
-                _change_dir(target, focus_child=old)
+                    old = cur
+                    _change_dir(target, focus_child=old)
             else:
                 _change_dir(target)
+        elif k in (curses.KEY_PPAGE,):
+            sel = max(0, sel - max_rows)
+        elif k in (curses.KEY_NPAGE,):
+            sel = min(len(entries) - 1, sel + max_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +529,7 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
                 mark = "❯" if active else " "
                 state = "● 开" if toggle_vals[i] else "○ 关"
                 sc = "good" if toggle_vals[i] else "muted"
-                attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+                attr = curses.A_BOLD if active else curses.A_NORMAL
                 _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
                 _safe_add(stdscr, y, 5, _pad(label, 12), w, "text", attr)
                 _safe_add(stdscr, y, 17, state, w, sc, attr)
@@ -535,27 +539,30 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
             y += 1
 
         active = sel == len(toggle_vals)
-        attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+        attr = curses.A_BOLD if active else curses.A_NORMAL
         _safe_add(stdscr, y, 3, "❯" if active else " ",
                   w, "good" if active else "muted", attr)
         _safe_add(stdscr, y, 5, "▶▶ 确认并开始处理", w, "good", attr)
         _footer(stdscr,
-                " ↑/↓ 移动 · 空格 切换 · PgUp/PgDn 查看摘要 · Enter 确认 · Esc 返回 ",
-                "↑↓选项  空格切换  PgDn摘要  Enter确认  Esc返回")
+                "↑↓ 选项 · ←/Esc 返回 · → 到确认 · Space 切换 · Enter 确认 · PgUp/PgDn 摘要",
+                "↑↓选项  ←返回  →确认  Space切换  Enter执行")
         stdscr.refresh()
 
         k = stdscr.getch()
-        if k in (27, ord("q"), ord("Q")):
+        if k in (27, curses.KEY_LEFT, 127, 8, ord("q"), ord("Q")):
             return False
-        if k in (curses.KEY_PPAGE, 339):
+        if k in (curses.KEY_RIGHT,):
+            # Right chooses the confirmation control; only Enter starts jobs.
+            sel = len(toggle_vals)
+        elif k in (curses.KEY_PPAGE, 339):
             summary_offset = max(0, summary_offset - visible_rows)
         elif k in (curses.KEY_NPAGE, 338):
             summary_offset = min(max(0, len(lines) - visible_rows),
                                  summary_offset + visible_rows)
         elif k in (curses.KEY_UP, ord("k")):
-            sel = (sel - 1) % n_items
+            sel = max(0, sel - 1)
         elif k in (curses.KEY_DOWN, ord("j")):
-            sel = (sel + 1) % n_items
+            sel = min(n_items - 1, sel + 1)
         elif k == ord(" ") and sel < len(toggle_vals):
             toggle_vals[sel] = not toggle_vals[sel]
             if out_vals is not None:
@@ -610,22 +617,24 @@ def _multi_select(stdscr, title: str, files: list[Path],
             mark = "❯" if active else " "
             box = "[✓]" if checked else "[ ]"
             bcolor = "good" if checked else "muted"
-            attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+            attr = curses.A_BOLD if active else curses.A_NORMAL
             name = f.name
             name = _ellipsize(name, w - 24)
             _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
             _safe_add(stdscr, y, 5, box, w, bcolor, attr)
-            _safe_add(stdscr, y, 5 + 4, name, w, "text", attr)
+            _safe_add(stdscr, y, 5 + 4, name, w,
+                      "accent" if active else "text", attr)
             n = fission.get(str(f), 1)
             _safe_add(stdscr, y, w - 12, f"裂变 x{n}", w, "value", attr)
 
         _footer(stdscr,
-                " ↑/↓ 移动 · 空格 勾选 · E 设裂变数(1~99) · A 全选 · Enter 确认 · Esc 返回 ",
-                "↑↓移动  空格勾选  E数量  A全选  Enter确认  Esc返回")
+                "↑↓ 移动 · Space 多选 · ←/Esc 返回 · →/Enter 下一步 · E 裂变数量 · A 全选",
+                "↑↓移动  Space多选  ←返回  →下一步  E数量")
         stdscr.refresh()
 
         k = stdscr.getch()
-        if k in (27, ord("q"), ord("Q")):
+        if k in (27, curses.KEY_LEFT, curses.KEY_BACKSPACE, 127, 8,
+                 ord("q"), ord("Q")):
             return None
         if k in (curses.KEY_UP, ord("k")):
             sel = max(0, sel - 1)
@@ -649,7 +658,7 @@ def _multi_select(stdscr, title: str, files: list[Path],
                 fission[p] = n
         elif ord("1") <= k <= ord("9"):
             fission[str(files[sel])] = k - ord("0")
-        elif k in (10, curses.KEY_ENTER, ord("\r")):
+        elif k in (10, curses.KEY_ENTER, ord("\r"), curses.KEY_RIGHT, ord("l")):
             if not selected:
                 continue
             chosen = [files[i] for i in sorted(selected)]
