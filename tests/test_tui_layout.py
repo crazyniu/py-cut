@@ -76,7 +76,7 @@ class LayoutTests(unittest.TestCase):
         self.assertTrue(tui._small_screen(tiny))
         self.assertIsNone(tui._pick_dir(tiny, "路径", start=Path("/")))
         with mock.patch.object(tui.curses, "curs_set"):
-            self.assertEqual(tui._loop(Screen([27], size=(12, 40)))[0], "quit")
+            self.assertEqual(tui._loop(Screen([27, ord("q")], size=(12, 40)))[0], "quit")
 
     def test_confirmation_scrolls_all_selected_sources(self):
         lines = [("来源 " + str(i), "中文片段.mp4 × " + str(i)) for i in range(1, 26)]
