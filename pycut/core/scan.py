@@ -12,11 +12,12 @@
     * 混剪爆款视频 —— **不递归**：只列出用户指定目录**正下方**的视频文件，
       便于逐个勾选。
 
-系统级目录过滤（用户要求「自动忽略系统级目录」）：
-    * 隐藏目录（`.` 开头，如 `.git` / `.Trash` / `.Spotlight-V100`）。
-    * macOS 系统目录黑名单（`/System`、`/Library`、`/private`、`/usr`、`/bin`、
-      `/sbin`、`/opt`、`/etc`、`/tmp`、`/var`、`/dev`、`/Volumes/.Spotlight-V100`）。
-      这些目录在浏览根目录 / 主目录时不再显示，避免用户误入。
+目录显示与处理范围彼此独立：
+    * 目录选择器列出操作系统返回的全部子目录，包括 `.` 开头的隐藏目录、
+      System/Library 等系统目录及指向目录的符号链接；不主动筛掉任何目录名称。
+    * 视频处理的递归统计/素材收集仍按既有 `_is_system_dir` 规则剪枝，
+      保留已标定的深度、视频范围与处理逻辑。
+    * 操作系统因权限限制不可读取的目录内容无法由 TUI 强行列出。
 
 macOS 陷阱（沿用 slice_pipeline 的经验）：
     `find -iname` 会静默丢文件，必须用 os.walk / os.scandir 遍历。
@@ -32,7 +33,7 @@ VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".avi")
 # 递归扫描的默认最大深度（相对 root 下探层数）
 DEFAULT_MAX_DEPTH = 3
 
-# macOS 系统级目录黑名单（浏览时隐藏，按「路径末段名」匹配，大小写不敏感）
+# 视频处理递归剪枝所用系统目录黑名单（不用于 TUI 目录列表）
 SYSTEM_DIR_NAMES = {
     "system", "library", "private", "usr", "bin", "sbin",
     "opt", "etc", "tmp", "var", "dev", "cores", "net", "home",
@@ -65,30 +66,28 @@ def _is_system_dir(path: Path) -> bool:
 
 
 def list_dirs(root: Path) -> list[Path]:
-    """列出 root 下**可见**的子目录（过滤隐藏目录与系统目录，按名排序）。
+    """列出 root 的所有一级子目录，包含隐藏、系统和目录符号链接。
 
-    供目录选择器浏览文件系统用；只返回一级子目录。
+    仅服务 TUI 目录浏览；视频处理的递归剪枝由其他函数独立负责。
+    无法访问或已经失效的目录，仍遵循操作系统的权限/错误结果。
     """
     root = Path(root).expanduser()
     if not root.is_dir():
         return []
     out: list[Path] = []
     try:
-        for entry in os.scandir(str(root)):
-            try:
-                # 不跟随目录符号链接：/Volumes 上的链接可能指回 / 或父目录，
-                # 会让手动目录浏览陷入无限循环。真实挂载点仍是普通目录。
-                if not entry.is_dir(follow_symlinks=False):
+        with os.scandir(str(root)) as entries:
+            for entry in entries:
+                try:
+                    # 单层列举不会递归进入链接；目录链接也应像普通目录显示。
+                    if entry.is_dir(follow_symlinks=True):
+                        out.append(Path(entry.path))
+                except OSError:
+                    # 已卸载的卷、失效的链接或权限错误不影响其他目录。
                     continue
-                p = Path(entry.path)
-                if not _is_system_dir(p):
-                    out.append(p)
-            except OSError:
-                # 卷卸载或单项权限错误时继续列出其他可访问的目录。
-                continue
     except OSError:
         pass
-    out.sort(key=lambda p: p.name.lower())
+    out.sort(key=lambda p: (p.name.casefold(), p.name))
     return out
 
 
