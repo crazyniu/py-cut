@@ -104,6 +104,39 @@ def _resolve(preset: str) -> tuple[str, dict]:
 
 
 # ---------------------------------------------------------------------------
+# M1 可选码率目标：隔离随机流，不改变现有 28 项 preset 的采样顺序
+# ---------------------------------------------------------------------------
+# 以既有 VideoInfo.bitrate (config.BITRATE_LOW/HIGH) 为基线。
+# 仅显式 --vary-bitrate 时启用；变化严格限制为基线的 ±6%，
+# 属于保守的初始产品范围，实际编码结果须在授权素材上测量。
+_VIDEO_BITRATE_SHIFT_PCTS = (-6, -4, -2, 2, 4, 6)
+
+
+def video_bitrate_for_seed(seed: int, baseline: str) -> tuple[str, int]:
+    """返回 (libx264 ABR 目标码率, 偏移百分比)，同 seed 跨进程可复现。
+
+    独立派生随机流，保证开启码率选项不会影响既有 build_params 的
+    CRF/GOP、滤镜和音轨随机化序列。baseline 取既有 VideoInfo.bitrate。
+    """
+    value = str(baseline).strip().lower()
+    try:
+        if value.endswith("m"):
+            base_kbps = round(float(value[:-1]) * 1000)
+        elif value.endswith("k"):
+            base_kbps = round(float(value[:-1]))
+        else:
+            raise ValueError("码率必须带 M/k 单位")
+    except ValueError as exc:
+        raise ValueError(f"不可用的视频基准码率: {baseline!r}") from exc
+    if base_kbps <= 0:
+        raise ValueError(f"视频基准码率必须大于零: {baseline!r}")
+    rng = random.Random(derive_seed("dedup-bitrate-v1", seed))
+    change = rng.choice(_VIDEO_BITRATE_SHIFT_PCTS)
+    kbps = round(base_kbps * (100 + change) / 100)
+    return f"{kbps}k", change
+
+
+# ---------------------------------------------------------------------------
 # 参数生成
 # ---------------------------------------------------------------------------
 def build_params(preset: str, seed: int, *, has_audio: bool = True,

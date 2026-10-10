@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import config
-from .dedup_presets import build_params, derive_seed
+from .dedup_presets import build_params, derive_seed, video_bitrate_for_seed
 from .ffmpeg import FFMPEG, FFPROBE, VideoInfo, probe_scalar, probe_video
 from .fingerprint import compare
 from .runtime import STOP
@@ -64,6 +64,7 @@ class DedupOptions:
     speed: bool = False
     border: bool = False
     badge: bool = False
+    vary_bitrate: bool = False         # M1：默认 CRF，显式启用时使用 seed 派生 ABR 目标
     logo: str = ""
     delogo: str = ""                   # 可见水印位置 "x,y,w,h"，走 delogo 滤镜
     sticker: str = ""                   # 贴纸图片路径（背面半透明 + 边缘羽化）
@@ -544,9 +545,19 @@ def _build_cmd(src: Path, dst_tmp: Path, params: dict, info: VideoInfo,
         cmd += ["-af", ",".join(ac)]
         used.append("-af: " + ",".join(ac))
 
+    # CRF 与 ABR 码率目标互斥；不在同一条 libx264 命令中同时设置。
+    # 关闭开关时严格复用原来的 CRF 参数和顺序。
+    if opts.vary_bitrate:
+        bitrate = str(params.get("video_bitrate") or "")
+        if not bitrate.endswith("k") or not bitrate[:-1].isdigit() or int(bitrate[:-1]) <= 0:
+            raise ValueError(f"无效的 ABR 视频码率目标: {bitrate!r}")
+        quality_args = ["-b:v", bitrate]
+        used.append(f"视频编码: libx264 ABR 目标={bitrate}（不使用 CRF）")
+    else:
+        quality_args = ["-crf", str(int(params.get("crf") or config.DEDUP_CRF_RANGE[0]))]
     cmd += [
         "-c:v", "libx264", "-preset", str(config.DEDUP_X264_PRESET),
-        "-crf", str(int(params.get("crf") or config.DEDUP_CRF_RANGE[0])),
+        *quality_args,
         "-g", str(int(params.get("gop") or config.DEDUP_GOP_RANGE[0])),
         "-pix_fmt", "yuv420p",
     ]
@@ -698,6 +709,15 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
         if opts.sticker:
             params["sticker"] = opts.sticker
         params = dict(params or {})
+        if opts.vary_bitrate:
+            # 视频基础目标来自已有 VideoInfo/config，不改标定常量。
+            # 只在显式开启时往报告参数加入 ABR 信息；默认 28 键契约不变。
+            bitrate, shift = video_bitrate_for_seed(seed, info.bitrate)
+            params["video_rate_control"] = "abr"
+            params["video_bitrate"] = bitrate
+            params["video_bitrate_shift_pct"] = shift
+            params["summary"] = str(params.get("summary", "")).replace(
+                f"重编码 CRF={params.get('crf')}", f"重编码 ABR={bitrate}")
         item.params = params
 
         # --- 只自检模式：不产出，比对 src 与「已存在的去重产物」---
