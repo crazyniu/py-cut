@@ -298,23 +298,36 @@ def _erase_grapheme(s: str) -> str:
 def _prompt_text(stdscr, y, x, w, title, default="") -> str | None:
     """通过 get_wch 接受中文/日文输入法及 Unicode 粘贴；Esc 取消。"""
     buf = default
-    get_key = getattr(stdscr, "get_wch", stdscr.getch)
+    supports_unicode = callable(getattr(stdscr, "get_wch", None))
+    get_key = stdscr.get_wch if supports_unicode else stdscr.getch
     while True:
         h, screen_w = stdscr.getmaxyx()
         if _small_screen(stdscr):
-            if get_key() in ("\x1b", 27):
+            try:
+                k = get_key()
+            except curses.error:
+                continue
+            if k in ("\x1b", 27, "q", "Q", ord("q"), ord("Q")):
                 return None
             continue
         line_y = min(y, h - 4)
         w = screen_w
-        stdscr.move(line_y, 0)
-        stdscr.clrtoeol()
+        try:
+            stdscr.move(line_y, 0)
+            stdscr.clrtoeol()
+        except curses.error:
+            # 窗口也可能恰好在绘制时发生尺寸变化。
+            continue
         prompt = f"{title}："
+        if x + _disp_width(prompt) + 4 >= w:
+            prompt = "关键词："
         _safe_add(stdscr, line_y, x, prompt, w, "text")
         bx = x + _disp_width(prompt) + 1
         _safe_add(stdscr, line_y, bx, _clip(buf, max(0, w - bx - 2), tail=True),
                   w, "value", curses.A_REVERSE)
-        _safe_add(stdscr, line_y + 1, x, "Enter 搜索 · Esc 取消 · Backspace 删除", w, "dim")
+        hint = ("Enter 搜索 · Esc 取消 · Backspace 删除" if supports_unicode else
+                "仅 ASCII 输入 · Enter 搜索 · Esc 取消")
+        _safe_add(stdscr, line_y + 1, x, hint, w, "dim")
         stdscr.refresh()
         try:
             k = get_key()
