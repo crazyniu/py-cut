@@ -68,12 +68,16 @@ def test_tui_wizard_structure():
     import pycut.tui as tui  # noqa: PLC0415
     from pycut.core import scan  # noqa: PLC0415
 
-    # 主菜单应有 4 个功能（切片/字幕擦除/去重/混剪）
+    # 主菜单应有 5 个功能（切片/字幕擦除/去重/混剪/查素材）
     names = [f[1] for f in tui.FEATURES]
-    assert names == ["切片", "字幕擦除", "去重", "混剪"]
+    assert names == ["切片", "字幕擦除", "去重", "混剪", "查素材"]
     # 目录扫描工具
     assert hasattr(scan, "count_videos_recursive")
     assert hasattr(scan, "list_videos_flat")
+    assert hasattr(scan, "list_dirs")
+    assert hasattr(scan, "search_videos")
+    # 递归深度限制默认 3 层
+    assert scan.DEFAULT_MAX_DEPTH == 3
     # 混剪支持 --fission 裂变（直接解析验证）
     ns = cli.build_parser().parse_args(["montage", "--fission", "3"])
     assert ns.fission == 3

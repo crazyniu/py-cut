@@ -10,13 +10,15 @@
       字幕擦除    → 选目录 → 报视频数 → 确认执行（只有擦除，无去重）
       去重        → 选目录 → 报视频数 → 确认执行（只有去重）
       混剪        → 选片段目录 → 选画中画目录 → 选爆款视频目录 →
-                    多选爆款视频 + 每个裂变数量 → 选「去重/字幕」开关 → 确认执行
+                    多选爆款视频 + 每个裂变数量 → 确认执行
+      查素材      → 选起点目录 → 输入关键词 → 滚动查看匹配的视频路径
 
 关键机制：
-  - **目录选择器**：TUI 列表展示候选目录（含 config 里的常见目录 + 任意子目录），
-    支持进入子目录 / 返回上级 / 直接选当前目录，不要求手敲路径。
-  - **递归扫描**：选定目录后用 `core/scan` 递归统计视频数并展示。
+  - **目录选择器**：文件系统层级浏览器，从根目录出发逐级浏览，进入子目录 /
+    返回上级 / 直接选当前目录，自动过滤系统级目录与隐藏目录，不要求手敲路径。
+  - **递归扫描**：选定目录后用 `core/scan` 递归统计视频数并展示（最多下探 3 层）。
   - **多选**（混剪爆款视频）：空格勾选/取消，数字输入裂变数量。
+  - **查素材**：按关键词递归搜索视频文件名，滚动查看结果路径。
   - 最终生成 argv 交给 `cli.main` 执行（与命令行完全同源，无漂移）。
 
 健壮性：非交互环境（管道/无 tty）回退 CLI 帮助；任何异常回退到提示，绝不卡死。
@@ -25,12 +27,12 @@ from __future__ import annotations
 
 import curses
 import curses.textpad  # noqa: F401  必须显式导入：不会随 import curses 自动加载
-import os
 import sys
 from pathlib import Path
 
 from . import __version__, cli
-from .core.scan import count_videos_recursive, list_videos_flat
+from .core.scan import (count_videos_recursive, list_dirs, list_videos_flat,
+                        search_videos)
 
 # ---------------------------------------------------------------------------
 # 配色主题（Claude Code 风格：深底 + 琥珀强调）
@@ -102,6 +104,7 @@ FEATURES = [
     ("cover", "字幕擦除", "擦除画面中的字幕"),
     ("dedup", "去重",    "去除重复、相似的视频"),
     ("montage", "混剪",  "组合片段生成新视频（可批量裂变）"),
+    ("search", "查素材",  "按关键词搜索视频素材"),
 ]
 
 
@@ -159,6 +162,29 @@ def _prompt_int(stdscr, y, x, w, title, default, lo, hi) -> int | None:
             buf += chr(k)
 
 
+def _prompt_text(stdscr, y, x, w, title, default="") -> str | None:
+    """输入一段文本（关键词），返回字符串；Esc 返回 None。"""
+    buf = default
+    while True:
+        stdscr.move(y, 0)
+        stdscr.clrtoeol()
+        _safe_add(stdscr, y, x, f"{title}：", w, "text")
+        body = buf
+        _safe_add(stdscr, y, x + _disp_width(f"{title}：") + 1, body, "value",
+                  curses.A_REVERSE)
+        _safe_add(stdscr, y + 1, x, "Enter 搜索 · Esc 取消", w, "dim")
+        stdscr.refresh()
+        k = stdscr.getch()
+        if k in (10, curses.KEY_ENTER, ord("\r")):
+            return buf
+        if k in (27,):
+            return None
+        if k in (curses.KEY_BACKSPACE, 127, 8):
+            buf = buf[:-1]
+        elif 32 <= k <= 126:  # 可打印 ASCII（含中文需按多字节，这里简单处理常用字符）
+            buf += chr(k)
+
+
 # ---------------------------------------------------------------------------
 # 目录选择器（文件系统层级浏览器）
 # ---------------------------------------------------------------------------
@@ -168,13 +194,14 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
     交互：
       ↑/↓ 或 j/k   在「子目录列表」中移动
       Enter        进入选中的子目录；在「..」或「选择当前目录」上则选定
-      ←/Backspace  返回上一级目录
+      ←/h/Backspace 返回上一级目录
       Esc          取消（返回 None）
       ~            直接跳到用户主目录；/ 跳到根目录
 
     列表第一项固定为「📁 选择当前目录」（直接选定当前所在目录），
     第二项固定为「📁 ..」（返回上一级），之后才是当前目录的子目录。
-    从根目录 / 开始，可一路浏览到任意位置，不再依赖预置候选。
+    系统级目录与隐藏目录自动过滤，不再显示。从根目录 / 开始，
+    可一路浏览到任意位置，不再依赖预置候选。
     """
     # 起点：默认根目录；若有 start 则从那里开始
     cur = Path(start).expanduser() if start else Path("/")
@@ -185,15 +212,9 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
         out.append(("📁  选择当前目录", cur))
         if cur != cur.parent:
             out.append(("📁  ..  返回上一级", cur.parent))
-        try:
-            names = sorted(
-                (e.name for e in os.scandir(str(cur)) if e.is_dir()),
-                key=lambda n: n.lower(),
-            )
-        except OSError:
-            names = []
-        for n in names:
-            out.append((f"📂  {n}", cur / n))
+        # 只列可见子目录（自动过滤系统级目录 + 隐藏目录）
+        for p in list_dirs(cur):
+            out.append((f"📂  {p.name}", p))
         return out
 
     entries = _entries()
@@ -228,7 +249,7 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
             _safe_add(stdscr, y, 5, label, w, fg, attr)
 
         _safe_add(stdscr, h - 2, 2,
-                  " ↑/↓ 移动 · Enter 进入/选定 · ← 返回上级 · ~ 主目录 · / 根目录 · Esc 取消 ",
+                  " ↑/↓ 移动 · Enter 进入/选定 · ←/h 返回上级 · ~ 主目录 · / 根目录 · Esc 取消 ",
                   w, "dim", curses.A_REVERSE)
         stdscr.refresh()
         k = stdscr.getch()
@@ -241,7 +262,7 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
             sel = (sel - 1) % max(1, len(entries))
         elif k in (curses.KEY_DOWN, ord("j")):
             sel = (sel + 1) % max(1, len(entries))
-        elif k in (curses.KEY_LEFT, 8, 127, curses.KEY_BACKSPACE):
+        elif k in (curses.KEY_LEFT, 8, 127, curses.KEY_BACKSPACE, ord("h")):
             if cur != cur.parent:
                 cur = cur.parent
                 entries = _entries()
@@ -489,6 +510,8 @@ def _run_feature_wizard(stdscr, key: str, w: int) -> list[list[str]] | str | Non
         return _wizard_dedup(stdscr, w)
     if key == "montage":
         return _wizard_montage(stdscr, w)
+    if key == "search":
+        return _wizard_search(stdscr, w)
     return None
 
 
@@ -592,6 +615,66 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
             "--dedup-dir", pip, "--out-dir", out_dir, "--fission", str(n),
         ])
     return argv_list
+
+
+def _wizard_search(stdscr, w: int) -> None:
+    """查询视频素材：选起点目录 → 输入关键词 → 滚动查看匹配的视频路径。
+
+    这是查看型功能，不生成 argv、不执行处理，看完按 Esc/Q 回到主菜单。
+    """
+    start = _pick_dir(stdscr, "查素材 · 选择搜索起点目录", None)
+    if start is None:
+        return None
+    kw = _prompt_text(stdscr, 4, 2, w, "输入视频关键词（文件名）")
+    if kw is None or not kw.strip():
+        _flash(stdscr, "关键词为空，已取消", "dim")
+        return None
+    files = search_videos(start, kw.strip())
+    if not files:
+        _flash(stdscr, f"未找到匹配「{kw.strip()}」的视频", "warn")
+        return None
+
+    # 结果列表（滚动查看）
+    sel = 0
+    n = len(files)
+    while True:
+        h, w2 = stdscr.getmaxyx()
+        stdscr.erase()
+        _safe_add(stdscr, 2, 2, f"查素材 · 匹配「{kw.strip()}」共 {n} 个", w2,
+                  "keyword", curses.A_BOLD)
+        _safe_add(stdscr, 3, 2, f"搜索起点: {start}", w2, "info")
+        _safe_add(stdscr, 4, 2, "─" * (w2 - 4), w2, "muted")
+        max_rows = h - 7
+        top = 0
+        if sel >= max_rows:
+            top = sel - max_rows + 1
+        for i in range(top, min(n, top + max_rows)):
+            y = 5 + (i - top)
+            p = files[i]
+            active = (i == sel)
+            mark = "❯" if active else " "
+            # 显示：文件名（加粗）+ 相对目录（弱化）
+            disp = p.name
+            maxlen = w2 - 8
+            if _disp_width(disp) > maxlen:
+                disp = disp[:maxlen - 1] + "…"
+            attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
+            fg = "accent" if active else "text"
+            _safe_add(stdscr, y, 3, mark, w2, "accent" if active else "muted", attr)
+            _safe_add(stdscr, y, 5, disp, w2, fg, attr)
+            # 在文件右侧显示父目录（弱化，方便定位）
+            _safe_add(stdscr, y, 5 + _disp_width(disp) + 1, str(p.parent), w2,
+                      "dim", attr)
+        _safe_add(stdscr, h - 2, 2,
+                  " ↑/↓ 滚动 · Esc/Q 返回主菜单 ", w2, "dim", curses.A_REVERSE)
+        stdscr.refresh()
+        k = stdscr.getch()
+        if k in (27, ord("q"), ord("Q")):
+            return None
+        if k in (curses.KEY_UP, ord("k")):
+            sel = (sel - 1) % max(1, n)
+        elif k in (curses.KEY_DOWN, ord("j")):
+            sel = (sel + 1) % max(1, n)
 
 
 def _flash(stdscr, msg: str, color: str = "bad") -> None:
