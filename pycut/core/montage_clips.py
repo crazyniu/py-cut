@@ -606,7 +606,7 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
             continue
 
         # 贴纸叠加：段级叠加（拼接后再加就分不清哪段配哪张了）。
-        # items 里带 "sticker" 才叠；失败保留无贴纸版本，不影响整批。
+        # items 里带 "sticker" 才叠；明确选择后叠加失败不得静默发布无贴纸成片。
         stk = d.get("sticker")
         if stk:
             from .montage_sticker import apply_sticker_to_file  # noqa: PLC0415
@@ -616,8 +616,12 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
                     scale_ratio=config.MONTAGE_STICKER_SCALE,
                     margin_ratio=config.MONTAGE_STICKER_MARGIN,
                     opacity=config.MONTAGE_STICKER_OPACITY,
-                    seed=i * 7919 + 13, chance=1.0):
+                    seed=i * 7919 + 13, chance=1.0,
+                    sticker=Path(stk)):
                 d["sticker_applied"] = True
+            else:
+                log(f"  [段{i}] 已指定贴纸但叠加失败: {stk}")
+                return []
         # 段间亮度淡化在标准化和段级贴纸完成后执行，原片段不重叠也不裁短。
         if seam_fade > 0 and len(items) > 1:
             faded = None
