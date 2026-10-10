@@ -222,11 +222,15 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 log(f"  画中画 {len(timeline)} 段，累计 {cov:.1f}s / {target:.1f}s"
                     f"（覆盖率 {cov / target * 100:.0f}%"
                     f"{'，连续模式' if opts.pip_continuous else ''}）")
-                cmd = build_pip_cmd(base, timeline, staged, canvas=canvas,
-                                    scale=opts.pip_scale, fps=config.MONTAGE_FPS,
-                                    crf=opts.crf)
-                if not _publish_stage(cmd, staged, working):
-                    log("  [失败] 画中画叠加失败")
+                # build_pip_cmd 不是纯命令构造器：它已经运行 FFmpeg、
+                # 校验输出并原子发布到传入路径。不可再用 _publish_stage
+                # 执行一次返回的 argv，否则画中画会被重复编码。
+                try:
+                    build_pip_cmd(base, timeline, working, canvas=canvas,
+                                  scale=opts.pip_scale, fps=config.MONTAGE_FPS,
+                                  crf=opts.crf)
+                except (RuntimeError, ValueError, OSError) as exc:
+                    log(f"  [失败] 画中画叠加失败: {exc}")
                     result["error"] = "步骤C 失败"
                     return result
                 result["pip_count"] = len(timeline)
