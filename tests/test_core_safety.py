@@ -180,7 +180,7 @@ class CoreSafetyTests(unittest.TestCase):
                  mock.patch.object(montage_pipeline, "_apply_variation"), \
                  mock.patch.object(montage_pipeline, "log"):
                 result = montage_pipeline.run_pipeline(opts)
-            self.assertEqual(result.get("error"), "步骤C 失败")
+            self.assertIn("画中画素材目录没有可用", result.get("error", ""))
             self.assertFalse(result.get("final"))
 
 
