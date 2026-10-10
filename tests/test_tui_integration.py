@@ -63,24 +63,22 @@ class TUIIntegrationTests(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def test_directory_browser_enters_and_selects_unicode_folder(self):
+    def test_native_directory_picker_unicode_and_cancel(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             target = root / "婚礼素材"
             target.mkdir()
-            # 初始焦点位于第一个子目录，Enter 进入后再 Enter 选定。
-            self.assertEqual(
-                tui._pick_dir(FakeScreen([curses.KEY_UP, 10, 10]), "选择目录", start=root),
-                str(target),
-            )
-            # 在子目录按左方向键返回，然后选当前目录。
-            self.assertEqual(
-                tui._pick_dir(FakeScreen([curses.KEY_LEFT, ord(" ")]), "选择目录", start=target),
-                str(root),
-            )
-            self.assertIsNone(
-                tui._pick_dir(FakeScreen([27]), "选择目录", start=root)
-            )
+            with mock.patch.object(tui, "choose_directory",
+                                   return_value=str(target)) as chooser:
+                self.assertEqual(
+                    tui._pick_dir(FakeScreen(), "选择目录", start=root),
+                    str(target),
+                )
+            chooser.assert_called_once_with("选择目录", root)
+            with mock.patch.object(tui, "choose_directory", return_value=None):
+                self.assertIsNone(
+                    tui._pick_dir(FakeScreen(), "选择目录", start=root)
+                )
 
     def test_confirm_syncs_values_and_esc_never_runs(self):
         toggles = [("字幕", "提示", True), ("去重", "提示", False)]
@@ -200,9 +198,11 @@ class TUIIntegrationTests(unittest.TestCase):
         ))
         with mock.patch.object(tui.curses, "curs_set"):
             self.assertEqual(tui._loop(FakeScreen([27, ord("q")], size=tiny))[0], "quit")
-        self.assertIsNone(
-            tui._pick_dir(FakeScreen([27], size=tiny), "路径", start=Path("/"))
-        )
+        with mock.patch.object(tui, "choose_directory", return_value=None):
+            self.assertIsNone(
+                tui._pick_dir(FakeScreen([27], size=tiny),
+                              "路径", start=Path("/"))
+            )
 
     def test_runner_start_failure_returns_nonzero_and_stays_in_tui(self):
         with mock.patch.object(tui_runner.subprocess, "Popen",
