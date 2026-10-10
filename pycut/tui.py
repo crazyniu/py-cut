@@ -296,13 +296,18 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
 # 确认页（汇报数量 + 开关 + 执行确认）
 # ---------------------------------------------------------------------------
 def _confirm(stdscr, lines: list[tuple[str, str]],
-             toggles: list[tuple[str, str, bool]] | None = None) -> bool:
+             toggles: list[tuple[str, str, bool]] | None = None,
+             out_vals: list[bool] | None = None) -> bool:
     """展示一段汇报 + 若干开关，返回是否确认执行。
 
     lines: [(label, value, color?)] 展示项。
     toggles: [(label, 说明, 初始bool)] 可切换开关（空格切换）。
+    out_vals: 传入一个可变 list，确认后回写每个开关的最终值（默认 [初始值]*N，
+      用户切换后与之同步）；不传则结果丢弃。
     """
     toggle_vals = [t[2] for t in toggles] if toggles else []
+    if out_vals is not None:
+        out_vals[:] = toggle_vals  # 初始值同步给调用方
     sel = 0  # 0..len(toggles)-1 是开关，最后一项是「开始执行」
     n_items = (len(toggles) if toggles else 0) + 1
 
@@ -352,12 +357,18 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
         elif k == ord(" "):
             if toggles and sel < len(toggles):
                 toggle_vals[sel] = not toggle_vals[sel]
+                if out_vals is not None:
+                    out_vals[:] = toggle_vals
         elif k in (10, curses.KEY_ENTER, ord("\r")):
             if sel == run_idx:
+                if out_vals is not None:
+                    out_vals[:] = toggle_vals
                 return True
             # 在开关上按 Enter 也切换
             if toggles and sel < len(toggles):
                 toggle_vals[sel] = not toggle_vals[sel]
+                if out_vals is not None:
+                    out_vals[:] = toggle_vals
 
 
 # ---------------------------------------------------------------------------
@@ -528,18 +539,23 @@ def _wizard_slice(stdscr, w: int) -> list[list[str]] | None:
         return None
     toggles = [
         ("擦除字幕", "切片时顺带擦除画面字幕", True),
-        ("去重", "切片后过平台查重", False),
+        ("去重", "切片后对产出切片过平台查重", False),
     ]
-    ok = _confirm(stdscr, [("源目录", d), ("视频数量", f"{n} 个")], toggles)
+    vals: list[bool] = []
+    ok = _confirm(stdscr, [("源目录", d), ("视频数量", f"{n} 个")], toggles, vals)
     if not ok:
         return None
-    sub_on = toggles[0][2]
-    # 切片里「擦除字幕」默认开启（--no-sub 才是关闭）；去重由 slice 流水线内置，
-    # 无需单独开关（切片去重能力走 dedup 命令，这里只控制字幕擦除）
+    sub_on = vals[0] if len(vals) > 0 else True
+    dedup_on = vals[1] if len(vals) > 1 else False
+    # 切片 argv：擦除字幕默认开启，关闭时加 --no-sub
     argv = ["slice", "--src-dir", d]
     if not sub_on:
         argv.append("--no-sub")
-    return [argv]
+    # 勾选「去重」时：切片完成后对桌面切片桶（有人脸/无人脸）自动去重
+    argv_list = [argv]
+    if dedup_on:
+        argv_list.append(["dedup", "--all"])
+    return argv_list
 
 
 def _wizard_cover(stdscr, w: int) -> list[list[str]] | None:
