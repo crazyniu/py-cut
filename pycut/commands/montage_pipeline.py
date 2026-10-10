@@ -33,6 +33,7 @@ class MontageOptions:
     speed_range: tuple | None = None  # 片段随机加速区间，如 (1.2, 1.5)；None=不加速
     sticker_dir: str = ""          # 贴纸目录；空=自动探测 config.MONTAGE_STICKER_DIR
     sticker_chance: float = 0.0    # 每个片段叠贴纸的概率
+    seam_fade: float = 0.0        # 可选片段间亮度淡化秒数；0=不启用
     srt: str = str(config.MONTAGE_SUB_PATH)   # 字幕文件；空串=不烧字幕
     crf: str = "20"
     fill_ratio: float = config.MONTAGE_TARGET_FILL_RATIO
@@ -163,7 +164,8 @@ def run_pipeline(opts: MontageOptions) -> dict:
 
     base = tmp / f"base_{seed}.mp4"
     # 用 montage_clips.concat_clips（内部完成「分段截取 → concat → 原子替换」两阶段）
-    r = concat_clips(picked, base, canvas=canvas, fps=config.MONTAGE_FPS, crf=opts.crf)
+    r = concat_clips(picked, base, canvas=canvas, fps=config.MONTAGE_FPS,
+                     crf=opts.crf, **({"seam_fade": opts.seam_fade} if opts.seam_fade else {}))
     if not r.get("ok") or not base.is_file():
         log(f"  [失败] 拼接失败: {r.get('error') or '产物未生成'}")
         result["error"] = "步骤B拼接失败"
