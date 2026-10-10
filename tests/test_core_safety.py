@@ -178,6 +178,7 @@ class CoreSafetyTests(unittest.TestCase):
                  mock.patch.object(montage_pip, "scan_dedup_pool", return_value=[]), \
                  mock.patch.object(montage_pipeline, "_run", return_value=False), \
                  mock.patch.object(montage_pipeline, "_apply_variation"), \
+                 mock.patch.object(montage_pipeline, "_duration", return_value=10.0), \
                  mock.patch.object(montage_pipeline, "log"):
                 result = montage_pipeline.run_pipeline(opts)
             self.assertIn("画中画素材目录没有可用", result.get("error", ""))
