@@ -20,7 +20,7 @@ from .. import config
 from ..core.dedup import (DedupOptions, process_batch, resolve_output_path,
                           write_report)
 from ..core.ffmpeg import self_check
-from ..core.runtime import install_signal_handlers, reset_stop
+from ..core.runtime import STOP, install_signal_handlers, reset_stop
 from ..core.subtitle import collect_clips
 from ..core.utils import fmt_dur, log
 
@@ -101,6 +101,9 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
                  else config.DEDUP_MIN_PHASH_BY_PRESET.get(
                      args.preset, config.DEDUP_MIN_PHASH_DIST))
     for s in srcs:
+        if STOP.flag:
+            log("[中断] 自检已停止，不再检查后续视频（退出码 130）")
+            return 130
         out = resolve_output_path(s, output_opts)
         if not out.is_file():
             log(f"  [跳过] {s.name}: 还没有去重产物（{out.name}）")
@@ -123,6 +126,9 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
     log(f"{'自检达标':<10}{ok:>6}   {'不达标':<8}{bad:>4}   {'无产物':<8}{miss:>4}")
     log(f"{'总耗时':<10}{time.time() - t0:>6.1f}s")
     log("=" * 56)
+    if STOP.flag:
+        log("[中断] 自检未完整完成（退出码 130）")
+        return 130
     return 0 if bad == 0 and miss == 0 else 2
 
 
@@ -196,4 +202,7 @@ def run(args: argparse.Namespace) -> int:
         path = write_report(items)
         log(f"{'报告':<12}{path}")
     log("=" * 62)
+    if STOP.flag:
+        log("[中断] 去重未完整完成（退出码 130）")
+        return 130
     return 0 if bad == 0 else 2
