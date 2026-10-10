@@ -65,6 +65,8 @@ def register(subparsers) -> None:
     g.add_argument("--sticker-chance", type=float, default=config.MONTAGE_STICKER_CHANCE,
                    help="每个片段叠贴纸的概率")
     g.add_argument("--no-sticker", action="store_true", help="不叠贴纸")
+    g.add_argument("--seam-fade", type=float, default=0.0,
+                   help="可选段间黑场淡化秒数（0=关闭；不会缩短成片时长）")
     g.add_argument("--pip-gap", action="store_true",
                    help="画中画段间留空档（默认首尾相接、连续显示）")
     g.add_argument("--no-audio", action="store_true",
@@ -178,6 +180,10 @@ def _is_portrait(p: Path) -> bool:
 
 
 def run(args: argparse.Namespace) -> int:
+    import math
+    if not math.isfinite(args.seam_fade) or args.seam_fade < 0:
+        log("[错误] --seam-fade 必须为有限的非负秒数")
+        return 2
     if args.fission < 1:
         log("[错误] --fission 必须为正整数")
         return 2
@@ -234,6 +240,7 @@ def run(args: argparse.Namespace) -> int:
         mirror_chance=max(0.0, min(1.0, args.mirror_chance)),
         speed_range=(1.0, max(1.0, args.speed_max)),
         sticker_dir=args.sticker_dir,
+        seam_fade=args.seam_fade,
         sticker_chance=0.0 if args.no_sticker else max(0.0, min(1.0, args.sticker_chance)),
         srt=srt,
         crf=args.crf,
@@ -284,6 +291,7 @@ def run(args: argparse.Namespace) -> int:
                 mirror_chance=max(0.0, min(1.0, args.mirror_chance)),
                 speed_range=(1.0, max(1.0, args.speed_max)),
                 sticker_dir=args.sticker_dir,
+                seam_fade=args.seam_fade,
                 sticker_chance=0.0 if args.no_sticker else max(0.0, min(1.0, args.sticker_chance)),
                 srt=srt, crf=args.crf, fill_ratio=args.fill_ratio,
                 noise_db=args.noise_db, min_silence=args.min_silence,
