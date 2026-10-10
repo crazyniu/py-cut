@@ -143,11 +143,22 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
 
     events: queue.Queue[str] = queue.Queue(maxsize=2048)
 
+    read_errors: list[str] = []
+
     def _reader():
         assert proc.stdout is not None
-        for line in proc.stdout:
-            events.put(_sanitize(_redact(line.rstrip("\r\n"), argv)))
-        proc.stdout.close()
+        try:
+            for line in proc.stdout:
+                events.put(_sanitize(_redact(line.rstrip("\r\n"), argv)))
+        except (OSError, UnicodeError) as exc:
+            # A successful child exit is not success if its output stream failed.
+            message = _sanitize(_redact(f"[日志读取失败] {type(exc).__name__}: {exc}", argv))
+            read_errors.append(message)
+        finally:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
 
     reader = threading.Thread(target=_reader, daemon=True)
     reader.start()
@@ -164,7 +175,9 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
                     break
             rc = proc.poll()
             if rc is not None and not reader.is_alive() and events.empty():
-                last_error = int(rc)
+                last_error = int(rc) or (2 if read_errors else 0)
+                for message in read_errors:
+                    history.append(message)
                 break
             _draw(stdscr, argv, index, total, history, offset,
                   "stopping" if interrupted_at is not None else "running")
