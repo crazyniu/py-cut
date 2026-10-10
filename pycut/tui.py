@@ -800,6 +800,26 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     if pip is None:
         return None
     npip = count_videos_recursive(pip)
+    if npip == 0:
+        _flash(stdscr, f"画中画目录没有视频：{pip}", "bad")
+        return None
+
+    # 现有 CLI 支持 --sticker-dir，但旧 TUI 没入口；默认目录无图时让用户选。
+    sticker_dir = Path(config.MONTAGE_STICKER_DIR)
+    def sticker_files(folder: Path) -> int:
+        return sum(1 for p in folder.rglob("*")
+                   if p.is_file() and p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")) if folder.is_dir() else 0
+
+    sticker_count = sticker_files(sticker_dir)
+    if sticker_count == 0:
+        chosen = _pick_dir(stdscr, "混剪 · 选择贴纸目录（Esc 跳过贴纸）", None)
+        if chosen is not None:
+            sticker_dir = Path(chosen)
+            sticker_count = sticker_files(sticker_dir)
+            if sticker_count == 0:
+                _flash(stdscr, f"选择的目录没有 PNG/JPG/WEBP 贴纸：{chosen}", "bad")
+                return None
+
     # 3) 爆款视频目录（非递归，列出视频多选）
     src_dir = _pick_dir(stdscr, "混剪 · 选择「爆款视频」目录（非递归）", None)
     if src_dir is None:
@@ -821,6 +841,7 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     lines = [
         ("片段库", f"{clip}（{nc} 个）"),
         ("画中画", f"{pip}（{npip} 个）"),
+        ("贴纸", f"{sticker_dir}（{sticker_count} 张）" if sticker_count else "未配置（不叠贴纸）"),
         ("爆款视频", f"{len(chosen)} 支 × 裂变 = {total_out} 支成片"),
         ("输出目录", out_dir),
     ]
@@ -835,10 +856,15 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     argv_list: list[list[str]] = []
     for src in chosen:
         n = fission[str(src)]
-        argv_list.append([
+        argv = [
             "montage", "--source", str(src), "--clip-dir", clip,
             "--dedup-dir", pip, "--out-dir", out_dir, "--fission", str(n),
-        ])
+        ]
+        if sticker_count:
+            argv += ["--sticker-dir", str(sticker_dir)]
+        else:
+            argv.append("--no-sticker")
+        argv_list.append(argv)
     return argv_list
 
 
