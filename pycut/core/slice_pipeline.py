@@ -182,17 +182,29 @@ def cut_clip(info: VideoInfo, start: float, end: float, out_path: Path) -> tuple
     args += [str(tmp)]
 
     rc, _out, err = run_cmd(args, timeout=900)
-    if rc != 0 or not tmp.exists():
+    if rc != 0 or not tmp.exists() or tmp.stat().st_size < 1024:
         if tmp.exists():
             try:
                 tmp.unlink()
             except OSError:
                 pass
-        log(f"[切割失败] {out_path.name}: {err.strip()[:200]}")
+        log(f"[切割失败] {out_path.name}: {err.strip()[:200] or '输出文件不足 1KB'}")
         return False, 0
 
     size = tmp.stat().st_size
-    os.replace(str(tmp), str(out_path))  # 原子落盘
+    # 上次的去字幕标记只对旧视频有效，强制重切后绝不能继续沿用：
+    # process_clip 会因为 .covered.json 存在而直接跳过新切片。
+    marker = out_path.with_name(out_path.name + ".covered.json")
+    try:
+        marker.unlink(missing_ok=True)
+        os.replace(str(tmp), str(out_path))  # 原子落盘
+    except OSError as exc:
+        log(f"[切割失败] 无法发布切片或清理旧字幕标记: {exc}")
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False, 0
     return True, size
 
 
