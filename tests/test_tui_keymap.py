@@ -90,32 +90,18 @@ class KeymapTests(unittest.TestCase):
             self.assertEqual(tui._loop(screen), ("quit", None))
         wizard.assert_not_called()
 
-    def test_picker_right_enters_child_and_right_confirms_current(self):
+    def test_folder_picker_uses_system_dialog_not_curses_arrows(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            target = root / "素材"
-            target.mkdir()
-            # With an explicit start, "use current folder" has focus.
-            screen = Screen([curses.KEY_UP, curses.KEY_RIGHT, curses.KEY_RIGHT])
-            self.assertEqual(tui._pick_dir(screen, "目录", start=root),
-                             str(target))
-
-    def test_picker_left_reopens_parent_without_selecting(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            child = root / "素材"
-            child.mkdir()
-            screen = Screen([curses.KEY_LEFT, ord(" ")])
-            self.assertEqual(tui._pick_dir(screen, "目录", start=child),
-                             str(root))
-
-    def test_picker_down_does_not_wrap_away_from_current_folder(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "a").mkdir()
-            screen = Screen([curses.KEY_DOWN, ord(" ")])
-            self.assertEqual(tui._pick_dir(screen, "目录", start=root),
-                             str(root))
+            folder = root / "素材"
+            folder.mkdir()
+            with mock.patch.object(tui, "choose_directory",
+                                   return_value=str(folder)) as dialog:
+                self.assertEqual(
+                    tui._pick_dir(Screen([]), "目录", start=root),
+                    str(folder),
+                )
+            dialog.assert_called_once_with("目录", root)
 
     def test_video_space_multiselect_and_right_confirm(self):
         files = [Path("/tmp/a.mp4"), Path("/tmp/b.mp4")]

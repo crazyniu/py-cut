@@ -112,46 +112,43 @@ class ScanDirsTests(unittest.TestCase):
             with mock.patch.object(scan.os, "scandir", return_value=entries):
                 self.assertEqual(scan.list_dirs(root), [root / "A", root / "B"])
 
-    def test_picker_shows_system_but_not_dot_prefix_folders(self):
+    def test_native_picker_can_choose_a_system_folder(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            for name in (".git", ".hidden", "Library", "System", "node_modules"):
-                (root / name).mkdir()
-            screen = _Screen([27])
-            with mock.patch.object(tui, "_attr", return_value=0):
-                self.assertIsNone(tui._pick_dir(screen, "选择目录", start=root))
-            output = "\n".join(screen.printed)
-            for name in ("Library/", "System/", "node_modules/"):
-                with self.subTest(name=name):
-                    self.assertIn(name, output)
-            for name in (".git/", ".hidden/"):
-                with self.subTest(name=name):
-                    self.assertNotIn(name, output)
+            folder = root / "Library"
+            folder.mkdir()
+            with mock.patch.object(tui, "choose_directory",
+                                   return_value=str(folder)) as choose, \
+                 mock.patch.object(tui, "_attr", return_value=0):
+                self.assertEqual(
+                    tui._pick_dir(_Screen([]), "选择目录", start=root),
+                    str(folder),
+                )
+            choose.assert_called_once_with("选择目录", root)
 
-    def test_browser_enters_volumes_and_selects_the_mounted_disk(self):
+    def test_native_picker_accepts_a_mounted_volume(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             disk = root / "Volumes" / "视频盘"
             disk.mkdir(parents=True)
-            keys = [curses.KEY_UP, 10, curses.KEY_UP, 10, 10]
-            with mock.patch.object(tui, "_attr", return_value=0):
-                chosen = tui._pick_dir(_Screen(keys), "选择外接盘", start=root)
-            self.assertEqual(chosen, str(disk))
+            with mock.patch.object(tui, "choose_directory",
+                                   return_value=str(disk)) as choose, \
+                 mock.patch.object(tui, "_attr", return_value=0):
+                self.assertEqual(
+                    tui._pick_dir(_Screen([]), "选择外接盘", start=root),
+                    str(disk),
+                )
+            choose.assert_called_once_with("选择外接盘", root)
 
-    def test_browser_can_go_back_home_root_or_cancel(self):
+    def test_canceling_native_dialog_does_not_select_a_folder(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            leaf = root / "Videos"
-            leaf.mkdir()
-            with mock.patch.object(tui, "_attr", return_value=0):
-                self.assertEqual(tui._pick_dir(_Screen([ord("h"), ord(" ")]),
-                                               "返回", start=leaf), str(root))
-                self.assertEqual(tui._pick_dir(_Screen([ord("~"), 10]),
-                                               "主目录", start=leaf), str(Path.home()))
-                self.assertEqual(tui._pick_dir(_Screen([ord("/"), 10]),
-                                               "根目录", start=leaf), "/")
-                self.assertIsNone(tui._pick_dir(_Screen([27]),
-                                                "取消", start=leaf))
+            with mock.patch.object(tui, "choose_directory",
+                                   return_value=None), \
+                 mock.patch.object(tui, "_attr", return_value=0):
+                self.assertIsNone(tui._pick_dir(
+                    _Screen([]), "取消目录选择", start=root
+                ))
 
 
 if __name__ == "__main__":

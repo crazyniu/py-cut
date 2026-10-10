@@ -74,7 +74,8 @@ class LayoutTests(unittest.TestCase):
                                                [("视频", "视频.mp4")]))
         tiny = Screen([27], size=(12, 40))
         self.assertTrue(tui._small_screen(tiny))
-        self.assertIsNone(tui._pick_dir(tiny, "路径", start=Path("/")))
+        with mock.patch.object(tui, "choose_directory", return_value=None):
+            self.assertIsNone(tui._pick_dir(tiny, "路径", start=Path("/")))
         with mock.patch.object(tui.curses, "curs_set"):
             self.assertEqual(tui._loop(Screen([27, ord("q")], size=(12, 40)))[0], "quit")
 
