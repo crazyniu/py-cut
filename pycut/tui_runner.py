@@ -93,7 +93,10 @@ def _draw(stdscr, argv: list[str], index: int, total: int,
               if status == "running" else
               "正在等待子进程安全停止…" if status == "stopping" else
               "Enter 返回主菜单 · Q 退出 · ↑↓ 滚动")
-    tui._safe_add(stdscr, h - 2, 2, footer, w, "dim", curses.A_REVERSE)
+    compact = ("X中断  ↑↓滚动  Ctrl+C取消" if status == "running" else
+               "等待任务停止…" if status == "stopping" else
+               "Enter主菜单  Q退出  ↑↓滚动")
+    tui._footer(stdscr, footer, compact)
     stdscr.refresh()
 
 
@@ -129,8 +132,9 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
     cmd = [sys.executable, str(_ROOT / "pycut.py"), *argv]
     try:
         proc = subprocess.Popen(
-            cmd, cwd=str(_ROOT), stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+            cmd, cwd=str(_ROOT), stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8",
             errors="replace", bufsize=1, start_new_session=(os.name != "nt"),
         )
     except OSError as e:
