@@ -144,6 +144,11 @@ def run_pipeline(opts: MontageOptions) -> dict:
     # ---------------- 步骤B：随机混剪 ----------------
     log("--- 步骤B：随机混剪拼接 ---")
     stickers = _load_stickers(opts.sticker_dir)
+    if opts.sticker_chance > 0 and not stickers:
+        directory = opts.sticker_dir or str(config.MONTAGE_STICKER_DIR)
+        result["error"] = f"启用了贴纸但目录没有可用图片：{directory}"
+        log(f"  [失败] {result['error']}（请检查路径或显式使用 --no-sticker）")
+        return result
     if stickers:
         log(f"  贴纸素材 {len(stickers)} 张（叠在片段上：背面半透明 + 边缘羽化）")
     items = scan_library(opts.clip_dir, min_dur=opts.min_clip,
