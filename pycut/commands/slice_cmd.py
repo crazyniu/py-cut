@@ -142,7 +142,12 @@ def run(args: argparse.Namespace) -> int:
                 log(f"[探测失败] {f.name}，跳过")
                 results.append(_stub(f))
                 continue
-            r = process_video(llm, info, opts, manifest)
+            try:
+                r = process_video(llm, info, opts, manifest)
+            except Exception as exc:  # noqa: BLE001 单视频失败不拖垮其他素材
+                log(f"[处理异常] {f.name}: {type(exc).__name__}: {exc}")
+                results.append(_stub(f))
+                continue
             t_detect += r.detect_s
             t_enc += r.enc_s
             results.append(r)
