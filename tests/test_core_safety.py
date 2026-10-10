@@ -184,5 +184,89 @@ class CoreSafetyTests(unittest.TestCase):
             self.assertFalse(result.get("final"))
 
 
+    def test_montage_probe_is_optional_flag_and_needs_no_source(self):
+        from pycut.commands import montage_cmd
+        args = cli.build_parser().parse_args(
+            ["montage", "--probe", "--clip-dir", "/some/materials"])
+        self.assertEqual(args.probe, 1)
+        self.assertEqual(
+            cli.build_parser().parse_args(["montage", "--probe", "1"]).probe, 1)
+        with mock.patch.object(montage_cmd, "install_signal_handlers"), \
+             mock.patch.object(montage_cmd, "reset_stop"), \
+             mock.patch.object(montage_cmd, "self_check"), \
+             mock.patch.object(montage_cmd, "_probe_library", return_value=0) as probe:
+            self.assertEqual(montage_cmd.run(args), 0)
+        probe.assert_called_once_with(Path("/some/materials"), False, 0)
+
+    def test_montage_probe_returns_failure_when_library_empty(self):
+        from pycut.commands import montage_cmd
+        from pycut.core import montage_clips
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.object(montage_clips, "scan_library", return_value=[]), \
+                 mock.patch.object(montage_cmd, "log"):
+                self.assertEqual(montage_cmd._probe_library(Path(td), True, 0), 1)
+
+    def test_dedup_preset_threshold_is_not_forced_to_standard(self):
+        opts = cli.build_parser().parse_args(
+            ["dedup", "--preset", "aggressive"])
+        self.assertEqual(opts.phash_min, 0.0)
+        self.assertEqual(cli.build_parser().parse_args(
+            ["dedup", "--phash-min", "1.75"]).phash_min, 1.75)
+        item = dedup._Report(params={}, dur_src=10, dur_dst=10,
+                             phash_dist=1.5, psnr=25)
+        gates = dedup._gates(item, dedup.DedupOptions(
+            preset="aggressive", phash_min=opts.phash_min), 1.0)
+        self.assertEqual(gates["phash_threshold"], 1.6)
+        self.assertFalse(gates["phash_ok"])
+
+    def test_dedup_check_uses_requested_output_directory(self):
+        from pycut.commands import dedup_cmd
+        from pycut.core import fingerprint
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "a" / "input.mp4"
+            source.parent.mkdir()
+            source.write_bytes(b"src")
+            out_dir = root / "output"
+            target = out_dir / "a" / "input_去重.mp4"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"generated")
+            args = cli.build_parser().parse_args(
+                ["dedup", "--file", str(source), "--check",
+                 "--out-dir", str(out_dir), "--preset", "aggressive"])
+            with mock.patch.object(fingerprint, "compare",
+                                   return_value={"phash_dist": 1.7, "psnr": 21}) as comp, \
+                 mock.patch.object(dedup_cmd, "log"):
+                self.assertEqual(dedup_cmd._check_only([source], args), 0)
+                comp.assert_called_once_with(
+                    source, target, config.DEDUP_PHASH_SAMPLES)
+                target.unlink()
+                self.assertEqual(dedup_cmd._check_only([source], args), 2)
+
+    def test_dedup_check_cannot_compare_in_place_output(self):
+        from pycut.commands import dedup_cmd
+        args = cli.build_parser().parse_args(
+            ["dedup", "--file", "irrelevant.mp4", "--check", "--in-place"])
+        with mock.patch.object(dedup_cmd, "log"):
+            self.assertEqual(dedup_cmd.run(args), 2)
+
+    def test_montage_stage_publish_preserves_existing_output_on_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            staged = root / "stage.mp4"
+            final = root / "final.mp4"
+            final.write_bytes(b"old" * 700)
+            staged.write_bytes(b"new" * 700)
+            with mock.patch.object(montage_pipeline, "_run", return_value=False):
+                self.assertFalse(montage_pipeline._publish_stage([], staged, final))
+            self.assertEqual(final.read_bytes(), b"old" * 700)
+            self.assertFalse(staged.exists())
+            staged.write_bytes(b"new" * 700)
+            with mock.patch.object(montage_pipeline, "_run", return_value=True):
+                self.assertTrue(montage_pipeline._publish_stage([], staged, final))
+            self.assertEqual(final.read_bytes(), b"new" * 700)
+            self.assertFalse(staged.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
