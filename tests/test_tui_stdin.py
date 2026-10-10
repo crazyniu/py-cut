@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import deque
 import io
+import os
 import subprocess
 import unittest
 from unittest import mock
@@ -25,7 +26,7 @@ class RuntimeIsolationTests(unittest.TestCase):
         kwargs = popen.call_args.kwargs
         self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
         self.assertEqual(kwargs["stderr"], subprocess.STDOUT)
-        self.assertTrue(kwargs["start_new_session"] if subprocess.os.name != "nt"
+        self.assertTrue(kwargs["start_new_session"] if os.name != "nt"
                         else not kwargs["start_new_session"])
         self.assertEqual(list(logs), ["started"])
 
