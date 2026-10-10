@@ -137,6 +137,31 @@ def video_bitrate_for_seed(seed: int, baseline: str) -> tuple[str, int]:
 
 
 # ---------------------------------------------------------------------------
+# M2 可选 Ken Burns：独立 seed 流，不触碰默认 28 键 preset 采样
+# ---------------------------------------------------------------------------
+_KEN_BURNS_DIRECTIONS = ("lr", "rl", "tb", "bt")
+
+
+def ken_burns_for_seed(seed: int, duration: float) -> dict:
+    """按 seed 生成缓慢缩放/平移参数，不加载媒体也不改变既有随机流。
+
+    方向和幅度由单独派生的 RNG 决定；周期最长为视频实际时长，
+    极短视频使用最少 0.05 秒周期，保证滤镜表达式无除零风险。
+    """
+    length = float(duration)
+    if not (0 < length < float("inf")):
+        raise ValueError(f"Ken Burns 视频时长无效: {duration!r}")
+    rng = random.Random(derive_seed("dedup-ken-burns-v1", seed))
+    period = round(max(0.05, min(length, rng.uniform(3.0, 5.0))), 3)
+    return {
+        "ken_burns_direction": rng.choice(_KEN_BURNS_DIRECTIONS),
+        "ken_burns_zoom_start": round(rng.uniform(1.018, 1.025), 4),
+        "ken_burns_zoom_delta": round(rng.uniform(0.010, 0.020), 4),
+        "ken_burns_period": period,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 参数生成
 # ---------------------------------------------------------------------------
 def build_params(preset: str, seed: int, *, has_audio: bool = True,
