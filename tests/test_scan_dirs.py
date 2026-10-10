@@ -19,6 +19,7 @@ class _Screen:
 
     def __init__(self, keys):
         self._keys = iter(keys)
+        self.printed = []
 
     def getmaxyx(self):
         return 30, 100
@@ -27,7 +28,7 @@ class _Screen:
         pass
 
     def addstr(self, _y, _x, _s, _attrs=0):
-        pass
+        self.printed.append(_s)
 
     def refresh(self):
         pass
@@ -40,7 +41,7 @@ class _Screen:
 
 
 class ScanDirsTests(unittest.TestCase):
-    def test_volumes_is_browsable_but_system_and_hidden_dirs_are_not(self):
+    def test_browser_lists_hidden_system_and_normal_directories(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             for name in ("Volumes", "System", "Library", "private",
@@ -50,12 +51,20 @@ class ScanDirsTests(unittest.TestCase):
             disk.mkdir()
 
             visible = scan.list_dirs(root)
-            self.assertEqual(visible, [root / "Volumes"])
+            names = [p.name for p in visible]
+            self.assertEqual(names, sorted(names, key=lambda name: (name.casefold(), name)))
+            self.assertEqual(
+                set(names),
+                {"Volumes", "System", "Library", "private",
+                 "node_modules", ".Spotlight-V100", ".hidden"},
+            )
             self.assertEqual(scan.list_dirs(root / "Volumes"), [disk])
+            # The processing pipeline can still filter system paths;
+            # its predicate must not affect the TUI browser.
             self.assertFalse(scan._is_system_dir(root / "Volumes"))
             self.assertTrue(scan._is_system_dir(root / "System"))
 
-    def test_symlink_to_parent_is_not_a_browsable_directory(self):
+    def test_symlink_to_directory_is_listed_but_broken_link_and_file_are_not(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             volume = root / "Volumes"
@@ -66,7 +75,9 @@ class ScanDirsTests(unittest.TestCase):
                 link.symlink_to(root, target_is_directory=True)
             except (OSError, NotImplementedError) as exc:
                 self.skipTest(f"测试环境不支持符号链接: {exc}")
-            self.assertEqual(scan.list_dirs(volume), [volume / "素材"])
+            (volume / "notes.txt").write_text("not a folder", encoding="utf-8")
+            (volume / "broken").symlink_to(volume / "missing", target_is_directory=True)
+            self.assertEqual(scan.list_dirs(volume), [link, volume / "素材"])
 
     def test_unmounted_or_unreadable_directory_is_safe(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -83,8 +94,8 @@ class ScanDirsTests(unittest.TestCase):
                 self.broken = broken
 
             def is_dir(self, follow_symlinks=True):
-                if follow_symlinks:
-                    raise AssertionError("浏览器不应跟随符号链接")
+                if not follow_symlinks:
+                    raise AssertionError("浏览器需要显示目录符号链接")
                 if self.broken:
                     raise PermissionError("offline volume")
                 return True
@@ -97,6 +108,20 @@ class ScanDirsTests(unittest.TestCase):
                        Entry(root / "A")]
             with mock.patch.object(scan.os, "scandir", return_value=entries):
                 self.assertEqual(scan.list_dirs(root), [root / "A", root / "B"])
+
+    def test_picker_renders_hidden_and_system_folders(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name in (".git", ".hidden", "Library", "System", "node_modules"):
+                (root / name).mkdir()
+            screen = _Screen([27])
+            with mock.patch.object(tui, "_attr", return_value=0):
+                self.assertIsNone(tui._pick_dir(screen, "选择目录", start=root))
+            output = "\n".join(screen.printed)
+            for name in (".git/", ".hidden/", "Library/", "System/",
+                         "node_modules/"):
+                with self.subTest(name=name):
+                    self.assertIn(name, output)
 
     def test_browser_enters_volumes_and_selects_the_mounted_disk(self):
         with tempfile.TemporaryDirectory() as temp:
