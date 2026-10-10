@@ -239,8 +239,11 @@ def run(args: argparse.Namespace) -> int:
         workers=args.workers,
     )
     result = montage_pipeline.run_pipeline(opts)
-    if result.get("error"):
-        log(f"[失败] 混剪未完成：{result['error']}")
+    # 除仅提取基准的 step=a 外，任何“无成片路径”的结果都不能报告成功。
+    # run_pipeline 负责实际产物完整性检查；这里防止异常结果字典漏报 error。
+    if result.get("error") or (args.step != "a" and not result.get("final")):
+        reason = result.get("error") or "处理结果缺少成片路径"
+        log(f"[失败] 混剪未完成：{reason}")
         return 2
 
     # ---------------- 批量裂变 ----------------
