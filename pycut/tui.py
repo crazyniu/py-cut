@@ -423,13 +423,19 @@ def _resolve_directory_path(raw: str, current: Path) -> Path:
     for candidate in candidates:
         expanded = Path(os.path.expandvars(candidate)).expanduser()
         folder = expanded if expanded.is_absolute() else current / expanded
-        if folder.is_dir():
-            return folder
+        try:
+            if folder.is_dir():
+                return folder
+        except OSError:
+            continue
     # A file should not silently be treated as a usable input directory.
     expanded = Path(os.path.expandvars(candidates[-1])).expanduser()
     last = expanded if expanded.is_absolute() else current / expanded
-    if last.is_file():
-        raise ValueError("路径指向文件，请选择文件夹")
+    try:
+        if last.is_file():
+            raise ValueError("路径指向文件，请选择文件夹")
+    except OSError:
+        pass
     raise ValueError("目录不存在或无权访问，请检查路径")
 
 
@@ -467,7 +473,10 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
 
     def _change_dir(target: Path, *, focus_child: Path | None = None) -> bool:
         nonlocal cur, entries, sel
-        if not target.is_dir():
+        try:
+            if not target.is_dir():
+                return False
+        except OSError:
             return False
         cur = target
         entries = _entries()
