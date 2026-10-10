@@ -187,6 +187,9 @@ def run(args: argparse.Namespace) -> int:
     if args.fission < 1:
         log("[错误] --fission 必须为正整数")
         return 2
+    if not math.isfinite(args.fill_ratio) or abs(args.fill_ratio - 1.0) > 1e-9:
+        log("[错误] 成片必须与基准视频等长：--fill-ratio 只能设为 1.0")
+        return 2
     install_signal_handlers()
     reset_stop()
     self_check(require_src=False)
