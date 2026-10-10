@@ -138,7 +138,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
             errors="replace", bufsize=1, start_new_session=(os.name != "nt"),
         )
     except OSError as e:
-        history.append(f"[无法启动] {type(e).__name__}: {e}")
+        history.append(_sanitize(_redact(f"[无法启动] {type(e).__name__}: {e}", argv)))
         return 2, False
 
     events: queue.Queue[str] = queue.Queue(maxsize=2048)
