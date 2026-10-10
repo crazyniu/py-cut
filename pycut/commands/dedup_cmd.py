@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from .. import config
-from ..core.dedup import (DedupOptions, default_output_path, process_batch,
+from ..core.dedup import (DedupOptions, process_batch, resolve_output_path,
                           write_report)
 from ..core.ffmpeg import self_check
 from ..core.runtime import install_signal_handlers, reset_stop
@@ -58,8 +58,8 @@ def register(subparsers) -> None:
     g.add_argument("--check", action="store_true",
                    help="只自检：与已有去重产物比对 pHash/PSNR，不产出文件")
     g.add_argument("--no-report", action="store_true", help="不写 JSON 报告")
-    g.add_argument("--phash-min", type=int, default=config.DEDUP_MIN_PHASH_DIST,
-                   help="pHash 平均汉明距离下限（低于此值判为改动不足）")
+    g.add_argument("--phash-min", type=float, default=0.0,
+                   help="pHash 距离下限（0=自动使用当前 preset 的实测门槛；允许小数）")
     g.add_argument("--psnr-min", type=float, default=config.DEDUP_MIN_PSNR,
                    help="PSNR 下限 dB（低于此值判为画质损失过大）")
     g.add_argument("--workers", type=int, default=0,
@@ -70,7 +70,7 @@ def register(subparsers) -> None:
 
 def _pick_srcs(args: argparse.Namespace) -> list[Path]:
     if args.file:
-        srcs = [Path(x) for x in args.file]
+        srcs = [Path(x).expanduser() for x in args.file]
         missing = [s for s in srcs if not s.is_file()]
         if missing:
             sys.exit(f"[错误] 文件不存在: {missing[0]}")
@@ -96,8 +96,12 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
 
     ok = miss = bad = 0
     t0 = time.time()
+    output_opts = DedupOptions(out_dir=args.out_dir)
+    phash_min = (args.phash_min if args.phash_min > 0
+                 else config.DEDUP_MIN_PHASH_BY_PRESET.get(
+                     args.preset, config.DEDUP_MIN_PHASH_DIST))
     for s in srcs:
-        out = default_output_path(s)
+        out = resolve_output_path(s, output_opts)
         if not out.is_file():
             log(f"  [跳过] {s.name}: 还没有去重产物（{out.name}）")
             miss += 1
@@ -109,20 +113,23 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
             bad += 1
             continue
         d, q = r.get("phash_dist", 0.0), r.get("psnr", 0.0)
-        good = d >= args.phash_min and q >= args.psnr_min
+        good = d >= phash_min and q >= args.psnr_min
         ok += good
         bad += (not good)
         log(f"  {'[达标]' if good else '[不达标]'} {s.name}: "
-            f"pHash距离 {d:.1f}/64（门槛 {args.phash_min}）  PSNR {q:.1f}dB（门槛 {args.psnr_min}）")
+            f"pHash距离 {d:.1f}/64（门槛 {phash_min:g}）  PSNR {q:.1f}dB（门槛 {args.psnr_min}）")
     log("")
     log("=" * 56)
     log(f"{'自检达标':<10}{ok:>6}   {'不达标':<8}{bad:>4}   {'无产物':<8}{miss:>4}")
     log(f"{'总耗时':<10}{time.time() - t0:>6.1f}s")
     log("=" * 56)
-    return 0 if bad == 0 else 2
+    return 0 if bad == 0 and miss == 0 else 2
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.check and args.in_place:
+        log("[错误] --check 不能与 --in-place 合用：原始视频已覆盖后无法做源/产物比较")
+        return 2
     install_signal_handlers()
     reset_stop()
     self_check(require_src=False)
