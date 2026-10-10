@@ -55,9 +55,11 @@ def _draw(stdscr, argv: list[str], index: int, total: int,
     stdscr.erase()
     tui._frame(stdscr, "正在处理" if status == "running" else "处理结果",
                f"任务 {index}/{total} · {_display_command(argv)}")
-    color = "info" if status == "running" else ("good" if status == "success" else "bad")
-    status_label = {"running": "● 运行中", "success": "✓ 已完成",
-                    "error": "× 执行失败", "cancelled": "■ 已中断"}.get(status, status)
+    color = ("info" if status == "running" else "warn" if status == "stopping"
+             else "good" if status == "success" else "bad")
+    status_label = {"running": "● 运行中", "stopping": "■ 正在中断（等待清理）",
+                    "success": "✓ 已完成", "error": "× 执行失败",
+                    "cancelled": "■ 已中断"}.get(status, status)
     tui._safe_add(stdscr, 5, 2, status_label, w, color, curses.A_BOLD)
     tui._safe_add(stdscr, 6, 2, "最近日志  /  ↑↓、PgUp、PgDn 滚动", w, "dim")
     rows = max(1, h - 10)
@@ -67,6 +69,7 @@ def _draw(stdscr, argv: list[str], index: int, total: int,
         tui._safe_add(stdscr, 7 + i, 2, line, w, "dim" if line.startswith("  ") else "text")
     footer = ("X 中止处理 · ↑↓ 滚动 · Ctrl+C 中断"
               if status == "running" else
+              "正在等待子进程安全停止…" if status == "stopping" else
               "Enter 返回主菜单 · Q 退出 · ↑↓ 滚动")
     tui._safe_add(stdscr, h - 2, 2, footer, w, "dim", curses.A_REVERSE)
     stdscr.refresh()
@@ -138,7 +141,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
                 last_error = int(rc)
                 break
             _draw(stdscr, argv, index, total, history, offset,
-                  "cancelled" if interrupted_at is not None else "running")
+                  "stopping" if interrupted_at is not None else "running")
             try:
                 k = stdscr.getch()
             except KeyboardInterrupt:
