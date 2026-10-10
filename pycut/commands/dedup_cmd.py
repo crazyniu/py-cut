@@ -69,6 +69,9 @@ def register(subparsers) -> None:
     g.add_argument("--check", action="store_true",
                    help="只自检：与已有去重产物比对 pHash/PSNR，不产出文件")
     g.add_argument("--no-report", action="store_true", help="不写 JSON 报告")
+    g.add_argument("--vmaf", action="store_true", help="可选：只自检时额外计算 VMAF（要求视频严格对齐）")
+    g.add_argument("--vmaf-min", type=float, default=None,
+                   help="VMAF 下限 0~100；须显式开启 --vmaf，不提供则仅报告评分")
     g.add_argument("--phash-min", type=float, action=ExplicitValue,
                    default=0.0,
                    help="pHash 距离下限（0=自动使用当前 preset 的实测门槛；允许小数）")
@@ -107,6 +110,8 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
     """只自检模式：与已有去重产物比对，不产出。"""
     from ..core.fingerprint import compare  # noqa: PLC0415 延迟导入，未用到不加载 cv2
 
+    from ..core.quality_vmaf import VMAFError, assess  # noqa: PLC0415
+
     ok = miss = bad = 0
     t0 = time.time()
     output_opts = DedupOptions(out_dir=args.out_dir)
@@ -130,6 +135,15 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
             continue
         d, q = r.get("phash_dist", 0.0), r.get("psnr", 0.0)
         good = d >= phash_min and q >= args.psnr_min
+        if args.vmaf:
+            try:
+                score = assess(s, out)
+                log(f"  [VMAF] {s.name}: {score.mean:.2f}/100 · {score.frames} 帧 · libvmaf {score.model}")
+                if args.vmaf_min is not None:
+                    good = good and score.mean >= args.vmaf_min
+            except VMAFError as exc:
+                log(f"  [VMAF 失败] {s.name}: {exc}")
+                good = False
         ok += good
         bad += (not good)
         log(f"  {'[达标]' if good else '[不达标]'} {s.name}: "
@@ -146,6 +160,12 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
 
 
 def run(args: argparse.Namespace) -> int:
+    if args.vmaf_min is not None and (not args.vmaf or not 0 <= args.vmaf_min <= 100):
+        log("[错误] --vmaf-min 必须在 --vmaf 下使用，范围 0~100")
+        return 2
+    if args.vmaf and not args.check:
+        log("[错误] --vmaf 当前仅支持 --check 自检，不执行或覆盖视频")
+        return 2
     if args.check and args.in_place:
         log("[错误] --check 不能与 --in-place 合用：原始视频已覆盖后无法做源/产物比较")
         return 2
