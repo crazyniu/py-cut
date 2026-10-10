@@ -18,6 +18,8 @@ import time
 from pathlib import Path
 
 from .. import config
+from ..core.dedup_audio import (AudioMixError, AudioMixOptions,
+                                preflight_external_audio, validate_audio_options)
 from ..core.dedup import (DedupOptions, process_batch, resolve_output_path,
                           write_report)
 from ..core.dedup_profiles import (ExplicitBoolean, ExplicitValue,
@@ -65,6 +67,18 @@ def register(subparsers) -> None:
                    help="贴纸图片路径（背面半透明 + 边缘羽化的静态干扰层）")
     g.add_argument("--delogo", default="",
                    help="可见水印遮盖区域 x,y,w,h（走 delogo 滤镜）")
+
+    g = p.add_argument_group("可选音轨编辑（自有或授权素材，默认关闭）")
+    g.add_argument("--bgm", default="", help="背景音乐路径（短音轨自动循环至视频结束）")
+    g.add_argument("--ambience", default="", help="环境音路径（短音轨自动循环）")
+    g.add_argument("--voiceover", default="", help="替换原声的配音路径（过短补静音）")
+    g.add_argument("--original-gain", type=float, default=1.0,
+                   help="原声增益 0～2（替换配音时不能设置）")
+    g.add_argument("--bgm-gain", type=float, default=0.25, help="BGM 增益 0～2")
+    g.add_argument("--ambience-gain", type=float, default=0.30, help="环境音增益 0～2")
+    g.add_argument("--voice-gain", type=float, default=1.0, help="配音增益 0～2")
+    g.add_argument("--audio-fade-out", type=float, default=0.0,
+                   help="整条混合音轨末尾淡出秒数 0～10")
 
     g = p.add_argument_group("输出与自检")
     g.add_argument("--out-dir", default="", help="输出目录（默认 ~/Desktop/去重_输出）")
@@ -192,6 +206,23 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
 
 
 def run(args: argparse.Namespace) -> int:
+    # Extra audio is strictly opt-in. Legacy no-flag requests follow the same
+    # existing CLI, encoder, self-check and report path.
+    audio_mix = AudioMixOptions(
+        bgm=getattr(args, "bgm", ""),
+        ambience=getattr(args, "ambience", ""),
+        voiceover=getattr(args, "voiceover", ""),
+        original_gain=getattr(args, "original_gain", 1.0),
+        bgm_gain=getattr(args, "bgm_gain", 0.25),
+        ambience_gain=getattr(args, "ambience_gain", 0.30),
+        voice_gain=getattr(args, "voice_gain", 1.0),
+        fade_out=getattr(args, "audio_fade_out", 0.0),
+    )
+    try:
+        validate_audio_options(audio_mix, check_only=bool(args.check))
+    except AudioMixError as exc:
+        log(f"[音轨参数错误] {exc}")
+        return 2
     if args.vmaf_min is not None and (not args.vmaf or not 0 <= args.vmaf_min <= 100):
         log("[错误] --vmaf-min 必须在 --vmaf 下使用，范围 0~100")
         return 2
@@ -212,6 +243,13 @@ def run(args: argparse.Namespace) -> int:
     reset_stop()
     self_check(require_src=False)
 
+    if audio_mix.enabled:
+        try:
+            preflight_external_audio(audio_mix)
+        except AudioMixError as exc:
+            log(f"[音轨输入错误] {exc}")
+            return 2
+
     srcs = _pick_srcs(args)
     log(f"[范围] {len(srcs)} 个视频   档位 {args.preset}")
     if profile_snapshot is not None:
@@ -227,6 +265,7 @@ def run(args: argparse.Namespace) -> int:
         speed=args.speed,
         vary_bitrate=args.vary_bitrate,
         ken_burns=args.ken_burns,
+        audio_mix=audio_mix,
         border=args.border,
         badge=args.badge,
         logo=args.logo,

@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import config
+from .dedup_audio import AudioMixOptions, mix_audio_file, preflight_external_audio
 from .dedup_presets import (build_params, derive_seed, ken_burns_for_seed,
                             video_bitrate_for_seed)
 from .ffmpeg import FFMPEG, FFPROBE, VideoInfo, probe_scalar, probe_video
@@ -67,6 +68,7 @@ class DedupOptions:
     badge: bool = False
     vary_bitrate: bool = False         # M1：默认 CRF，显式启用时使用 seed 派生 ABR 目标
     ken_burns: bool = False            # M2：默认关闭动态缩放/平移，不改现有滤镜
+    audio_mix: AudioMixOptions = field(default_factory=AudioMixOptions)
     logo: str = ""
     delogo: str = ""                   # 可见水印位置 "x,y,w,h"，走 delogo 滤镜
     sticker: str = ""                   # 贴纸图片路径（背面半透明 + 边缘羽化）
@@ -724,6 +726,8 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
             item.error = f"源文件不存在: {src}"
             return item.to_dict()
 
+        if opts.audio_mix.enabled:
+            preflight_external_audio(opts.audio_mix)
         info = probe_video(src)
         if info is None:
             item.error = f"probe 失败（不是可解码的视频？）: {src.name}"
@@ -767,6 +771,9 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
                   f"+{motion['ken_burns_zoom_delta']:.4f} "
                   f"{motion['ken_burns_period']:.3f}s"
             )
+        if opts.audio_mix.enabled:
+            # Original 28-key params/report unchanged when audio edit is off.
+            params["audio_mix"] = opts.audio_mix.snapshot()
         item.params = params
 
         # --- 只自检模式：不产出，比对 src 与「已存在的去重产物」---
@@ -808,6 +815,15 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
                               f"{err.strip().splitlines()[-1] if err.strip() else '无输出'}")
                 item.seconds = time.time() - t0
                 return item.to_dict()
+
+            if opts.audio_mix.enabled:
+                # Audio stream-copy mux verifies temp audio/video streams before
+                # publishing any final output. The video filters are untouched.
+                checked = mix_audio_file(
+                    tmp, opts.audio_mix,
+                    abitrate=str(params.get("abitrate") or "128k"),
+                    timeout=timeout)
+                params["audio_mix"]["verified_output"] = checked
 
             if opts.in_place:
                 # 必须趁 src 尚未被覆盖时与临时产物比较。先替换再
