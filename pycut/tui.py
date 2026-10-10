@@ -435,6 +435,7 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
         _safe_add(stdscr, y, 0, " " * w, w, "text", curses.A_REVERSE)
         _safe_add(stdscr, y, 1, hints, w, "dim", curses.A_REVERSE)
 
+    feat_sel = getattr(_loop, "_feat_sel", 0)  # 选中项只初始化一次，循环内保持
     while True:
         h, w = stdscr.getmaxyx()
         stdscr.erase()
@@ -443,7 +444,7 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
         # ---- 主菜单 ----
         _safe_add(stdscr, 2, 2, "选择功能", w, "keyword", curses.A_BOLD)
         _safe_add(stdscr, 3, 2, "─" * (w - 4), w, "muted")
-        sel = getattr(_loop, "_feat_sel", 0)
+        sel = feat_sel
         for i, (key, name, desc) in enumerate(FEATURES):
             y = 4 + i
             active = (i == sel)
@@ -470,6 +471,8 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
                 continue
             if argv_list:
                 return ("run", argv_list)
+        # 每轮结束把当前选中保存下来（下一轮重绘沿用）
+        feat_sel = sel
     return ("quit", None)
 
 
