@@ -65,12 +65,13 @@ def _is_system_dir(path: Path) -> bool:
     return _is_hidden_dir(path.name)
 
 
-def list_dirs(root: Path) -> list[Path]:
+def list_dirs(root: Path, *, raise_on_error: bool = False) -> list[Path]:
     """列出 root 下名称不以 `.` 开头的一级子目录。
 
     包括 Library/System 等系统目录和有效目录符号链接；只对 TUI
     目录浏览按名称隐藏点前缀目录。视频处理的递归剪枝独立进行。
-    无法访问或已经失效的目录，遵循操作系统权限/错误结果。
+    默认遇到不可读目录返回空列表，兼容已有调用；TUI 可用
+    raise_on_error=True 显示实际读取失败，而非误报为空目录。
     """
     root = Path(root).expanduser()
     if not root.is_dir():
@@ -89,7 +90,8 @@ def list_dirs(root: Path) -> list[Path]:
                 # 已卸载的卷、失效的链接或权限错误不影响其他目录。
                 continue
     except OSError:
-        pass
+        if raise_on_error:
+            raise
     out.sort(key=lambda p: (p.name.casefold(), p.name))
     return out
 
