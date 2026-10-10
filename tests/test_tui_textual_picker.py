@@ -138,9 +138,11 @@ class AdapterTests(unittest.TestCase):
                 Path("/Users/demo")
             ), Path("/Volumes"))
         with mock.patch.object(folder_picker.sys, "platform", "win32"):
-            self.assertEqual(folder_picker._mounted_drives_directory(
-                Path("C:/Users/demo")
-            ), Path("C:/Users/demo").anchor and Path(Path("C:/Users/demo").anchor))
+            home = Path("/Users/demo")
+            self.assertEqual(
+                folder_picker._mounted_drives_directory(home),
+                Path(home.anchor),
+            )
 
     def test_fullscreen_tui_only_not_gui(self):
         import inspect
@@ -153,12 +155,12 @@ class AdapterTests(unittest.TestCase):
 class PickerHost(App[None]):
     def __init__(self, location: Path):
         super().__init__()
-        self.location = location
+        self.initial_directory = location
 
     def on_mount(self):
         self.push_screen(
             folder_picker.PyCutSelectDirectory(
-                location=self.location, title="选择目录"
+                location=self.initial_directory, title="选择目录"
             )
         )
 
