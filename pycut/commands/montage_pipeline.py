@@ -164,7 +164,8 @@ def run_pipeline(opts: MontageOptions) -> dict:
 
     base = tmp / f"base_{seed}.mp4"
     # 用 montage_clips.concat_clips（内部完成「分段截取 → concat → 原子替换」两阶段）
-    r = concat_clips(picked, base, canvas=canvas, fps=config.MONTAGE_FPS,\n                     crf=opts.crf, **({"seam_fade": opts.seam_fade} if opts.seam_fade else {}))
+    r = concat_clips(picked, base, canvas=canvas, fps=config.MONTAGE_FPS,
+                     crf=opts.crf, **({"seam_fade": opts.seam_fade} if opts.seam_fade else {}))
     if not r.get("ok") or not base.is_file():
         log(f"  [失败] 拼接失败: {r.get('error') or '产物未生成'}")
         result["error"] = "步骤B拼接失败"
