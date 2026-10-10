@@ -52,6 +52,21 @@ def register(subparsers) -> None:
     g.add_argument("--probe", type=int, default=0,
                    help="只探测素材库规模（片段数/竖屏数/时长分布）后退出，不处理")
 
+    g = p.add_argument_group("画面扰动")
+    g.add_argument("--mirror-chance", type=float, default=0.35,
+                   help="片段随机镜像概率（素材含文字/包装时调低）")
+    g.add_argument("--speed-max", type=float, default=1.5,
+                   help="片段随机加速上限（1=不加速；1.5 表示 1.0~1.5x 随机）")
+    g.add_argument("--sticker-dir", default="",
+                   help=f"贴纸目录（默认 {config.MONTAGE_STICKER_DIR}）")
+    g.add_argument("--sticker-chance", type=float, default=config.MONTAGE_STICKER_CHANCE,
+                   help="每个片段叠贴纸的概率")
+    g.add_argument("--no-sticker", action="store_true", help="不叠贴纸")
+    g.add_argument("--pip-gap", action="store_true",
+                   help="画中画段间留空档（默认首尾相接、连续显示）")
+    g.add_argument("--no-audio", action="store_true",
+                   help="不贴回基准视频原声（默认保留，成片必须有话术音轨）")
+
     g = p.add_argument_group("调参（一般不用改）")
     g.add_argument("--fill-ratio", type=float, default=config.MONTAGE_TARGET_FILL_RATIO,
                    help="成片目标时长 = 基准时长 × 该系数")
@@ -157,6 +172,12 @@ def run(args: argparse.Namespace) -> int:
         allow_landscape=args.allow_landscape,
         pip_slot=args.pip_slot,
         use_pip=not args.no_pip,
+        pip_continuous=not args.pip_gap,
+        keep_audio=not args.no_audio,
+        mirror_chance=max(0.0, min(1.0, args.mirror_chance)),
+        speed_range=(1.0, max(1.0, args.speed_max)),
+        sticker_dir=args.sticker_dir,
+        sticker_chance=0.0 if args.no_sticker else max(0.0, min(1.0, args.sticker_chance)),
         srt=("" if args.no_sub else args.srt),
         crf=args.crf,
         fill_ratio=args.fill_ratio,

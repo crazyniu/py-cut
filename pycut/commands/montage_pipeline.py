@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,6 +27,12 @@ class MontageOptions:
     allow_landscape: bool = False
     pip_slot: float = 2.5
     use_pip: bool = True
+    pip_continuous: bool = True   # 画中画首尾相接（不设空档）
+    keep_audio: bool = True   # 贴回基准视频原声（成片必须有话术音轨）
+    mirror_chance: float = 0.0     # 片段随机镜像概率（0=不镜像）
+    speed_range: tuple | None = None  # 片段随机加速区间，如 (1.2, 1.5)；None=不加速
+    sticker_dir: str = ""          # 贴纸目录；空=自动探测 config.MONTAGE_STICKER_DIR
+    sticker_chance: float = 0.0    # 每个片段叠贴纸的概率
     srt: str = str(config.MONTAGE_SUB_PATH)   # 字幕文件；空串=不烧字幕
     crf: str = "20"
     fill_ratio: float = config.MONTAGE_TARGET_FILL_RATIO
@@ -128,6 +135,9 @@ def run_pipeline(opts: MontageOptions) -> dict:
 
     # ---------------- 步骤B：随机混剪 ----------------
     log("--- 步骤B：随机混剪拼接 ---")
+    stickers = _load_stickers(opts.sticker_dir)
+    if stickers:
+        log(f"  贴纸素材 {len(stickers)} 张（叠在片段上：背面半透明 + 边缘羽化）")
     items = scan_library(opts.clip_dir, min_dur=opts.min_clip,
                          max_dur=opts.max_clip, workers=opts.workers)
     if opts.allow_landscape:
@@ -141,6 +151,8 @@ def run_pipeline(opts: MontageOptions) -> dict:
 
     picked = pick_clips(items, slots, seed=seed, min_dur=opts.min_clip,
                         max_dur=opts.max_clip)
+    # 画面扰动：按 seed 逐段决定镜像 / 加速 / 贴纸（同一 seed 结果可复现）
+    _apply_variation(picked, seed, opts)
     reused = sum(1 for p in picked if p.get("reused"))
     total = sum(p["take"] for p in picked)
     log(f"  选中 {len(picked)} 个片段（复用 {reused}）累计 {total:.2f}s")
@@ -152,12 +164,15 @@ def run_pipeline(opts: MontageOptions) -> dict:
     r = concat_clips(picked, base, canvas=canvas, fps=config.MONTAGE_FPS, crf=opts.crf)
     if not r.get("ok") or not base.is_file():
         log(f"  [失败] 拼接失败: {r.get('error') or '产物未生成'}")
-        result["error"] = "步骤B 拼接失败"
+        result["error"] = "步骤B拼接失败"
         return result
     log(f"  步骤B 产出: {base.name}  {_size(base)}  {r.get('duration', 0):.2f}s")
     result["base"] = str(base)
     result["clips_used"] = len(picked)
     result["clips_reused"] = reused
+    result["stickers"] = sum(1 for p in picked if p.get("sticker_applied"))
+    if result["stickers"]:
+        log(f"  其中 {result['stickers']}/{len(picked)} 段叠了贴纸")
 
     if opts.step == "b":
         log("  --step b：停在步骤B 产物")
@@ -186,8 +201,15 @@ def run_pipeline(opts: MontageOptions) -> dict:
         else:
             timeline = plan_pip_timeline(pool, target, slot=opts.pip_slot,
                                          seed=seed)
+            # 用户反馈「画中画不连续」：上游 plan_pip_timeline 每段之间固定留
+            # ~0.6s 空档，实测 19% 的时间画面上没有画中画。连续模式下重排时间轴，
+            # 让画中画**首尾相接**（gap=0），符合「全程都有」的观感。
+            if opts.pip_continuous:
+                timeline = _make_continuous(timeline, target)
             cov = sum(t["duration"] for t in timeline)
-            log(f"  画中画 {len(timeline)} 段，累计 {cov:.1f}s / {target:.1f}s")
+            log(f"  画中画 {len(timeline)} 段，累计 {cov:.1f}s / {target:.1f}s"
+                f"（覆盖率 {cov / target * 100:.0f}%"
+                f"{'，连续模式' if opts.pip_continuous else ''}）")
             cmd = build_pip_cmd(base, timeline, final, canvas=canvas,
                                 scale=opts.pip_scale, fps=config.MONTAGE_FPS,
                                 crf=opts.crf)
@@ -203,22 +225,37 @@ def run_pipeline(opts: MontageOptions) -> dict:
         return result
 
     result["final"] = str(final)
-    result["final_duration"] = _duration(final)
-    log(f"  成片: {final.name}  {_size(final)}  {result['final_duration']:.2f}s")
 
     # ---------------- 步骤D：字幕烧录（可选） ----------------
+    # 顺序很关键：字幕烧录用 `-an`，所以**必须放在贴音轨之前**，
+    # 否则刚贴上的基准音轨会被字幕这一步的 -an 抹掉（实测踩过：成片又变静音）。
     if opts.srt and Path(opts.srt).is_file():
         log("--- 步骤D：字幕烧录 ---")
-        ok = _burn_subtitles(Path(final), slots, canvas, opts)
-        if ok:
-            result["subtitles"] = result.get("subtitles", 0)
-            result["final_duration"] = _duration(final)
-            log(f"  烧录后: {_size(final)}  {result['final_duration']:.2f}s")
+        if _burn_subtitles(Path(final), slots, canvas, opts):
+            log(f"  烧录后: {_size(final)}  {_duration(final):.2f}s")
         else:
             log("  [失败] 字幕烧录失败，保留无字幕版本")
             result["error"] = "步骤D 字幕烧录失败"
     elif opts.srt:
         log(f"--- 步骤D：跳过（字幕文件不存在: {opts.srt}）---")
+
+    # ---------------- 步骤E：贴回基准视频的原始音轨（放最后） ----------------
+    # 步骤B/C/D 都用 -an（片段自带的声音是杂音，且字幕烧录会抹掉音轨），
+    # 但**基准视频的话术音频必须保留**——用户要求成片时长与话术对齐，
+    # 静音成片没法用。这里最后把基准音频贴回去，并按视频长度截断。
+    if opts.keep_audio and prof.has_audio:
+        log("--- 步骤E：贴回基准视频音轨（最后一步）---")
+        if _attach_audio(final, opts.source, opts.crf):
+            result["audio"] = True
+            log(f"  已贴回: {_size(final)}  {_duration(final):.2f}s")
+        else:
+            log("  [失败] 音轨贴回失败，成片保持静音")
+            result["error"] = "步骤E 音轨贴回失败"
+    elif not prof.has_audio:
+        log("--- 步骤E：跳过（基准视频无音轨）---")
+
+    result["final_duration"] = _duration(final)
+    log(f"  成片: {final.name}  {_size(final)}  {result['final_duration']:.2f}s")
 
     return result
 
@@ -265,6 +302,100 @@ def _burn_subtitles(video: Path, slots: list[tuple[float, float]],
 # ---------------------------------------------------------------------------
 # 内部工具
 # ---------------------------------------------------------------------------
+def _make_continuous(timeline: list[dict], total: float) -> list[dict]:
+    """把画中画时间轴重排为「首尾相接」，消除段间空档。
+
+    上游每段之间留 ~0.6s 空档，实测导致 19% 的时间没有画中画（用户反馈不连续）。
+    这里保留每段的时长与素材选择，只把 start 依次紧贴上一段的结束时刻；
+    放不下的尾巴（素材用完了）就自然结束，不会拉伸最后一帧。
+    """
+    if not timeline:
+        return timeline
+    out: list[dict] = []
+    cur = 0.0
+    for t in timeline:
+        d = float(t["duration"])
+        if cur + d > total:
+            d = total - cur
+            if d < 0.3:            # 尾巴太短不值得单独一段
+                break
+        t = dict(t)
+        t["start"] = round(cur, 3)
+        t["duration"] = round(d, 3)
+        out.append(t)
+        cur += d
+        if cur >= total - 0.05:
+            break
+    return out
+
+
+def _attach_audio(video: Path, audio_src: Path, crf: str = "20") -> bool:
+    """把基准视频的音轨贴回无声的混剪成片（原子替换）。
+
+    只重新编码视频（因为要接新音频流不能 -c copy）；音频用 aac 128k。
+    时长以视频为准（`-shortest` 防止音频比画面长导致末尾黑屏）。
+    """
+    tmp = video.with_name(video.stem + f".aud_{os.getpid()}{video.suffix}")
+    cmd = [
+        config.FFMPEG, "-y", "-loglevel", "error", "-nostdin",
+        "-i", str(video),        # 无声画面
+        "-i", str(audio_src),   # 基准原声
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf),
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k",
+        "-shortest",             # 以最短流为准，避免音频更长导致末尾黑屏
+        "-movflags", "+faststart",
+        str(tmp),
+    ]
+    ok = _run(cmd)
+    if not ok or not tmp.is_file() or tmp.stat().st_size < 1024:
+        _unlink(tmp)
+        return False
+    os.replace(str(tmp), str(video))
+    return True
+
+
+def _apply_variation(items: list[dict], seed: int, opts: MontageOptions) -> None:
+    """按 seed 给每个片段打上镜像 / 加速 / 贴纸标记（原地修改 items）。
+
+    加速的副作用由`_normalize_segments` 处理：它会把 `take` 乘以 speed，
+    从源素材取更久再压缩，保证成片总时长不被加速拉短。
+    """
+    import random  # noqa: PLC0415
+
+    rng = random.Random(seed ^ 0x5EED)     # 与选片用不同流，避免耦合
+    lo, hi = (opts.speed_range or (1.0, 1.0))
+    n_mirror = n_speed = n_sticker = 0
+    stickers = _load_stickers(opts.sticker_dir)
+    for it in items:
+        if it.get("item") is None:
+            continue
+        if opts.mirror_chance > 0 and rng.random() < opts.mirror_chance:
+            it["mirror"] = True
+            n_mirror += 1
+        if hi > lo + 1e-3:
+            sp = round(rng.uniform(lo, hi), 4)
+            it["speed"] = sp
+            n_speed += 1
+        if stickers and opts.sticker_chance > 0 and rng.random() < opts.sticker_chance:
+            it["sticker"] = str(rng.choice(stickers))
+            n_sticker += 1
+    if n_mirror or n_speed or n_sticker:
+        log(f"  画面扰动: 镜像 {n_mirror} 段 / 加速 {n_speed} 段"
+            + (f"（{lo}~{hi}x）/ 贴纸 {n_sticker} 段" if n_sticker else "")
+            + f"  共 {len(items)} 段")
+
+
+def _load_stickers(sticker_dir: str) -> list[Path]:
+    """加载贴纸素材目录（png/jpg/jpeg/webp）。"""
+    d = Path(sticker_dir) if sticker_dir else config.MONTAGE_STICKER_DIR
+    if not d.is_dir():
+        return []
+    return [p for p in sorted(d.rglob("*"))
+            if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")]
+
+
 def _slots_from_cues(cues, target: float, min_slot: float) -> list[tuple[float, float]]:
     """按字幕条数切时间槽：一条字幕 = 一个槽，槽长 = 该字幕时长。
 

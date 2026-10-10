@@ -517,17 +517,38 @@ def _write_concat_list(files: list[Path]) -> Path:
 
 
 def _seg_cmd(src: Path, offset: float, take: float, out: Path,
-             canvas=None, fps=None, crf: str = CRF_DEFAULT) -> list[str]:
-    """单段截取：双 seek（输入侧粗 + 输出侧精）+ 适配画布 + 静音 + libx264。"""
+             canvas=None, fps=None, crf: str = CRF_DEFAULT,
+             mirror: bool = False, speed: float = 1.0) -> list[str]:
+    """单段截取：双 seek（输入侧粗 + 输出侧精）+ 适配画布 + 静音 + libx264。
+
+    `mirror` / `speed` 是可选的画面扰动（由调用方按 seed 决定，保持参数默认值即
+    原行为，向后兼容）：
+
+    - `mirror=True` 水平翻转（`hflip`）。用于增加画面差异；
+      注意素材里有文字/包装时镜像会露出破绽，调用方应控制概率。
+    - `speed>1` 用 `setpts=PTS/speed` 加速。**加速会缩短画面**，所以调用方必须
+      把 `take` 按 `speed` 放大（取源素材更久）才能填满同样的时间槽——
+      `_normalize_segments` 已按 `speed` 反算，见其实现。
+    """
     off = max(0.0, float(offset))
     coarse = max(0.0, off - float(config.COARSE_BACKOFF))
     fine = off - coarse
+    chain = fit_filter(canvas, fps)
+    # 速度/镜像放在 scale 之前：镜像后缩放与先缩放后镜像等价，但先变速能少处理
+    # 一些帧（setpts 改时间轴，越靠前生效越早丢帧）。
+    pre = []
+    if abs(speed - 1.0) > 1e-3:
+        pre.append(f"setpts=PTS/{float(speed):.5f}")
+    if mirror:
+        pre.append("hflip")
+    if pre:
+        chain = ",".join(pre + [chain])
     return [
         FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
         "-ss", f"{coarse:.3f}", "-i", str(src),   # 输入侧粗 seek（回退 COARSE_BACKOFF）
         "-ss", f"{fine:.3f}",                      # 输出侧精 seek 补回来
         "-t", f"{max(0.0, float(take)):.3f}",
-        "-vf", fit_filter(canvas, fps),
+        "-vf", chain,
         *_enc_args(out, fps, crf),
     ]
 
@@ -566,15 +587,34 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str) -> list[Path]:
         if it is None or d.get("take", 0.0) <= 0:
             continue
         seg = segdir / f"{i:04d}.mp4"
+        speed = float(d.get("speed") or 1.0)
+        # 关键：`take` 是**成片里该段占多长**；加速后源素材要取更久，
+        # 否则 setpts 压缩后段长会不足，成片总时长就会短于目标。
+        src_take = float(d["take"]) * (speed if speed > 1.0 else 1.0)
         timeout = min(ENC_TIMEOUT_MAX,
-                      max(ENC_TIMEOUT_MIN, int(d["take"] * ENC_TIMEOUT_PER_SEC)))
+                      max(ENC_TIMEOUT_MIN, int(src_take * ENC_TIMEOUT_PER_SEC)))
         rc, _o, err = run_cmd(
-            _seg_cmd(it.path, d["offset"], d["take"], seg, canvas, fps, crf),
+            _seg_cmd(it.path, d["offset"], src_take, seg, canvas, fps, crf,
+                     mirror=bool(d.get("mirror")), speed=speed),
             timeout=timeout)
         if rc != 0 or not seg.is_file() or seg.stat().st_size < 1024:
             msg = err.strip().splitlines()[-1] if err.strip() else "无输出"
             log(f"  [段{i}] 截取失败 {Path(it.path).name}: {msg}")
             continue
+
+        # 贴纸叠加：段级叠加（拼接后再加就分不清哪段配哪张了）。
+        # items 里带 "sticker" 才叠；失败保留无贴纸版本，不影响整批。
+        stk = d.get("sticker")
+        if stk:
+            from .montage_sticker import apply_sticker_to_file  # noqa: PLC0415
+            if apply_sticker_to_file(
+                    seg, seg, canvas,
+                    crf=crf, fps=fps,
+                    scale_ratio=config.MONTAGE_STICKER_SCALE,
+                    margin_ratio=config.MONTAGE_STICKER_MARGIN,
+                    opacity=config.MONTAGE_STICKER_OPACITY,
+                    seed=i * 7919 + 13, chance=1.0):
+                d["sticker_applied"] = True
         segs.append(seg)
     return segs
 

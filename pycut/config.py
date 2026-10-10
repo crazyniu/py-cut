@@ -255,6 +255,13 @@ MONTAGE_WORKERS = 2
 # 画中画（步骤C）
 MONTAGE_PIP_SCALE = 0.26            # 画中画宽度 = 基准宽 × 该比例（右上角）
 MONTAGE_PIP_MARGIN = 0.03# 距右/上边缘留白比例
+MONTAGE_PIP_CONTINUOUS = True       # 画中画首尾相接（不设空档，实测设空档会有 19% 时间没有）
+MONTAGE_STICKER_DIR = DESKTOP / "混剪_贴纸"   # 贴纸素材目录（png/jpg/webp）
+# 贴纸叠加（用户要求：背面半透明 + 四角透明，让贴纸融进主画面而不是硬贴上去）
+MONTAGE_STICKER_CHANCE = 0.35       # 每个片段叠贴纸的概率
+MONTAGE_STICKER_SCALE = 0.28        # 贴纸宽度 = 画布宽 × 该比例
+MONTAGE_STICKER_OPACITY = 0.55      # 背面不透明度（0.55 = 半透明，能看见底下的画面）
+MONTAGE_STICKER_MARGIN = 0.04       # 贴纸距边缘留白
 
 # 字幕烧录（步骤D）。样式按画布比例自适应，不写死像素。
 # 默认 BorderStyle=3（半透明黑底框）而非 BorderStyle=1（纯描边）：
