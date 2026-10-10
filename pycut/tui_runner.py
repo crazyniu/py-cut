@@ -111,7 +111,7 @@ def _draw(stdscr, argv: list[str], index: int, total: int,
               "Enter/Esc 返回主菜单 · Q 退出 · ↑↓ 滚动")
     compact = ("X中断  ↑↓滚动  Ctrl+C取消" if status == "running" else
                "等待任务停止…" if status == "stopping" else
-               "Enter/Esc主菜单  Q退出  ↑↓滚动")
+               "Enter主菜单  Esc返回  Q退出  ↑↓滚动")
     tui._footer(stdscr, footer, compact)
     stdscr.refresh()
 
