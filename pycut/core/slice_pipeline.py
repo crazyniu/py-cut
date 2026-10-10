@@ -99,12 +99,31 @@ def out_dirs_for(stem: str) -> tuple[Path, Path]:
     return config.OUT_FACE / stem, config.OUT_NOFACE / stem
 
 
-def video_done(stem: str) -> bool:
-    """视频级续跑：子目录已存在且非空即跳过。"""
-    for d in out_dirs_for(stem):
-        if d.is_dir() and any(d.iterdir()):
-            return True
-    return False
+def video_done(stem: str, segments: int, *, require_sub: bool = False) -> bool:
+    """只有预期全部切片齐备时才能续跑跳过。
+
+    旧实现只要任一输出目录非空就跳过：一次中途失败后目录里仅有
+    001.mp4，也会把整支视频永远当成已完成。这里按检测出的切点校验
+    编号、数量、文件大小以及需要时的字幕检测标记。
+    """
+    if segments <= 0:
+        return False
+    clips = []
+    for directory in out_dirs_for(stem):
+        if directory.is_dir():
+            clips.extend(directory.glob("*.mp4"))
+    expected = {f"{idx:03d}.mp4" for idx in range(1, segments + 1)}
+    if len(clips) != segments or {p.name for p in clips} != expected:
+        return False
+    for clip in clips:
+        try:
+            if clip.stat().st_size < 1024:
+                return False
+        except OSError:
+            return False
+        if require_sub and not clip.with_name(clip.name + ".covered.json").is_file():
+            return False
+    return True
 
 
 def list_videos(limit: int | None = None) -> list[Path]:
@@ -185,11 +204,6 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
                   manifest: Manifest) -> VideoResult:
     res = VideoResult(stem=info.stem)
 
-    if not opts.force and video_done(info.stem):
-        res.skipped = True
-        log(f"[跳过] {info.stem}（已存在输出）")
-        return res
-
     t0 = time.time()
     cuts = detect_scenes(info.path, opts.scene_th)
     segs = build_segments(cuts, info.duration, opts.min_seg, config.MAX_SEG)
@@ -197,6 +211,15 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
     res.segs = len(segs)
     if not segs:
         log(f"[无段落] {info.stem}")
+        return res
+
+    # 试跑必须打印切点，即使已存在产物也不能被“续跑”逻辑吞掉。
+    if not opts.force and not opts.dry_run and video_done(
+        info.stem, len(segs),
+        require_sub=bool(not opts.no_sub and llm.enabled),
+    ):
+        res.skipped = True
+        log(f"[跳过] {info.stem}（{len(segs)} 个切片完整，已处理）")
         return res
 
     rot_hint = f"，旋转{info.rotation}°" if info.rotation else ""
