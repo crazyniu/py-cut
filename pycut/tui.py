@@ -60,27 +60,48 @@ _FALLBACK_8 = {
 }
 
 _LIGHT_BG = False
+_HAS_COLORS = False
+
+# A light terminal needs dark, higher-contrast foregrounds rather than the
+# bright-on-dark 256-colour palette. The background remains the user's default.
+_LIGHT_256 = {
+    "accent": 130, "dim": 238, "muted": 242, "text": 232,
+    "good": 22, "warn": 130, "bad": 124, "info": 25,
+    "keyword": 90, "value": 24,
+}
+_LIGHT_8 = {
+    "accent": curses.COLOR_MAGENTA, "dim": curses.COLOR_BLACK,
+    "muted": curses.COLOR_BLACK, "text": curses.COLOR_BLACK,
+    "good": curses.COLOR_GREEN, "warn": curses.COLOR_MAGENTA,
+    "bad": curses.COLOR_RED, "info": curses.COLOR_BLUE,
+    "keyword": curses.COLOR_MAGENTA, "value": curses.COLOR_BLUE,
+}
 
 
 def _init_colors() -> None:
-    global _LIGHT_BG
-    if not curses.has_colors():
+    global _LIGHT_BG, _HAS_COLORS
+    _HAS_COLORS = curses.has_colors()
+    _LIGHT_BG = _detect_light_bg()
+    if not _HAS_COLORS:
         return
     try:
         curses.use_default_colors()
     except curses.error:
         pass
-    _LIGHT_BG = _detect_light_bg()
-    rich = curses.COLORS >= 256
-    for name, (cname, fg, _bg) in _COLOR_DEFS.items():
-        idx = 1 + list(_COLOR_DEFS).index(name)
-        use_fg = fg if rich else _FALLBACK_8[name]
-        if _LIGHT_BG and name in ("text", "keyword", "value", "info", "good"):
-            use_fg = 0 if name != "keyword" else 5
+    rich = getattr(curses, "COLORS", 0) >= 256
+    for idx, name in enumerate(_COLOR_DEFS, start=1):
+        fg = _COLOR_DEFS[name][1] if rich else _FALLBACK_8[name]
+        if _LIGHT_BG:
+            fg = _LIGHT_256[name] if rich else _LIGHT_8[name]
         try:
-            curses.init_pair(idx, use_fg, -1)
+            curses.init_pair(idx, fg, -1)
         except curses.error:
-            pass
+            # Some terminals do not support the default background sentinel.
+            try:
+                curses.init_pair(idx, fg, curses.COLOR_WHITE if _LIGHT_BG
+                                 else curses.COLOR_BLACK)
+            except curses.error:
+                pass
 
 
 def _detect_light_bg() -> bool:
@@ -97,6 +118,8 @@ def _detect_light_bg() -> bool:
 
 
 def _attr(name: str) -> int:
+    if not _HAS_COLORS:
+        return curses.A_BOLD if name in ("accent", "good", "bad", "keyword") else 0
     return curses.color_pair(1 + list(_COLOR_DEFS).index(name))
 
 
@@ -150,6 +173,18 @@ def _clip(s: str, width: int, *, tail: bool = False) -> str:
     return "".join(reversed(out) if tail else out)
 
 
+def _ellipsize(s: str, width: int, *, tail: bool = False) -> str:
+    """Fit labels and paths by terminal columns, keeping the ellipsis visible."""
+    if width <= 0:
+        return ""
+    if _disp_width(s) <= width:
+        return s
+    if width == 1:
+        return "…"
+    body = _clip(s, width - 1, tail=tail)
+    return ("…" + body) if tail else (body + "…")
+
+
 def _pad(s: str, width: int) -> str:
     return s + " " * max(0, width - _disp_width(s))
 
@@ -169,27 +204,38 @@ def _safe_add(stdscr, y, x, s, maxw, color="text", attrs=0):
 
 def _small_screen(stdscr) -> bool:
     h, w = stdscr.getmaxyx()
-    if w >= 50 and h >= 14:
+    if w >= 60 and h >= 14:
         return False
     stdscr.erase()
     _safe_add(stdscr, 1, 2, "终端窗口太小", w, "warn", curses.A_BOLD)
-    _safe_add(stdscr, 3, 2, f"当前 {w}×{h}，至少需要 50×14", w, "text")
+    _safe_add(stdscr, 3, 2, f"当前 {w}×{h}，至少需要 60×14", w, "text")
     _safe_add(stdscr, 5, 2, "请放大窗口 · Esc/Q 返回", w, "dim")
     stdscr.refresh()
     return True
 
 
 def _frame(stdscr, title: str, subtitle: str = "") -> None:
-    """统一顶栏 / 页面标题 / 上下文，保留主要内容从第 5 行开始。"""
+    """Every view shares the same identity bar, breadcrumb and context rows."""
     _h, w = stdscr.getmaxyx()
     _safe_add(stdscr, 0, 0, " " * w, w, "text", curses.A_REVERSE)
     _safe_add(stdscr, 0, 2, "◈  PYCUT", w, "accent", curses.A_REVERSE | curses.A_BOLD)
     version = f"v{__version__}"
-    _safe_add(stdscr, 0, max(20, w - len(version) - 3), version,
+    _safe_add(stdscr, 0, max(20, w - _disp_width(version) - 3), version,
               w, "dim", curses.A_REVERSE)
-    _safe_add(stdscr, 2, 2, title, w, "keyword", curses.A_BOLD)
-    _safe_add(stdscr, 3, 2, subtitle, w, "info")
+    breadcrumb = title.replace(" · ", "  /  ", 1)
+    _safe_add(stdscr, 2, 2, _ellipsize(breadcrumb, w - 4), w,
+              "keyword", curses.A_BOLD)
+    _safe_add(stdscr, 3, 2, _ellipsize(subtitle, w - 4, tail=True), w, "info")
     _safe_add(stdscr, 4, 2, "─" * max(0, w - 4), w, "muted")
+
+
+def _footer(stdscr, full: str, compact: str) -> None:
+    """A stable shortcut row; compact mode never hides Esc/return controls."""
+    h, w = stdscr.getmaxyx()
+    _safe_add(stdscr, h - 2, 0, " " * w, w, "dim", curses.A_REVERSE)
+    _safe_add(stdscr, h - 2, 2,
+              _ellipsize(compact if w < 80 else full, w - 4),
+              w, "dim", curses.A_REVERSE)
 
 
 # ---------------------------------------------------------------------------
@@ -201,26 +247,22 @@ def _prompt_int(stdscr, y, x, w, title, default, lo, hi) -> int | None:
     untouched = True
     error = ""
     while True:
-        # 输入时也可能收到 KEY_RESIZE。旧的 y/w 是打开对话框时的终端大小，
-        # 缩小窗口后 stdscr.move(y, 0) 会越界，引起整个 TUI 异常退出。
-        h, live_w = stdscr.getmaxyx()
+        h, screen_w = stdscr.getmaxyx()
         if _small_screen(stdscr):
-            if stdscr.getch() in (27, ord("q"), ord("Q")):
+            if stdscr.getch() == 27:
                 return None
             continue
-        row = min(y, h - 3)
-        live_w = min(w, live_w)
-        stdscr.move(row, 0)
+        line_y = min(y, h - 4)
+        w = screen_w
+        stdscr.move(line_y, 0)
         stdscr.clrtoeol()
         prompt = f"{title} [{lo}~{hi}]："
-        _safe_add(stdscr, row, x, prompt, live_w, "text")
+        _safe_add(stdscr, line_y, x, prompt, w, "text")
         bx = x + _disp_width(prompt) + 1
-        _safe_add(stdscr, row, bx,
-                  _clip(buf, max(0, live_w - bx - 2), tail=True), live_w,
+        _safe_add(stdscr, line_y, bx, _clip(buf, max(0, w - bx - 2), tail=True), w,
                   "value", curses.A_REVERSE)
-        _safe_add(stdscr, row + 1, x,
-                  error or "Enter 确认 · Esc 取消 · Backspace 删除",
-                  live_w, "bad" if error else "dim")
+        _safe_add(stdscr, line_y + 1, x, error or "Enter 确认 · Esc 取消 · Backspace 删除", w,
+                  "bad" if error else "dim")
         stdscr.refresh()
         k = stdscr.getch()
         if k in (10, curses.KEY_ENTER, ord("\r")):
@@ -239,19 +281,40 @@ def _prompt_int(stdscr, y, x, w, title, default, lo, hi) -> int | None:
             error = ""
 
 
+def _erase_grapheme(s: str) -> str:
+    """Backspace removes a user-perceived character, including combining marks."""
+    if not s:
+        return s
+    i = len(s) - 1
+    while i > 0 and (_char_width(s[i]) == 0 or 0x1F3FB <= ord(s[i]) <= 0x1F3FF):
+        i -= 1
+    while i >= 2 and ord(s[i - 1]) == 0x200D:
+        i -= 2
+        while i > 0 and _char_width(s[i]) == 0:
+            i -= 1
+    return s[:i]
+
+
 def _prompt_text(stdscr, y, x, w, title, default="") -> str | None:
     """通过 get_wch 接受中文/日文输入法及 Unicode 粘贴；Esc 取消。"""
     buf = default
     get_key = getattr(stdscr, "get_wch", stdscr.getch)
     while True:
-        stdscr.move(y, 0)
+        h, screen_w = stdscr.getmaxyx()
+        if _small_screen(stdscr):
+            if get_key() in ("\x1b", 27):
+                return None
+            continue
+        line_y = min(y, h - 4)
+        w = screen_w
+        stdscr.move(line_y, 0)
         stdscr.clrtoeol()
         prompt = f"{title}："
-        _safe_add(stdscr, y, x, prompt, w, "text")
+        _safe_add(stdscr, line_y, x, prompt, w, "text")
         bx = x + _disp_width(prompt) + 1
-        _safe_add(stdscr, y, bx, _clip(buf, max(0, w - bx - 2), tail=True),
+        _safe_add(stdscr, line_y, bx, _clip(buf, max(0, w - bx - 2), tail=True),
                   w, "value", curses.A_REVERSE)
-        _safe_add(stdscr, y + 1, x, "Enter 搜索 · Esc 取消 · Backspace 删除", w, "dim")
+        _safe_add(stdscr, line_y + 1, x, "Enter 搜索 · Esc 取消 · Backspace 删除", w, "dim")
         stdscr.refresh()
         try:
             k = get_key()
@@ -262,7 +325,7 @@ def _prompt_text(stdscr, y, x, w, title, default="") -> str | None:
         if k in ("\x1b", 27):
             return None
         if k in ("\b", "\x7f", curses.KEY_BACKSPACE, 127, 8):
-            buf = buf[:-1]
+            buf = _erase_grapheme(buf)
         elif isinstance(k, str) and k.isprintable():
             buf += k
         elif isinstance(k, int) and 32 <= k <= 126:
@@ -289,6 +352,8 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
     """
     # 起点：默认根目录；若有 start 则从那里开始
     cur = Path(start).expanduser() if start else Path("/")
+    if not cur.is_dir():
+        cur = Path("/")
 
     def _entries() -> list[tuple[str, Path]]:
         """返回当前目录下的可选项：(显示名, 目标路径)。"""
@@ -326,17 +391,15 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
             active = (i == sel)
             mark = "❯" if active else " "
             # 过长目录名：截断，保留末尾
-            maxlen = w - 8
-            if _disp_width(label) > maxlen:
-                label = "…" + label[-(maxlen - 1):]
+            label = _ellipsize(label, w - 8, tail=True)
             attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
             fg = "accent" if active else "text"
             _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
             _safe_add(stdscr, y, 5, label, w, fg, attr)
 
-        _safe_add(stdscr, h - 2, 2,
-                  " ↑/↓ 移动 · Enter 进入/选定 · ←/h 返回上级 · ~ 主目录 · / 根目录 · Esc 取消 ",
-                  w, "dim", curses.A_REVERSE)
+        _footer(stdscr,
+                " ↑/↓ 移动 · Enter 进入/选定 · ←/h 返回上级 · ~ 主目录 · / 根目录 · Esc 取消 ",
+                "↑↓移动  Enter进入  ←返回  ~主目录  /根  Esc取消")
         stdscr.refresh()
         k = stdscr.getch()
 
@@ -393,9 +456,10 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
     """
     toggle_vals = [t[2] for t in toggles] if toggles else []
     if out_vals is not None:
-        out_vals[:] = toggle_vals  # 初始值同步给调用方
-    sel = 0  # 0..len(toggles)-1 是开关，最后一项是「开始执行」
-    n_items = (len(toggles) if toggles else 0) + 1
+        out_vals[:] = toggle_vals
+    sel = 0
+    n_items = len(toggle_vals) + 1  # last focusable item starts the job
+    summary_offset = 0
 
     while True:
         h, w = stdscr.getmaxyx()
@@ -403,16 +467,36 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
             if stdscr.getch() in (27, ord("q"), ord("Q")):
                 return False
             continue
+
+        # Never hide the action button or the toggles beneath the footer.
+        visible_rows = max(1, h - 13 - len(toggle_vals)) if toggles else max(1, h - 9)
+        summary_offset = min(summary_offset, max(0, len(lines) - visible_rows))
+        has_more = len(lines) > visible_rows
+        subtitle = "检查输入与选项"
+        if has_more:
+            subtitle += (f" · 第 {summary_offset + 1}-"
+                         f"{min(len(lines), summary_offset + visible_rows)}/{len(lines)} 行"
+                         " · PgUp/PgDn 查看")
+        else:
+            subtitle += "，按 Enter 开始执行"
         stdscr.erase()
-        _frame(stdscr, "处理前确认", "检查输入与选项，按 Enter 开始执行")
+        _frame(stdscr, "处理前确认", subtitle)
+
+        label_width = 16 if w >= 80 else 12
+        value_x = 2 + label_width
         y = 5
-        for label, value in lines:
-            _safe_add(stdscr, y, 2, _pad(label, 16), w, "dim")
-            _safe_add(stdscr, y, 2 + 16, value, w, "value")
+        for label, value in lines[summary_offset:summary_offset + visible_rows]:
+            _safe_add(stdscr, y, 2,
+                      _pad(_ellipsize(str(label), label_width - 1), label_width),
+                      w, "dim")
+            _safe_add(stdscr, y, value_x,
+                      _ellipsize(str(value), w - value_x - 2, tail=True),
+                      w, "value")
             y += 1
+
         if toggles:
             y += 1
-            _safe_add(stdscr, y, 2, "功能开关（空格切换）：", w, "dim")
+            _safe_add(stdscr, y, 2, "功能开关（空格切换）", w, "dim")
             y += 1
             for i, (label, desc, _v) in enumerate(toggles):
                 active = (sel == i)
@@ -421,43 +505,48 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
                 sc = "good" if toggle_vals[i] else "muted"
                 attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
                 _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
-                _safe_add(stdscr, y, 5, _pad(label, 14), w, "text", attr)
-                _safe_add(stdscr, y, 5 + 14, state, w, sc, attr)
-                _safe_add(stdscr, y, 5 + 14 + _disp_width(state) + 1, desc, w, "dim", attr)
+                _safe_add(stdscr, y, 5, _pad(label, 12), w, "text", attr)
+                _safe_add(stdscr, y, 17, state, w, sc, attr)
+                _safe_add(stdscr, y, 17 + _disp_width(state) + 1,
+                          _ellipsize(desc, w - 26), w, "dim", attr)
                 y += 1
             y += 1
-        # 开始执行
-        run_idx = len(toggles) if toggles else 0
-        active = (sel == run_idx)
+
+        active = sel == len(toggle_vals)
         attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
-        _safe_add(stdscr, y, 3, "❯" if active else " ", w, "good" if active else "muted", attr)
+        _safe_add(stdscr, y, 3, "❯" if active else " ",
+                  w, "good" if active else "muted", attr)
         _safe_add(stdscr, y, 5, "▶▶ 确认并开始处理", w, "good", attr)
-        _safe_add(stdscr, h - 2, 2, " ↑/↓ 移动 · 空格 切换 · Enter 确认 · Esc 返回 ", w,
-                  "dim", curses.A_REVERSE)
+        _footer(stdscr,
+                " ↑/↓ 移动 · 空格 切换 · PgUp/PgDn 查看摘要 · Enter 确认 · Esc 返回 ",
+                "↑↓选项  空格切换  PgDn摘要  Enter确认  Esc返回")
         stdscr.refresh()
 
         k = stdscr.getch()
         if k in (27, ord("q"), ord("Q")):
             return False
-        if k in (curses.KEY_UP, ord("k")):
+        if k in (curses.KEY_PPAGE, 339):
+            summary_offset = max(0, summary_offset - visible_rows)
+        elif k in (curses.KEY_NPAGE, 338):
+            summary_offset = min(max(0, len(lines) - visible_rows),
+                                 summary_offset + visible_rows)
+        elif k in (curses.KEY_UP, ord("k")):
             sel = (sel - 1) % n_items
         elif k in (curses.KEY_DOWN, ord("j")):
             sel = (sel + 1) % n_items
-        elif k == ord(" "):
-            if toggles and sel < len(toggles):
-                toggle_vals[sel] = not toggle_vals[sel]
-                if out_vals is not None:
-                    out_vals[:] = toggle_vals
+        elif k == ord(" ") and sel < len(toggle_vals):
+            toggle_vals[sel] = not toggle_vals[sel]
+            if out_vals is not None:
+                out_vals[:] = toggle_vals
         elif k in (10, curses.KEY_ENTER, ord("\r")):
-            if sel == run_idx:
+            if sel == len(toggle_vals):
                 if out_vals is not None:
                     out_vals[:] = toggle_vals
                 return True
-            # 在开关上按 Enter 也切换
-            if toggles and sel < len(toggles):
-                toggle_vals[sel] = not toggle_vals[sel]
-                if out_vals is not None:
-                    out_vals[:] = toggle_vals
+            # Enter on a switch toggles it; only the action starts the job.
+            toggle_vals[sel] = not toggle_vals[sel]
+            if out_vals is not None:
+                out_vals[:] = toggle_vals
 
 
 # ---------------------------------------------------------------------------
@@ -497,18 +586,16 @@ def _multi_select(stdscr, title: str, files: list[Path]) -> tuple[list[Path], di
             bcolor = "good" if checked else "muted"
             attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
             name = f.name
-            maxlen = w - 24
-            if _disp_width(name) > maxlen:
-                name = name[:maxlen - 1] + "…"
+            name = _ellipsize(name, w - 24)
             _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
             _safe_add(stdscr, y, 5, box, w, bcolor, attr)
             _safe_add(stdscr, y, 5 + 4, name, w, "text", attr)
             n = fission.get(str(f), 1)
             _safe_add(stdscr, y, w - 12, f"裂变 x{n}", w, "value", attr)
 
-        _safe_add(stdscr, h - 2, 2,
-                  " ↑/↓ 移动 · 空格 勾选 · E 设裂变数(1~99) · A 全选 · Enter 确认 · Esc 返回 ",
-                  w, "dim", curses.A_REVERSE)
+        _footer(stdscr,
+                " ↑/↓ 移动 · 空格 勾选 · E 设裂变数(1~99) · A 全选 · Enter 确认 · Esc 返回 ",
+                "↑↓移动  空格勾选  E数量  A全选  Enter确认  Esc返回")
         stdscr.refresh()
 
         k = stdscr.getch()
@@ -579,9 +666,8 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
             _safe_add(stdscr, 12, 3, f"当前选择  /  {name}", w, "accent", curses.A_BOLD)
             _safe_add(stdscr, 13, 3, FEATURE_HINTS[key], w, "text")
             _safe_add(stdscr, 15, 3, "每个向导会先展示处理范围，确认后才执行。", w, "dim")
-        _safe_add(stdscr, h - 2, 2,
-                  " ↑/↓ 移动 · 1-5 快速进入 · Enter 选择 · Q 退出 ",
-                  w, "dim", curses.A_REVERSE)
+        _footer(stdscr, " ↑/↓ 移动 · 1-5 快速进入 · Enter 选择 · Q 退出 ",
+                "↑↓移动  1-5快捷  Enter选择  Q退出")
         stdscr.refresh()
         k = stdscr.getch()
         if k in (27, ord("q"), ord("Q")):
@@ -727,6 +813,9 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
         ("爆款视频", f"{len(chosen)} 支 × 裂变 = {total_out} 支成片"),
         ("输出目录", out_dir),
     ]
+    # Every selected source can be checked on the review page (PgDn to scroll).
+    for i, src in enumerate(chosen, 1):
+        lines.append((f"来源 {i}", f"{src.name} × {fission[str(src)]}"))
     ok = _confirm(stdscr, lines)
     if not ok:
         return None
@@ -770,7 +859,8 @@ def _wizard_search(stdscr, w: int) -> None:
             continue
         stdscr.erase()
         _frame(stdscr, f"查素材 · 「{kw.strip()}」共 {n} 个", f"搜索起点: {start}")
-        max_rows = max(1, h - 7)
+        # Reserve h-3 for the full path and h-2 for the shortcut bar.
+        max_rows = max(1, h - 9)
         top = 0
         if sel >= max_rows:
             top = sel - max_rows + 1
@@ -781,9 +871,7 @@ def _wizard_search(stdscr, w: int) -> None:
             mark = "❯" if active else " "
             # 显示：文件名（加粗）+ 相对目录（弱化）
             disp = p.name
-            maxlen = w2 - 8
-            if _disp_width(disp) > maxlen:
-                disp = disp[:maxlen - 1] + "…"
+            disp = _ellipsize(disp, w2 - 8)
             attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
             fg = "accent" if active else "text"
             _safe_add(stdscr, y, 3, mark, w2, "accent" if active else "muted", attr)
@@ -793,9 +881,8 @@ def _wizard_search(stdscr, w: int) -> None:
                       "dim", attr)
         _safe_add(stdscr, h - 3, 2,
                   _clip(str(files[sel]), max(0, w2 - 6), tail=True), w2, "info")
-        _safe_add(stdscr, h - 2, 2,
-                  " ↑/↓ 滚动 · Enter/O Finder 中定位 · Esc/Q 返回主菜单 ",
-                  w2, "dim", curses.A_REVERSE)
+        _footer(stdscr, " ↑/↓ 滚动 · Enter/O Finder 中定位 · Esc/Q 返回主菜单 ",
+                "↑↓浏览  Enter/O定位  Esc/Q返回")
         stdscr.refresh()
         k = stdscr.getch()
         if k in (27, ord("q"), ord("Q")):
@@ -820,7 +907,7 @@ def _flash(stdscr, msg: str, color: str = "bad") -> None:
     h, w = stdscr.getmaxyx()
     _safe_add(stdscr, h - 3, 2, " " * (w - 4), w, color, curses.A_REVERSE)
     _safe_add(stdscr, h - 3, 2, " " + msg, w, color, curses.A_REVERSE)
-    _safe_add(stdscr, h - 2, 2, "按任意键继续", w, "dim", curses.A_REVERSE)
+    _footer(stdscr, "按任意键继续", "按任意键继续")
     stdscr.refresh()
     stdscr.getch()
 
