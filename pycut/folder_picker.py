@@ -1,83 +1,167 @@
-"""Native folder-selection dialogs for the TUI.
+"""Cross-platform, pure-terminal folder selection using textual-fspicker.
 
-This module does not enumerate directories or interpret typed paths.
-macOS uses the system's choose-folder dialog (Standard Additions); other
-desktop systems use the open-source Tk native directory picker in tkinter.
-Both support standard system locations, mounted disks, and folder validation.
+Filesystem browsing and keyboard navigation belong to the mature, MIT-licensed
+Textual SelectDirectory / DirectoryNavigation widgets, not to pycut.
+Only thin workflow integration, shortcuts, and path validation live here.
 """
 from __future__ import annotations
 
+import curses
+import os
 from pathlib import Path
-import subprocess
 import sys
 
-
-_MACOS_CHOOSE_FOLDER = """on run argv
-    set dialogTitle to item 1 of argv
-    set startPath to item 2 of argv
-    try
-        set initialFolder to (POSIX file startPath) as alias
-        set chosenFolder to choose folder with prompt dialogTitle ¬
-            default location initialFolder invisibles false ¬
-            multiple selections allowed false
-        return POSIX path of chosenFolder
-    on error number -128
-        return ""
-    end try
-end run"""
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.widgets import Input, Static
+from textual_fspicker import SelectDirectory
+from textual_fspicker.parts import DirectoryNavigation
 
 
-def _macos_choose_folder(title: str, initial_dir: Path) -> str | None:
-    """Show macOS' native folder dialog without handing the terminal to it."""
-    # The title and initial path are positional arguments to osascript, not
-    # interpolated into AppleScript source or executed by a shell.
-    proc = subprocess.run(
-        ["osascript", "-e", _MACOS_CHOOSE_FOLDER, title, str(initial_dir)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
+def _mounted_drives_directory(home: Path) -> Path:
+    """Pick a sensible mount browser location; Windows has native drive list."""
+    if sys.platform == "darwin":
+        return Path("/Volumes")
+    if sys.platform == "win32":
+        return Path(home.anchor)
+    roots = (
+        Path("/run/media") / home.name,
+        Path("/media") / home.name,
+        Path("/run/media"),
+        Path("/media"),
+        Path("/mnt"),
     )
-    if proc.returncode:
-        if "-128" in proc.stderr:
-            return None
-        raise OSError("macOS 文件夹选择窗口无法打开：" + proc.stderr.strip())
-    return proc.stdout.strip() or None
+    return next((root for root in roots if root.is_dir()), Path("/mnt"))
 
 
-def _tk_choose_folder(title: str, initial_dir: Path) -> str | None:
-    """Use the mature open-source Tk native folder dialog on other desktops."""
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except ImportError as exc:
-        raise OSError("当前 Python 缺少 tkinter/Tk 图形文件夹选择组件") from exc
-    try:
-        window = tk.Tk()
-    except tk.TclError as exc:
-        raise OSError("无法启动图形文件夹选择窗口：" + str(exc)) from exc
-    try:
-        window.withdraw()
-        selected = filedialog.askdirectory(
-            parent=window,
-            initialdir=str(initial_dir),
-            title=title,
-            mustexist=True,
+class PyCutSelectDirectory(SelectDirectory):
+    """Add convenient locations and a paste field to the existing picker.
+
+    The actual directory tree, focus, scrolling, hidden-dot filtering and
+    Windows drive selection are implemented by textual-fspicker.
+    """
+
+    DEFAULT_CSS = """
+    #pycut-picker-help {
+        height: auto;
+        color: $text-muted;
+        padding: 0 1;
+    }
+    #pycut-picker-path {
+        margin: 0 1 1 1;
+    }
+    """
+    BINDINGS = [
+        *SelectDirectory.BINDINGS,
+        Binding("1", "jump_home", "主目录", show=False),
+        Binding("2", "jump_desktop", "桌面", show=False),
+        Binding("3", "jump_documents", "文档", show=False),
+        Binding("4", "jump_downloads", "下载", show=False),
+        Binding("5", "jump_mounts", "挂载磁盘", show=False),
+        Binding("p", "focus_path", "输入路径", show=False),
+        Binding("left", "go_up", "返回上级", show=False),
+    ]
+
+    def _header_area(self) -> ComposeResult:
+        yield Static(
+            "1 主目录  2 桌面  3 文档  4 下载  5 磁盘  P 输入路径"
+            "   ↑↓ 选择  Enter 打开  Backspace/← 上级  Esc 返回",
+            id="pycut-picker-help",
         )
-    finally:
-        window.destroy()
-    return selected or None
+        yield Input(
+            placeholder="可粘贴绝对路径、~/目录或相对路径，Enter 跳转",
+            id="pycut-picker-path",
+        )
+
+    def _navigation(self) -> DirectoryNavigation:
+        return self.query_one(DirectoryNavigation)
+
+    def _jump(self, destination: Path) -> None:
+        try:
+            if not destination.is_dir():
+                self._set_error(f"目录不存在或无法访问：{destination}")
+                return
+        except OSError:
+            self._set_error(f"目录不存在或无法访问：{destination}")
+            return
+        self._navigation().location = destination
+        self._navigation().focus()
+        self._set_error()
+
+    def action_jump_home(self) -> None:
+        self._jump(Path.home())
+
+    def action_jump_desktop(self) -> None:
+        self._jump(Path.home() / "Desktop")
+
+    def action_jump_documents(self) -> None:
+        self._jump(Path.home() / "Documents")
+
+    def action_jump_downloads(self) -> None:
+        self._jump(Path.home() / "Downloads")
+
+    def action_jump_mounts(self) -> None:
+        self._jump(_mounted_drives_directory(Path.home()))
+
+    def action_focus_path(self) -> None:
+        self.query_one("#pycut-picker-path", Input).focus()
+
+    def action_go_up(self) -> None:
+        self._navigation().action_navigate_up()
+        self._navigation().focus()
+
+    @on(Input.Submitted, "#pycut-picker-path")
+    def _path_submitted(self, event: Input.Submitted) -> None:
+        raw = event.value.strip()
+        if not raw:
+            self._set_error("请输入目录路径")
+            return
+        expanded = Path(os.path.expandvars(raw)).expanduser()
+        target = (expanded if expanded.is_absolute()
+                  else self._navigation().location / expanded)
+        try:
+            if not target.is_dir():
+                self._set_error("目录不存在或不是文件夹")
+                return
+        except OSError:
+            self._set_error("目录不存在或无权访问")
+            return
+        self._jump(target)
+        event.input.value = ""
+
+
+class _PickerApp(App[Path | None]):
+    """Run the reusable SelectDirectory modal as a standalone terminal view."""
+
+    def __init__(self, title: str, location: Path) -> None:
+        super().__init__()
+        self._picker_title = title
+        self._location = location
+
+    @work
+    async def on_mount(self) -> None:
+        chosen = await self.push_screen_wait(
+            PyCutSelectDirectory(
+                location=self._location,
+                title=self._picker_title,
+                select_button="选择当前目录",
+                cancel_button="返回",
+            )
+        )
+        self.exit(chosen)
 
 
 def choose_directory(title: str, initial_dir: Path) -> str | None:
-    """Return a native dialog's chosen directory or None for cancellation.
+    """Temporarily suspend curses, run a pure TUI picker, and restore curses.
 
-    Callers validate the selected directory immediately before processing,
-    since removable disks may disappear while the dialog is open.
+    No GUI/Tk/AppleScript, shell subprocesses, or custom directory listing.
+    A finally block must restore terminal input mode for Esc and arrow keys.
     """
-    if sys.platform == "darwin":
-        return _macos_choose_folder(title, initial_dir)
-    return _tk_choose_folder(title, initial_dir)
+    curses.def_prog_mode()
+    try:
+        curses.endwin()
+        chosen = _PickerApp(title, initial_dir).run()
+    finally:
+        curses.reset_prog_mode()
+    return str(chosen) if chosen is not None else None
