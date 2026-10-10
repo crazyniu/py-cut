@@ -652,11 +652,13 @@ def _wizard_cover(stdscr, w: int) -> list[list[str]] | None:
     d = _pick_dir(stdscr, "字幕擦除 · 选择视频目录", None)
     if d is None:
         return None
-    n = count_videos_recursive(d)
+    # 与 cover_cmd._pick_clips 一致：最多 3 层，只处理 MP4。
+    from .core.scan import list_videos_recursive  # noqa: PLC0415
+    n = sum(p.suffix.lower() == ".mp4" for p in list_videos_recursive(d))
     if n == 0:
-        _flash(stdscr, f"该目录下没有视频：{d}", "bad")
+        _flash(stdscr, f"目录 3 层内没有可处理的 MP4：{d}", "bad")
         return None
-    ok = _confirm(stdscr, [("源目录", d), ("视频数量", f"{n} 个")])
+    ok = _confirm(stdscr, [("源目录", d), ("MP4 数量", f"{n} 个")])
     if not ok:
         return None
     return [["cover", "--src-dir", d]]
