@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -182,10 +183,13 @@ def run_pipeline(opts: MontageOptions) -> dict:
 
     # ---------------- 步骤C：画中画叠加 ----------------
     final = out_dir / (opts.out_name or f"混剪_{opts.source.stem}.mp4")
+    # C 步先写临时产物，FFmpeg 失败时不破坏上一次的合格成片。
+    staged = final.with_name(
+        f"{final.stem}.stage_{os.getpid()}_{threading.get_ident():x}.mp4")
     if not opts.use_pip:
         log("--- 步骤C：--no-pip，跳过画中画 ---")
-        cmd = ["-y", "-i", str(base), "-c", "copy", str(final)]
-        if not _run([config.FFMPEG] + cmd):
+        cmd = ["-y", "-i", str(base), "-c", "copy", str(staged)]
+        if not _publish_stage([config.FFMPEG] + cmd, staged, final):
             log("  [失败] 无声拷贝失败")
             result["error"] = "步骤C 失败"
             return result
@@ -196,8 +200,8 @@ def run_pipeline(opts: MontageOptions) -> dict:
         if not pool:
             log("  [提示] 无画中画素材，直接输出步骤B 结果")
             cmd = [config.FFMPEG, "-y", "-loglevel", "error", "-i", str(base),
-                   "-c", "copy", str(final)]
-            if not _run(cmd):
+                   "-c", "copy", str(staged)]
+            if not _publish_stage(cmd, staged, final):
                 log("  [失败] 无画中画素材时的成片拷贝失败")
                 result["error"] = "步骤C 失败"
                 return result
@@ -213,10 +217,10 @@ def run_pipeline(opts: MontageOptions) -> dict:
             log(f"  画中画 {len(timeline)} 段，累计 {cov:.1f}s / {target:.1f}s"
                 f"（覆盖率 {cov / target * 100:.0f}%"
                 f"{'，连续模式' if opts.pip_continuous else ''}）")
-            cmd = build_pip_cmd(base, timeline, final, canvas=canvas,
+            cmd = build_pip_cmd(base, timeline, staged, canvas=canvas,
                                 scale=opts.pip_scale, fps=config.MONTAGE_FPS,
                                 crf=opts.crf)
-            if not _run(cmd):
+            if not _publish_stage(cmd, staged, final):
                 log("  [失败] 画中画叠加失败")
                 result["error"] = "步骤C 失败"
                 return result
@@ -481,6 +485,23 @@ def _fill_slots(slots: list[tuple[float, float]], need: float,
             f"{sum(e - s for s, e in out):.2f}s"
             + (f"，仍缺 {left:.2f}s" if left > 0.05 else ""))
     return out
+
+
+def _publish_stage(cmd: list[str], staged: Path, final: Path) -> bool:
+    """校验临时文件后原子发布，执行失败绝不覆盖已有最终成片。"""
+    try:
+        if not _run(cmd):
+            return False
+        if not staged.is_file() or staged.stat().st_size < 1024:
+            log("  [失败] 阶段产物不存在或不足 1KB，保留原成片")
+            return False
+        os.replace(str(staged), str(final))
+        return True
+    except OSError as exc:
+        log(f"  [失败] 发布成片失败：{exc}")
+        return False
+    finally:
+        _unlink(staged)
 
 
 def _run(cmd: list[str]) -> bool:
