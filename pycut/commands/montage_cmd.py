@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .. import config
 from ..core.ffmpeg import self_check
-from ..core.runtime import install_signal_handlers, reset_stop
+from ..core.runtime import STOP, install_signal_handlers, reset_stop
 from ..core.utils import fmt_dur, log
 
 
@@ -192,7 +192,14 @@ def run(args: argparse.Namespace) -> int:
 
     # --probe 只检查片段库，不需要基准视频、字幕或已有成片。
     if args.probe:
-        return _probe_library(clip_dir, args.allow_landscape, args.workers)
+        if STOP.flag:
+            log("[中断] 混剪素材探测已取消（退出码 130）")
+            return 130
+        code = _probe_library(clip_dir, args.allow_landscape, args.workers)
+        if STOP.flag:
+            log("[中断] 混剪素材探测未完整完成（退出码 130）")
+            return 130
+        return code
 
     if not source.is_file():
         sys.exit(f"[错误] 步骤A 基准视频不存在: {source}")
@@ -238,7 +245,13 @@ def run(args: argparse.Namespace) -> int:
         pip_scale=args.pip_scale,
         workers=args.workers,
     )
+    if STOP.flag:
+        log("[中断] 已取消混剪，未启动处理（退出码 130）")
+        return 130
     result = montage_pipeline.run_pipeline(opts)
+    if STOP.flag:
+        log("[中断] 混剪任务已取消，不执行后续裂变（退出码 130）")
+        return 130
     # 除仅提取基准的 step=a 外，任何“无成片路径”的结果都不能报告成功。
     # run_pipeline 负责实际产物完整性检查；这里防止异常结果字典漏报 error。
     if result.get("error") or (args.step != "a" and not result.get("final")):
@@ -256,6 +269,9 @@ def run(args: argparse.Namespace) -> int:
         from ..core.dedup_presets import derive_seed  # noqa: PLC0415
         base_seed = args.seed if args.seed else derive_seed(source)
         for i in range(2, fission + 1):
+            if STOP.flag:
+                log("[中断] 已停止后续裂变（退出码 130）")
+                return 130
             log("")
             log(f"--- 裂变 {i}/{fission}（同一爆款视频，换 seed 重混）---")
             vopts = montage_pipeline.MontageOptions(
@@ -276,11 +292,18 @@ def run(args: argparse.Namespace) -> int:
                 out_name=f"混剪_{source.stem}_{i}.mp4",
             )
             r = montage_pipeline.run_pipeline(vopts)
+            if STOP.flag:
+                log(f"[中断] 裂变 {i}/{fission} 未完整完成，不再继续（退出码 130）")
+                return 130
             if r.get("error") or not r.get("final"):
                 failed_fissions += 1
                 log(f"  [失败] 裂变 {i}/{fission}: {r.get('error') or '无产物'}")
             else:
                 log(f"  裂变 {i} 产出: {r['final']}")
+
+    if STOP.flag:
+        log("[中断] 混剪已取消（退出码 130）")
+        return 130
 
     log("")
     log("=" * 62)
@@ -300,4 +323,7 @@ def run(args: argparse.Namespace) -> int:
     log(f"{'成片路径':<12}{result['final']}")
     log(f"{'总耗时':<12}{fmt_dur(time.time() - t0):>10}")
     log("=" * 62)
+    if STOP.flag:
+        log("[中断] 混剪已取消（退出码 130）")
+        return 130
     return 2 if failed_fissions else 0
