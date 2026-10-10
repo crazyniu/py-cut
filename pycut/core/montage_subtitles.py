@@ -398,7 +398,9 @@ def _as_timed(items) -> list[tuple[float, float, str]]:
 
 
 def build_ass(cues_or_slots, canvas=None, font_size=None, margin_v=None,
-              outline=None, shadow=None, font_family=None) -> tuple[str, dict]:
+              outline=None, shadow=None, font_family=None,
+              border_style: int | None = None,
+              ass_dir: Path | None = None) -> tuple[str, dict]:
     """生成 ASS 字幕文件，返回 (ass 路径, 实际生效的样式字典)。
 
     文件写在 `config.MONTAGE_TMP` 下，文件名带 pid 与自增序号，
@@ -410,6 +412,9 @@ def build_ass(cues_or_slots, canvas=None, font_size=None, margin_v=None,
       * 描边/ 背景框内边距 / 投影 = 画布高 × 各自比例；
       * 底框 `BorderStyle=3` + `BackColour=&H80000000`（半透明黑）。
 
+    可选 `border_style=1/3` 和 `ass_dir` 仅供授权素材的对照测试，
+    不传时保持原先的底框样式及默认临时目录。
+
     **字号与PlayRes 的关系**（易踩）：ASS 里所有尺寸都以 `PlayResX/Y` 为基准。
     本函数把 `PlayResY` 设成画布高度，于是「ASS 单位 : 输出像素 = 1 : 1」，
     缩放系数恰为 1.0——即写 54 就是 54px。若哪天为了兼容性把 PlayResY 调小
@@ -417,6 +422,9 @@ def build_ass(cues_or_slots, canvas=None, font_size=None, margin_v=None,
     `画布高 / PlayResY`，否则字会明显变小。代码里把这个系数显式算出来，
     改PlayResY 时不会漏掉。
     """
+    style_mode = SUB_BORDER_STYLE if border_style is None else border_style
+    if style_mode not in (1, 3):
+        raise ValueError("BorderStyle 仅支持 1=描边或 3=半透明背景框")
     items = _as_timed(cues_or_slots)
     W, H = (int(canvas[0]), int(canvas[1])) if canvas else config.MONTAGE_CANVAS
     play_res_y = H
@@ -426,14 +434,14 @@ def build_ass(cues_or_slots, canvas=None, font_size=None, margin_v=None,
     m_v = int(round(margin_v if margin_v is not None else H * SUB_MARGIN_V_RATIO))
     m_h = int(round(W * SUB_MARGIN_H_RATIO))
     ol = int(round(outline if outline is not None
-                   else H * (SUB_BOX_PAD_RATIO if SUB_BORDER_STYLE == 3
+                   else H * (SUB_BOX_PAD_RATIO if style_mode == 3
                              else SUB_OUTLINE_RATIO)))
     sh = int(round(shadow if shadow is not None else H * SUB_SHADOW_RATIO))
     family = font_family or pick_font()
 
     usable = max(1, W - 2 * m_h)
     max_chars = max(1, int(usable // size))
-    if SUB_BORDER_STYLE == 3:
+    if style_mode == 3:
         # 背景框会在文字外再撑一圈内边距，折行宽度要把这部分让出来
         usable -= 2 * ol
 
@@ -454,7 +462,7 @@ def build_ass(cues_or_slots, canvas=None, font_size=None, margin_v=None,
         # Alignment=2 底部居中；MarginV 是底边距；Encoding=1 用系统默认（UTF-8 源）
         (f"Style: pycut,{family},{size},{SUB_PRIMARY_COLOUR},{SUB_PRIMARY_COLOUR},"
          f"{SUB_OUTLINE_COLOUR},{SUB_BACK_COLOUR},0,0,0,0,100,100,0,0,"
-         f"{SUB_BORDER_STYLE},{ol},{sh},2,{m_h},{m_h},{m_v},1"),
+         f"{style_mode},{ol},{sh},2,{m_h},{m_h},{m_v},1"),
         "",
         "[Events]",
         ("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
@@ -471,7 +479,7 @@ def build_ass(cues_or_slots, canvas=None, font_size=None, margin_v=None,
             f"Dialogue: 0,{_ass_time(start)},{_ass_time(start + dur)},"
             f"pycut,,0,0,0,,{wrapped}")
 
-    out_dir = Path(config.MONTAGE_TMP)
+    out_dir = Path(ass_dir) if ass_dir is not None else Path(config.MONTAGE_TMP)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"subtitles_{os.getpid()}_{_ASS_SEQ[0]}.ass"
     _ASS_SEQ[0] += 1
@@ -484,7 +492,7 @@ def build_ass(cues_or_slots, canvas=None, font_size=None, margin_v=None,
         "res_scale": round(res_scale, 4),
         "outline": ol,
         "shadow": sh,
-        "border_style": SUB_BORDER_STYLE,
+        "border_style": style_mode,
         "primary_colour": SUB_PRIMARY_COLOUR,
         "outline_colour": SUB_OUTLINE_COLOUR,
         "back_colour": SUB_BACK_COLOUR,
@@ -497,7 +505,7 @@ def build_ass(cues_or_slots, canvas=None, font_size=None, margin_v=None,
         "ass_path": str(path),
     }
     log(f"[字幕] ASS {path.name}：{len(events)} 条/ 字体 {family} {size}px"
-        f" / 底框={bool(SUB_BORDER_STYLE == 3)} 边距L{m_h} V{m_v}"
+        f" / 底框={bool(style_mode == 3)} 边距L{m_h} V{m_v}"
         f" / 每行最多 {max_chars} 字（可用宽 {usable}px）")
     return str(path), style
 
