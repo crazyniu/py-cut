@@ -25,15 +25,20 @@ _MAX_LOG_CHARS = 4096
 _SECRET_FLAGS = ("--llm-key", "--api-key")
 
 
-def _sanitize(line: str) -> str:
-    """清理 CSI/OSC 控制序列，并限制单行长度以避免长日志耗尽内存。"""
+def _cap_log_line(line: str) -> str:
+    """Apply the existing display limit only after redacting whole secrets."""
+    if len(line) > _MAX_LOG_CHARS:
+        return line[:_MAX_LOG_CHARS] + "… [日志行已截断]"
+    return line
+
+
+def _sanitize(line: str, *, truncate: bool = True) -> str:
+    """清理 CSI/OSC 和非打印字符；独立使用时仍遵守原长度上限。"""
     safe = "".join(
         c for c in _CONTROL.sub("", _OSC.sub("", line))
         if c.isprintable() or c == "\t"
     )
-    if len(safe) > _MAX_LOG_CHARS:
-        return safe[:_MAX_LOG_CHARS] + "… [日志行已截断]"
-    return safe
+    return _cap_log_line(safe) if truncate else safe
 
 
 def _redact(line: str, argv: list[str]) -> str:
@@ -49,6 +54,15 @@ def _redact(line: str, argv: list[str]) -> str:
         if value:
             line = line.replace(value, "********")
     return line
+
+
+def _safe_log_line(line: str, argv: list[str]) -> str:
+    """Strip terminal controls, redact full secrets, then cap the visible line.
+
+    Truncating first can split a secret at the length boundary and reveal
+    almost its entire prefix because _redact can no longer match the key.
+    """
+    return _cap_log_line(_redact(_sanitize(line, truncate=False), argv))
 
 
 def _display_command(argv: list[str]) -> str:
@@ -140,7 +154,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
             errors="replace", bufsize=1, start_new_session=(os.name != "nt"),
         )
     except OSError as e:
-        history.append(_redact(_sanitize(f"[无法启动] {type(e).__name__}: {e}"), argv))
+        history.append(_safe_log_line(f"[无法启动] {type(e).__name__}: {e}", argv))
         return 2, False
 
     events: queue.Queue[str] = queue.Queue(maxsize=2048)
@@ -151,10 +165,10 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
         assert proc.stdout is not None
         try:
             for line in proc.stdout:
-                events.put(_redact(_sanitize(line.rstrip("\r\n")), argv))
+                events.put(_safe_log_line(line.rstrip("\r\n"), argv))
         except (OSError, UnicodeError) as exc:
             # A successful child exit is not success if its output stream failed.
-            message = _redact(_sanitize(f"[日志读取失败] {type(exc).__name__}: {exc}"), argv)
+            message = _safe_log_line(f"[日志读取失败] {type(exc).__name__}: {exc}", argv)
             read_errors.append(message)
         finally:
             try:
