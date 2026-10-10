@@ -80,7 +80,8 @@ def run_pipeline(opts: MontageOptions) -> dict:
 
     # 画布以基准视频实测为准（config的 MONTAGE_CANVAS 只是默认值）
     canvas = (prof.width, prof.height)
-    target = prof.duration * opts.fill_ratio
+    # 基准视频总时长是硬约束；不能再沿用 0.98 的缩短预算。
+    target = prof.duration
     # 有字幕时，**以字幕为节奏骨架**切槽——字幕条数（56）远多于语音段（7），
     # 一槽一字幕才能把话术完整带上；否则 42 条字幕会因槽不够而丢失。
     # 无字幕时才退回「语音段 + 连续补槽」。
@@ -102,7 +103,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
             slots = []
 
     if not slots:
-        slots = plan_clip_slots(prof.segments, target, fill_ratio=opts.fill_ratio,
+        slots = plan_clip_slots(prof.segments, target, fill_ratio=1.0,
                                 min_slot=opts.min_clip, max_slot=opts.max_clip)
         slot_total = sum(b - a for a, b in slots)
         log(f"  按语音切槽: {len(slots)} 个，累计 {slot_total:.2f}s"
@@ -118,6 +119,11 @@ def run_pipeline(opts: MontageOptions) -> dict:
             slots.extend(extra)
         log(f"  最终时间槽 {len(slots)} 个，累计 "
             f"{sum(b - a for a, b in slots):.2f}s（目标 {target:.2f}s）")
+
+    # SRT 槽之间的停顿、语音规划剩余尾巴不能直接丢掉。
+    # 补充的是现有片段选择时间预算，不是新的视频源或黑帧。
+    slots = _complete_slot_budget(slots, target, opts.max_clip)
+    log(f"  时长预算 {sum(b - a for a, b in slots):.3f}s / {target:.3f}s")
 
     result = {
         "source_duration": prof.duration,
@@ -159,8 +165,10 @@ def run_pipeline(opts: MontageOptions) -> dict:
     reused = sum(1 for p in picked if p.get("reused"))
     total = sum(p["take"] for p in picked)
     log(f"  选中 {len(picked)} 个片段（复用 {reused}）累计 {total:.2f}s")
-    if picked and picked[0].get("shortfall"):
-        log(f"  [提示] 素材不足以填满目标，缺口 {picked[0]['shortfall']:.2f}s")
+    if picked and picked[0].get("shortfall", 0.0) > 1.0 / config.MONTAGE_FPS:
+        result["error"] = f"可用片段不足以填满基准时长（缺 {picked[0]['shortfall']:.2f}s）"
+        log(f"  [失败] {result['error']}；拒绝产出缩水成片")
+        return result
 
     base = tmp / f"base_{seed}.mp4"
     # 用 montage_clips.concat_clips（内部完成「分段截取 → concat → 原子替换」两阶段）
@@ -170,7 +178,13 @@ def run_pipeline(opts: MontageOptions) -> dict:
         log(f"  [失败] 拼接失败: {r.get('error') or '产物未生成'}")
         result["error"] = "步骤B拼接失败"
         return result
-    log(f"  步骤B 产出: {base.name}  {_size(base)}  {r.get('duration', 0):.2f}s")
+    base_duration = _duration(base)
+    frame_tolerance = 1.0 / config.MONTAGE_FPS + 0.01
+    if abs(base_duration - target) > frame_tolerance:
+        result["error"] = (f"步骤B时长错误：基准 {target:.3f}s，拼接 {base_duration:.3f}s")
+        log(f"  [失败] {result['error']}")
+        return result
+    log(f"  步骤B 产出: {base.name}  {_size(base)}  {base_duration:.3f}s")
     result["base"] = str(base)
     result["clips_used"] = len(picked)
     result["clips_reused"] = reused
@@ -205,16 +219,12 @@ def run_pipeline(opts: MontageOptions) -> dict:
             pool = scan_dedup_pool(opts.dedup_dir, min_dur=opts.min_clip)
             log(f"  画中画素材 {len(pool)} 条")
             if not pool:
-                log("  [提示] 无画中画素材，直接输出步骤B 结果")
-                cmd = [config.FFMPEG, "-y", "-loglevel", "error", "-i", str(base),
-                       "-c", "copy", str(staged)]
-                if not _publish_stage(cmd, staged, working):
-                    log("  [失败] 无画中画素材时的成片拷贝失败")
-                    result["error"] = "步骤C 失败"
-                    return result
+                result["error"] = f"画中画素材目录没有可用 MP4：{opts.dedup_dir}"
+                log(f"  [失败] {result['error']}（请检查素材长度/路径或显式使用 --no-pip）")
+                return result
             else:
                 timeline = plan_pip_timeline(pool, target, slot=opts.pip_slot,
-                                             seed=seed)
+                                             seed=seed, continuous=opts.pip_continuous)
                 # 用户反馈「画中画不连续」：上游 plan_pip_timeline 每段之间固定留
                 # ~0.6s 空档，实测 19% 的时间画面上没有画中画。连续模式下重排时间轴，
                 # 让画中画**首尾相接**（gap=0），符合「全程都有」的观感。
@@ -224,6 +234,11 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 log(f"  画中画 {len(timeline)} 段，累计 {cov:.1f}s / {target:.1f}s"
                     f"（覆盖率 {cov / target * 100:.0f}%"
                     f"{'，连续模式' if opts.pip_continuous else ''}）")
+                if not timeline or (opts.pip_continuous and target - cov > frame_tolerance):
+                    result["error"] = (
+                        f"画中画素材不足：需覆盖 {target:.2f}s，实际 {cov:.2f}s")
+                    log(f"  [失败] {result['error']}；拒绝输出没有画中画的成片")
+                    return result
                 # build_pip_cmd 不是纯命令构造器：它已经运行 FFmpeg、
                 # 校验输出并原子发布到传入路径。不可再用 _publish_stage
                 # 执行一次返回的 argv，否则画中画会被重复编码。
@@ -275,8 +290,11 @@ def run_pipeline(opts: MontageOptions) -> dict:
             log("--- 步骤E：跳过（基准视频无音轨）---")
 
         duration = _duration(working)
-        if duration <= 0 or not working.is_file() or working.stat().st_size < 1024:
-            result["error"] = "最终工作产物无效，未覆盖原有成片"
+        if (duration <= 0 or not working.is_file() or working.stat().st_size < 1024
+                or abs(duration - target) > frame_tolerance):
+            result["error"] = (
+                f"最终成片时长异常（基准 {target:.3f}s / 实际 {duration:.3f}s），"
+                "未覆盖原有成片")
             log(f"  [失败] {result['error']}")
             return result
         try:
@@ -369,8 +387,8 @@ def _make_continuous(timeline: list[dict], total: float) -> list[dict]:
 def _attach_audio(video: Path, audio_src: Path, crf: str = "20") -> bool:
     """把基准视频的音轨贴回无声的混剪成片（原子替换）。
 
-    只重新编码视频（因为要接新音频流不能 -c copy）；音频用 aac 128k。
-    时长以视频为准（`-shortest` 防止音频比画面长导致末尾黑屏）。
+    视频流直接 copy 避免再次编码改变帧数；音频用 AAC 并 apad 到画面末尾。
+    -shortest 以视频为准，即使参考音轨略短，也绝不截短成片。
     """
     tmp = video.with_name(video.stem + f".aud_{os.getpid()}{video.suffix}")
     cmd = [
@@ -378,10 +396,9 @@ def _attach_audio(video: Path, audio_src: Path, crf: str = "20") -> bool:
         "-i", str(video),        # 无声画面
         "-i", str(audio_src),   # 基准原声
         "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf),
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "128k",
-        "-shortest",             # 以最短流为准，避免音频更长导致末尾黑屏
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "128k", "-af", "apad",
+        "-shortest",             # apad 后音频可延展，以视频流结束时刻为准
         "-movflags", "+faststart",
         str(tmp),
     ]
@@ -405,6 +422,7 @@ def _apply_variation(items: list[dict], seed: int, opts: MontageOptions) -> None
     lo, hi = (opts.speed_range or (1.0, 1.0))
     n_mirror = n_speed = n_sticker = 0
     stickers = _load_stickers(opts.sticker_dir)
+    first_usable = next((it for it in items if it.get("item") is not None), None)
     for it in items:
         if it.get("item") is None:
             continue
@@ -412,12 +430,21 @@ def _apply_variation(items: list[dict], seed: int, opts: MontageOptions) -> None
             it["mirror"] = True
             n_mirror += 1
         if hi > lo + 1e-3:
-            sp = round(rng.uniform(lo, hi), 4)
-            it["speed"] = sp
-            n_speed += 1
+            # 不得在源片段剩余长度之外加速取帧，否则最后缺帧会缩短成片。
+            take = float(it.get("take") or 0)
+            available = max(0.0, float(it["item"].duration) - float(it.get("offset") or 0))
+            cap = min(hi, available / take) if take > 0 else 1.0
+            if cap > max(1.0, lo) + 1e-3:
+                sp = round(rng.uniform(max(1.0, lo), cap), 4)
+                it["speed"] = sp
+                n_speed += 1
         if stickers and opts.sticker_chance > 0 and rng.random() < opts.sticker_chance:
             it["sticker"] = str(rng.choice(stickers))
             n_sticker += 1
+    # 少量片段时概率抽样可能零命中：既然明确启用了贴纸，至少叠一张。
+    if n_sticker == 0 and first_usable is not None and stickers and opts.sticker_chance > 0:
+        first_usable["sticker"] = str(rng.choice(stickers))
+        n_sticker = 1
     if n_mirror or n_speed or n_sticker:
         log(f"  画面扰动: 镜像 {n_mirror} 段 / 加速 {n_speed} 段"
             + (f"（{lo}~{hi}x）/ 贴纸 {n_sticker} 段" if n_sticker else "")
@@ -431,6 +458,29 @@ def _load_stickers(sticker_dir: str) -> list[Path]:
         return []
     return [p for p in sorted(d.rglob("*"))
             if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")]
+
+
+def _complete_slot_budget(slots: list[tuple[float, float]], target: float,
+                          max_clip: float) -> list[tuple[float, float]]:
+    """按顺序补足缺失的停顿/尾部预算；每个补槽不超过素材最大截取时长。
+
+    混剪实际只使用 (end-start) 的长度，补槽不引用基准画面本身。
+    """
+    from math import ceil
+    covered = sum(max(0.0, b - a) for a, b in slots)
+    missing = target - covered
+    if missing <= 0.5 / config.MONTAGE_FPS:
+        return slots
+    cap = max(1.0 / config.MONTAGE_FPS, float(max_clip))
+    n = max(1, ceil(missing / cap))
+    anchor = max((b for _a, b in slots), default=0.0)
+    out = list(slots)
+    for i in range(n):
+        chunk = missing / n
+        end = anchor + chunk if i < n - 1 else anchor + missing - (n - 1) * chunk
+        out.append((anchor, end))
+        anchor = end
+    return out
 
 
 def _slots_from_cues(cues, target: float, min_slot: float) -> list[tuple[float, float]]:
