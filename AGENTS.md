@@ -25,8 +25,7 @@ Markdown 只保留长期需求、架构、技术约定与可复现限制，不�
 - **解释器**：必须用自带 `cv2 4.13.0` / `numpy` 的托管解释器：
   `/Users/apple/.workbuddy/binaries/python/versions/3.13.12/bin/python3`
   **禁止 `python3` 裸命令（可能指向系统 3.9）、禁止进 venv（丢 cv2）。**
-- **依赖**：只有 `numpy` + `opencv-python`（见 `requirements.txt`，用 `>=` 以免重复安装）；
-  其余能力（LLM、.env、CLI/TUI）全部走标准库。**不要引第三方依赖。**
+- **依赖**：视频核心仅 `numpy` + `opencv-python`，目录选择明确复用 MIT 开源的 `textual-fspicker==1.0.1`（传递依赖 `textual`），Windows 使用 `windows-curses`。其余 LLM、.env 和 CLI 仍优先标准库，除目录选择所需依赖外不得随意扩展。
 - **ffmpeg**：homebrew `ffmpeg-full`（含 `h264_videotoolbox` 硬件编码），路径在
   `pycut/config.py` 的 `FFMPEG` / `FFPROBE`。**不要假设系统 `ffmpeg`。**
 - **ffmpeg 9.0 差异**：`-vsync` 已移除，用 `-fps_mode cfr`；`-threads N` 在 scene 检测下反而更慢，**不要加**。
@@ -66,17 +65,18 @@ Markdown 只保留长期需求、架构、技术约定与可复现限制，不�
   - 主菜单只提供 4 个现有处理功能（切片 / 字幕擦除 / 去重 / 混剪），
     进入「选目录 → 报视频数 → 选开关（如适用）→ 确认执行」的分步向导。
     不提供独立素材搜索/扫描功能；各处理流程仍可读取目录、统计素材数量。
-  - **目录选择必须委托成熟的图形选择器**：`tui._pick_dir` 仅调用 `pycut/folder_picker.py::choose_directory`，不允许恢复 curses 自写目录树、路径拼接、虚拟目录列表、数字快捷键或文字粘贴解析。
-    macOS 通过系统自带 `osascript` 的 AppleScript `choose folder` 选择**单个目录**，以 `Path.home()` 作为首次默认位置，回退向导时可以用之前选择的目录作为起点；AppleScript 参数必须走 subprocess 参数列表，不拼接 shell 命令。默认隐藏系统定义的不可见目录（包括点前缀），通过系统原生侧栏展示桌面、文档、下载及已挂载磁盘，可用 `⌘⇧G` 粘贴路径。
-    其他桌面系统使用 Python 标准库 `tkinter.filedialog.askdirectory(mustexist=True)`（开源 Tk）；缺 Tk、无图形环境、无法打开对话框时提供明确错误并允许返回上一步。所选结果必须再次确认为**存在的绝对目录**；取消返回 `None`，不得自动选择用户目录、创建文件夹或启动后续视频处理。
-    不再依赖 `scan.list_dirs` 做 TUI 目录管理；该函数仅为兼容旧代码保留。视频处理递归仍保持现有 `_is_system_dir` 剪枝与层级限制，不得混淆。
+  - **目录必须用成熟的纯 TUI 组件**：`pycut/folder_picker.py` 集成 `textual-fspicker==1.0.1`（MIT）基于 Textual 的 `SelectDirectory` / `DirectoryNavigation`。不得恢复手写 curses 目录树、macOS AppleScript GUI、Tk 文件选择窗口、自己遍历和排序的文件夹菜单。真正的目录管理由开源组件负责；仅保留 py-cut 自己的调用、快捷跳转与路径校验。
+    - 主菜单/向导目前仍是 curses，进入文件夹选择时调用 `curses.def_prog_mode()` 保存终端模式、`curses.endwin()` 暂停 curses，再通过 `Textual.App.run()` 显示纯终端文件夹对话框；使用 `try/finally` 执行 `curses.reset_prog_mode()`，返回原 TUI 后必须完整重绘，避免 Esc、方向键失效。
+    - macOS/Linux/Windows 均调用同一个 Textual 选择器。Windows 项目依赖 `windows-curses` 补齐 Python 的 curses 模块。Windows 原生磁盘列表由 textual-fspicker 本身负责，macOS `/Volumes`、Linux 现有挂载目录作为 `5` 快捷位置。
+    - 首次目录默认动态 `Path.home()`；`1` 主目录、`2` 桌面、`3` 文档、`4` 下载、`5` 磁盘、`P` 聚焦路径输入框。可粘贴 Unicode/空格、绝对路径、`~` 或相对路径，真实目录才允许跳转，且跳转不自动执行。隐藏点前缀目录沿用开源组件默认行为。取消结果为 `None`，返回上个向导；确认后再次校验路径仍是存在的绝对目录。
+    - Textual 依赖通过 `requirements.txt` 安装，`./run.sh` 在 TUI 模式校验是否存在。不得将 GUI 或系统文件夹树逻辑复制到本地。`core/scan.py` 的 `list_dirs` 仅保留兼容接口，不再供 TUI 目录选择使用；视频处理递归的范围和深度仍按既有规则。
   - 目录扫描统一走 `core/scan.py`：递归统计/列出**默认最多下探 3 层**
     （`DEFAULT_MAX_DEPTH=3`，用户要求控制深度），系统目录（Library/System/.git 等）自动剪枝。
   - 混剪向导用 `tui._multi_select` 多选爆款视频 + 每支设「裂变数量」（E 编辑 1～99），
     每个选中视频生成独立 argv；按顺序执行，失败停止后续依赖任务。
     `Esc` 必须逐步返回前一向导步骤，回到多选时保留先前选中视频及裂变数。
   - **统一键盘规范**：`↑/↓` 移动、`←` 返回、`→` 打开现有 TUI 工作流程；
-    混剪多选列表 `Space` 勾选/取消多个视频、`→`/`Enter` 进入确认。系统目录对话框完全由操作系统接管快捷键，不再借助 curses 处理选目录键盘。
+    混剪多选列表 `Space` 勾选/取消多个视频、`→`/`Enter` 进入确认。Textual 目录对话框内键盘由开源组件接管，curses 只负责原有菜单和向导。
     确认执行页 `→` 只移动焦点，不能直接启动处理，必须显式 `Enter` 才执行。菜单、目录列表及多选行避免整行反色高亮。
     curses 的默认 Esc 等待可能过长，初始化时在没有用户 `ESCDELAY` 的情况下调用 `curses.set_escdelay(75)`；不能破坏方向键序列。
   - TUI 以 `cli.build_parser()` 定义的命令参数生成 argv，交给 `pycut/tui_runner.py`
