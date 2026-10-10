@@ -100,7 +100,7 @@ class SliceScopeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             (directory / "only.mov").write_bytes(b"dummy")
-            with mock.patch.object(tui, "_pick_dir", return_value=str(directory)), \
+            with mock.patch.object(tui, "_pick_dir", side_effect=[str(directory), None]), \
                  mock.patch.object(tui, "_flash") as flash, \
                  mock.patch.object(tui, "_confirm") as confirm:
                 self.assertIsNone(tui._wizard_slice(mock.Mock(), 100))

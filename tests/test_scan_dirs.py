@@ -103,7 +103,7 @@ class ScanDirsTests(unittest.TestCase):
             root = Path(temp)
             disk = root / "Volumes" / "视频盘"
             disk.mkdir(parents=True)
-            keys = [10, curses.KEY_DOWN, curses.KEY_DOWN, 10, 10]
+            keys = [curses.KEY_UP, 10, curses.KEY_UP, 10, 10]
             with mock.patch.object(tui, "_attr", return_value=0):
                 chosen = tui._pick_dir(_Screen(keys), "选择外接盘", start=root)
             self.assertEqual(chosen, str(disk))
@@ -114,7 +114,7 @@ class ScanDirsTests(unittest.TestCase):
             leaf = root / "Videos"
             leaf.mkdir()
             with mock.patch.object(tui, "_attr", return_value=0):
-                self.assertEqual(tui._pick_dir(_Screen([ord("h"), 10]),
+                self.assertEqual(tui._pick_dir(_Screen([ord("h"), ord(" ")]),
                                                "返回", start=leaf), str(root))
                 self.assertEqual(tui._pick_dir(_Screen([ord("~"), 10]),
                                                "主目录", start=leaf), str(Path.home()))

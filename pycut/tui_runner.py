@@ -108,10 +108,10 @@ def _draw(stdscr, argv: list[str], index: int, total: int,
     footer = ("X 中止处理 · ↑↓ 滚动 · Ctrl+C 中断"
               if status == "running" else
               "正在等待子进程安全停止…" if status == "stopping" else
-              "Enter 返回主菜单 · Q 退出 · ↑↓ 滚动")
+              "Enter/Esc 返回主菜单 · Q 退出 · ↑↓ 滚动")
     compact = ("X中断  ↑↓滚动  Ctrl+C取消" if status == "running" else
                "等待任务停止…" if status == "stopping" else
-               "Enter主菜单  Q退出  ↑↓滚动")
+               "Enter主菜单  Esc返回  Q退出  ↑↓滚动")
     tui._footer(stdscr, footer, compact)
     stdscr.refresh()
 
@@ -270,9 +270,9 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
             k = stdscr.getch()
         except KeyboardInterrupt:
             return code or 130, True
-        if k in (10, 13, ord(" ")):
+        if k in (10, 13, ord(" "), 27):
             return code, False
-        if k in (27, ord("q"), ord("Q")):
+        if k in (ord("q"), ord("Q")):
             return code, True
         if k in (ord("k"), 259, 339):
             offset = min(max(0, len(history) - 1), offset + (12 if k == 339 else 1))
