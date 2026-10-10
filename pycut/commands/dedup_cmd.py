@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -115,6 +116,7 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
     from ..core.quality_vmaf import VMAFError, assess  # noqa: PLC0415
 
     ok = miss = bad = 0
+    checks: list[dict[str, object]] = []
     t0 = time.time()
     output_opts = DedupOptions(out_dir=args.out_dir)
     phash_min = (args.phash_min if args.phash_min > 0
@@ -128,24 +130,31 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
         if not out.is_file():
             log(f"  [跳过] {s.name}: 还没有去重产物（{out.name}）")
             miss += 1
+            checks.append({"source": str(s), "output": str(out), "status": "missing_output"})
             continue
         try:
             r = compare(s, out, config.DEDUP_PHASH_SAMPLES)
         except RuntimeError as e:
             log(f"  [失败] {s.name}: {e}")
             bad += 1
+            checks.append({"source": str(s), "output": str(out), "status": "comparison_error", "error": str(e)})
             continue
         d, q = r.get("phash_dist", 0.0), r.get("psnr", 0.0)
         good = d >= phash_min and q >= args.psnr_min
+        entry: dict[str, object] = {"source": str(s), "output": str(out), "phash_dist": d, "psnr": q}
         if args.vmaf:
             try:
                 score = assess(s, out)
+                entry["vmaf"] = {"mean": score.mean, "frames": score.frames, "model": score.model}
                 log(f"  [VMAF] {s.name}: {score.mean:.2f}/100 · {score.frames} 帧 · libvmaf {score.model}")
                 if args.vmaf_min is not None:
                     good = good and score.mean >= args.vmaf_min
             except VMAFError as exc:
+                entry["vmaf_error"] = str(exc)
                 log(f"  [VMAF 失败] {s.name}: {exc}")
                 good = False
+        entry["status"] = "passed" if good else "failed"
+        checks.append(entry)
         ok += good
         bad += (not good)
         log(f"  {'[达标]' if good else '[不达标]'} {s.name}: "
@@ -155,6 +164,24 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
     log(f"{'自检达标':<10}{ok:>6}   {'不达标':<8}{bad:>4}   {'无产物':<8}{miss:>4}")
     log(f"{'总耗时':<10}{time.time() - t0:>6.1f}s")
     log("=" * 56)
+    if args.vmaf and not args.no_report:
+        report = Path(args.out_dir).expanduser() if args.out_dir else config.DEDUP_OUT_DIR
+        try:
+            report.mkdir(parents=True, exist_ok=True)
+            target = report / "vmaf-check.json"
+            import tempfile  # noqa: PLC0415
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=report,
+                                             prefix=".vmaf-", suffix=".tmp", delete=False) as temp:
+                json.dump({"mode": "read_only", "threshold": args.vmaf_min,
+                           "checks": checks, "passed": ok, "failed": bad,
+                           "missing": miss, "interrupted": bool(STOP.flag)},
+                          temp, ensure_ascii=False, indent=2)
+                pending = Path(temp.name)
+            pending.replace(target)
+            log(f"[VMAF 报告] {target}")
+        except OSError as exc:
+            log(f"[VMAF 报告失败] {exc}")
+            return 2
     if STOP.flag:
         log("[中断] 自检未完整完成（退出码 130）")
         return 130
