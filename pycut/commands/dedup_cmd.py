@@ -44,6 +44,8 @@ def register(subparsers) -> None:
     g.add_argument("--mirror", action="store_true",
                    help="允许水平镜像（有人脸朝向/文字的素材慎开，有人工复审风险）")
     g.add_argument("--speed", action="store_true", help="允许微变速（音画同步微调）")
+    g.add_argument("--vary-bitrate", action="store_true",
+                   help="可选视频码率扰动：按 seed 生成 ABR 目标；默认仍使用 CRF")
     g.add_argument("--border", action="store_true", help="模糊边框填充（改构图）")
     g.add_argument("--badge", action="store_true", help="右下角标色块")
     g.add_argument("--logo", default="", help="画中画图片路径（贴纸/角标）")
@@ -151,6 +153,7 @@ def run(args: argparse.Namespace) -> int:
         seed=(args.seed or None),
         mirror=args.mirror,
         speed=args.speed,
+        vary_bitrate=args.vary_bitrate,
         border=args.border,
         badge=args.badge,
         logo=args.logo,
