@@ -118,7 +118,7 @@ def build_sticker_cmd(video: Path, stickers: list[Path], out: Path,
         return None, None
     img = rng.choice(stickers)
     part = sticker_chain(img, canvas, scale_ratio, margin_ratio, opacity,
-                         pos=rng.choice(["br", "bl", "tr", "tl"]), fps=fps)
+                         pos=rng.choice(["br", "bl", "tl"]), fps=fps)
     if part is None:
         return None, None
     chain, label = part
@@ -145,9 +145,10 @@ def apply_sticker_to_file(video: Path, out: Path, canvas: tuple[int, int],
                           crf: str = "20", fps: int | None = None,
                           scale_ratio: float = 0.28,
                           margin_ratio: float = 0.04, opacity: float = 0.55,
-                          seed: int = 0, chance: float = 1.0) -> bool:
-    """给一个视频文件加贴纸（原地替换）。失败返回 False 且不动原文件。"""
-    stickers = _dir_stickers()
+                          seed: int = 0, chance: float = 1.0,
+                          sticker: Path | None = None) -> bool:
+    """给一个视频文件加贴纸；优先使用步骤B明确选中的贴纸，不再误读默认目录。"""
+    stickers = [Path(sticker)] if sticker is not None else _dir_stickers()
     cmd, used = build_sticker_cmd(video, stickers, out, canvas, crf, fps,
                                   scale_ratio, margin_ratio, opacity, seed, chance)
     if cmd is None or used is None:
