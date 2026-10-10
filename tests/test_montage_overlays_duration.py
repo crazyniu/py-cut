@@ -53,6 +53,22 @@ class MontageOverlayContractTests(unittest.TestCase):
                 (160, 284), sticker=chosen))
         self.assertEqual(builder.call_args.args[1], [chosen])
 
+    def test_missing_requested_stickers_does_not_silently_publish(self):
+        profile = montage_source.SourceProfile(
+            Path("reference.mp4"), 3.0, 160, 284, 30.0, False, [], 0.0)
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.object(montage_source, "probe_source", return_value=profile), \
+             mock.patch.object(montage_source, "plan_clip_slots",
+                               return_value=[(0.0, 3.0)]), \
+             mock.patch.object(montage_pipeline, "log"):
+            opts = montage_pipeline.MontageOptions(
+                source=Path("reference.mp4"), out_dir=Path(temp) / "output",
+                sticker_dir=str(Path(temp) / "missing"), sticker_chance=1.0,
+                srt="")
+            result = montage_pipeline.run_pipeline(opts)
+        self.assertIn("目录没有可用图片", result.get("error", ""))
+        self.assertFalse(result.get("final"))
+
     def test_speed_variation_never_reads_beyond_source_end(self):
         item = montage_clips.ClipItem(Path("clip.mp4"), 2.0, 160, 284, False)
         rows = [{"item": item, "take": 1.8, "offset": 0.2}]
