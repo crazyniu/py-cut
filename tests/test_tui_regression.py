@@ -120,7 +120,7 @@ class TUIRegression(unittest.TestCase):
             (root / ".hidden").mkdir()
             self.assertIn(root / "Volumes", scan.list_dirs(root))
             self.assertIn(root / "System", scan.list_dirs(root))
-            self.assertIn(root / ".hidden", scan.list_dirs(root))
+            self.assertNotIn(root / ".hidden", scan.list_dirs(root))
             # Browser listing does not change processing's recursive scope.
             hidden_video = root / ".hidden" / "hidden.mp4"
             system_video = root / "System" / "hidden.mp4"
