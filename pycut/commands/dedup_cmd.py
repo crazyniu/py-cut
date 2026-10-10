@@ -92,6 +92,9 @@ def _pick_srcs(args: argparse.Namespace) -> list[Path]:
         missing = [s for s in srcs if not s.is_file()]
         if missing:
             sys.exit(f"[错误] 文件不存在: {missing[0]}")
+        invalid = [s for s in srcs if s.suffix.lower() != ".mp4"]
+        if invalid:
+            sys.exit(f"[错误] 仅支持 MP4 视频文件: {invalid[0]}")
         return srcs
     if args.src_dir:
         # 递归扫描指定目录下所有视频（不限切片桶结构，也不要求 --all）
