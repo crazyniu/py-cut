@@ -619,6 +619,7 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,\n             
                 d["sticker_applied"] = True
         # 段间亮度淡化在标准化和段级贴纸完成后执行，原片段不重叠也不裁短。
         if seam_fade > 0 and len(items) > 1:
+            faded = None
             from .montage_transitions import (build_seam_fade_cmd,
                                                probe_segment_duration)
             try:
@@ -642,7 +643,7 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,\n             
                 log(f"  [段{i}] 转场失败: {exc}")
                 return []
             finally:
-                if 'faded' in locals() and faded.is_file():
+                if faded is not None and faded.is_file():
                     faded.unlink()
         segs.append(seg)
     return segs
