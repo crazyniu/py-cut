@@ -919,6 +919,21 @@ def process_batch(srcs: list[Path], opts: DedupOptions,
     n = workers if workers and workers > 0 else config.DEDUP_WORKERS
     n = max(1, min(n, len(srcs)))
 
+    # 多个不同素材可能映射到同一输出路径（例如不同父目录中均有
+    # video/001.mp4）。原先并发编码会抢写同一个 dst，即使 tmp 文件
+    # 名不同也可能在 os.replace 时互相覆盖。先检查整批目的路径。
+    destinations: dict[Path, list[int]] = {}
+    for i, src in enumerate(srcs):
+        dst = resolve_output_path(src, opts).expanduser().resolve()
+        destinations.setdefault(dst, []).append(i)
+    collided = {
+        i: dst
+        for dst, indices in destinations.items() if len(indices) > 1
+        for i in indices
+    }
+    if collided:
+        log(f"[输出冲突] {len(collided)} 个输入指向重复的输出位置；这些文件不会被处理")
+
     def _one(pair: tuple[int, Path]) -> dict:
         idx, s = pair
         if STOP.flag:
@@ -941,8 +956,17 @@ def process_batch(srcs: list[Path], opts: DedupOptions,
 
     # 显式带回索引，绝不用 ex.map 的解包顺序（AGENTS.md 踩坑记录）
     out: list[dict] = [{} for _ in srcs]
-    with futures.ThreadPoolExecutor(max_workers=n) as ex:
-        futs = {ex.submit(_one, (i, s)): i for i, s in enumerate(srcs)}
+    for i, dst in collided.items():
+        log(f"  [拒绝覆盖] {srcs[i]} -> {dst}")
+        out[i] = _Report(
+            src=str(srcs[i]), dst=str(dst), preset=opts.preset,
+            error=f"输出路径冲突（多个源文件会写入同一位置）: {dst}",
+        ).to_dict()
+    remaining = [(i, s) for i, s in enumerate(srcs) if i not in collided]
+    if not remaining:
+        return out
+    with futures.ThreadPoolExecutor(max_workers=min(n, len(remaining))) as ex:
+        futs = {ex.submit(_one, (i, s)): i for i, s in remaining}
         for fut in futures.as_completed(futs):
             i = futs[fut]
             try:
