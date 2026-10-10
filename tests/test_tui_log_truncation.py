@@ -26,10 +26,13 @@ class LongLogSecretTests(unittest.TestCase):
     KEY = "sk-private-test-token"
 
     @classmethod
-    def boundary_line(cls) -> str:
-        # Last character of the key falls just beyond the old display limit.
-        prefix = "x" * (tui_runner._MAX_LOG_CHARS - len(cls.KEY) + 1)
-        return prefix + cls.KEY
+    def boundary_line(cls, message_prefix_len: int = 0) -> str:
+        # Old early truncation cuts off the last key character, breaking redaction.
+        prefix = "x" * (
+            tui_runner._MAX_LOG_CHARS - len(cls.KEY) + 1 - message_prefix_len
+        )
+        # Extra output keeps the final (redacted) line longer than the display cap.
+        return prefix + cls.KEY + "z" * 200
 
     def assert_masked(self, lines: deque[str]) -> None:
         displayed = "\n".join(lines)
@@ -58,7 +61,7 @@ class LongLogSecretTests(unittest.TestCase):
     def test_launch_exception_redacts_before_truncation(self):
         logs = deque(maxlen=10)
         with mock.patch.object(
-            tui_runner.subprocess, "Popen", side_effect=OSError(self.boundary_line())
+            tui_runner.subprocess, "Popen", side_effect=OSError(self.boundary_line(len("[无法启动] OSError: ")))
         ):
             result = tui_runner._run_one(
                 mock.Mock(), ["slice", "--api-key=" + self.KEY], 1, 1, logs
@@ -67,7 +70,9 @@ class LongLogSecretTests(unittest.TestCase):
         self.assert_masked(logs)
 
     def test_reader_exception_redacts_before_truncation(self):
-        stream = FailingStream(self.boundary_line())
+        stream = FailingStream(
+            self.boundary_line(len("[日志读取失败] OSError: "))
+        )
         child = mock.Mock(stdout=stream)
         child.poll.return_value = 0
         screen = mock.Mock()
