@@ -196,6 +196,10 @@ def run(args: argparse.Namespace) -> int:
 
     if not source.is_file():
         sys.exit(f"[错误] 步骤A 基准视频不存在: {source}")
+    if (not args.no_sub and args.srt not in ("", None, "auto")
+            and not Path(args.srt).expanduser().is_file()):
+        log(f"[错误] 指定字幕文件不存在: {args.srt}（请确认路径或用 --no-sub）")
+        return 2
 
     # 字幕配对：默认 auto=与基准视频同目录同名 .srt（1.mp4 -> 1.srt）。
     # 用户显式传 --srt 路径时优先用；传空串（--srt ""）或 --no-sub 则不烧字幕。
