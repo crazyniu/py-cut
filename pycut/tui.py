@@ -420,14 +420,28 @@ def _resolve_directory_path(raw: str, current: Path) -> Path:
     if len(words) == 1 and words[0] != value:
         candidates.append(words[0])
 
+    home = Path.home()
+    # A Finder-style path pasted without its first slash (e.g. "Users/apple")
+    # looks relative, but from /Users/apple it would wrongly become
+    # /Users/apple/Users/apple. Prefer the genuine home prefix when it exists.
+    try:
+        home_from_root = home.relative_to(home.anchor)
+    except ValueError:
+        home_from_root = Path()
     for candidate in candidates:
         expanded = Path(os.path.expandvars(candidate)).expanduser()
-        folder = expanded if expanded.is_absolute() else current / expanded
-        try:
-            if folder.is_dir():
-                return folder
-        except OSError:
-            continue
+        folders: list[Path] = []
+        if not expanded.is_absolute() and not candidate.startswith(("./", "../")):
+            prefix = home_from_root.parts
+            if prefix and expanded.parts[:len(prefix)] == prefix:
+                folders.append(Path(home.anchor) / expanded)
+        folders.append(expanded if expanded.is_absolute() else current / expanded)
+        for folder in folders:
+            try:
+                if folder.is_dir():
+                    return folder
+            except OSError:
+                continue
     # A file should not silently be treated as a usable input directory.
     expanded = Path(os.path.expandvars(candidates[-1])).expanduser()
     last = expanded if expanded.is_absolute() else current / expanded
@@ -455,11 +469,20 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
     if not cur.is_dir():
         cur = home if home.is_dir() else Path("/")
 
+    browse_error = ""
+
     def _entries() -> list[tuple[str, str, Path]]:
+        nonlocal browse_error
+        browse_error = ""
         items: list[tuple[str, str, Path]] = []
         if cur != cur.parent:
             items.append(("parent", "../  上一级", cur.parent))
-        items.extend(("directory", f"{p.name}/", p) for p in list_dirs(cur))
+        try:
+            dirs = list_dirs(cur, raise_on_error=True)
+        except OSError as exc:
+            dirs = []
+            browse_error = f"无法读取子目录：{exc.strerror or type(exc).__name__}"
+        items.extend(("directory", f"{p.name}/", p) for p in dirs)
         items.append(("select", "使用当前文件夹", cur))
         return items
 
@@ -517,9 +540,19 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
                      "1主目录  2桌面  3文档  4下载  5磁盘  P路径")
         _safe_add(stdscr, h - 4, 2, shortcuts, w, "info")
         count = sum(kind == "directory" for kind, _, _ in entries)
-        _safe_add(stdscr, h - 3, 2,
-                  message or f"子目录 {count} 个 · {sel + 1}/{len(entries)}",
-                  w, "bad" if message else "dim")
+        home_parts = Path(*home.parts[1:])
+        repeated_home = home / home_parts
+        duplicated = (len(home_parts.parts) >= 2 and
+                      (cur == repeated_home or repeated_home in cur.parents))
+        status = (message or browse_error or
+                  ("当前路径疑似重复用户目录 · 按 1 返回主目录"
+                   if duplicated else
+                   "当前目录没有可见的子文件夹 · 按 1 返回主目录"
+                   if count == 0 else
+                   f"子目录 {count} 个 · {sel + 1}/{len(entries)}"))
+        _safe_add(stdscr, h - 3, 2, status, w,
+                  "warn" if browse_error or duplicated else
+                  "bad" if message else "dim")
         _footer(stdscr,
                 "↑↓ 移动 · ← 上级 · →/Enter 打开 · Space 选择当前 · Esc 返回",
                 "↑↓移动  ←上级  →打开  Space选目录  Esc返回")
