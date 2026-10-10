@@ -201,15 +201,26 @@ def _prompt_int(stdscr, y, x, w, title, default, lo, hi) -> int | None:
     untouched = True
     error = ""
     while True:
-        stdscr.move(y, 0)
+        # 输入时也可能收到 KEY_RESIZE。旧的 y/w 是打开对话框时的终端大小，
+        # 缩小窗口后 stdscr.move(y, 0) 会越界，引起整个 TUI 异常退出。
+        h, live_w = stdscr.getmaxyx()
+        if _small_screen(stdscr):
+            if stdscr.getch() in (27, ord("q"), ord("Q")):
+                return None
+            continue
+        row = min(y, h - 3)
+        live_w = min(w, live_w)
+        stdscr.move(row, 0)
         stdscr.clrtoeol()
         prompt = f"{title} [{lo}~{hi}]："
-        _safe_add(stdscr, y, x, prompt, w, "text")
+        _safe_add(stdscr, row, x, prompt, live_w, "text")
         bx = x + _disp_width(prompt) + 1
-        _safe_add(stdscr, y, bx, _clip(buf, max(0, w - bx - 2), tail=True), w,
+        _safe_add(stdscr, row, bx,
+                  _clip(buf, max(0, live_w - bx - 2), tail=True), live_w,
                   "value", curses.A_REVERSE)
-        _safe_add(stdscr, y + 1, x, error or "Enter 确认 · Esc 取消 · Backspace 删除", w,
-                  "bad" if error else "dim")
+        _safe_add(stdscr, row + 1, x,
+                  error or "Enter 确认 · Esc 取消 · Backspace 删除",
+                  live_w, "bad" if error else "dim")
         stdscr.refresh()
         k = stdscr.getch()
         if k in (10, curses.KEY_ENTER, ord("\r")):
