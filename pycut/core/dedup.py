@@ -707,7 +707,11 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
         if dst.resolve() == src.resolve() and not opts.in_place:
             item.error = "输出路径与源相同（需要 --in-place 才允许覆盖）"
             return item.to_dict()
-        if dst.is_file() and not opts.force:
+        if opts.in_place and not opts.force:
+            # 原地覆盖属于不可撤销操作，要求调用方明确传 --force。
+            item.error = "原地覆盖必须同时传 --in-place --force，且产物自检达标后才会替换源文件"
+            return item.to_dict()
+        if not opts.in_place and dst.is_file() and not opts.force:
             item.skipped = True
             item.error = f"已存在同名产物，跳过（--force 可覆盖）: {dst.name}"
             return item.to_dict()
@@ -736,6 +740,14 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
                 item.seconds = time.time() - t0
                 return item.to_dict()
 
+            if opts.in_place:
+                # 必须趁 src 尚未被覆盖时与临时产物比较。先替换再
+                # compare(src, dst) 等价于自己比自己，pHash 永远趋近 0。
+                _self_check(item, src, tmp, opts)
+                if not item.ok:
+                    item.error = "原地覆盖已取消（自检未通过）：" + (item.error or "未知原因")
+                    item.seconds = time.time() - t0
+                    return item.to_dict()
             os.replace(str(tmp), str(dst))
         finally:
             if tmp.is_file():
@@ -752,8 +764,9 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
         if dw and (dw != info.width or dh != info.height):
             log(f"    [警告] 输出分辨率 {dw}x{dh} 与源 {info.width}x{info.height} 不一致")
 
-        # --- 自检 ---
-        _self_check(item, src, dst, opts)
+        # --- 自检：原地覆盖已在写入前校验，不能再与自身比较 ---
+        if not opts.in_place:
+            _self_check(item, src, dst, opts)
 
     except Exception as e:  # noqa: BLE001 单文件失败不拖垮整批
         item.error = f"{type(e).__name__}: {e}"
