@@ -25,7 +25,8 @@ def register(subparsers) -> None:
     p = subparsers.add_parser(
         "slice", help="切片：场景分段 → 人脸分流 → 字幕擦除",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument("--file", default="", help="只处理文件名（或部分匹配）的单个视频，试跑用")
+    p.add_argument("--file", default="",
+                   help="指定单支 MP4：完整/相对路径精确选择，纯文件名按关键词匹配")
     p.add_argument("--limit", type=int, default=0, help="只处理前 N 个视频（0=全部）")
     p.add_argument("--max-depth", type=int, default=None,
                    help="指定扫描深度（0=仅当前目录，TUI 默认 3；留空=CLI 原有无限递归）")
@@ -53,10 +54,29 @@ def register(subparsers) -> None:
     p.set_defaults(func=run)
 
 
-def _pick_files(args: argparse.Namespace) -> list:
+def _is_explicit_file(value: str) -> bool:
+    """路径形态与历史文件名关键词区分；`./name.mp4` 可消除歧义。"""
+    return "/" in value or value.startswith("~")
+
+
+def _pick_files(args: argparse.Namespace) -> list[Path]:
+    if args.max_depth is not None and args.max_depth < 0:
+        sys.exit("[错误] --max-depth 必须 >= 0")
+
+    # 显式路径只处理这一支，不扫描默认素材目录，也不退回模糊匹配，
+    # 否则输入 /other/missing.mp4 可能误处理 SRC_DIR 内的同名文件。
+    if args.file and _is_explicit_file(args.file):
+        try:
+            path = Path(args.file).expanduser()
+        except RuntimeError as exc:
+            sys.exit(f"[错误] 无法解析 --file 路径: {exc}")
+        if not path.is_file():
+            sys.exit(f"[错误] --file 文件不存在或不是普通文件: {path}")
+        if path.suffix.lower() != ".mp4":
+            sys.exit(f"[错误] --file 只支持 MP4 视频: {path}")
+        return [path.resolve()]
+
     if args.max_depth is not None:
-        if args.max_depth < 0:
-            sys.exit("[错误] --max-depth 必须 >= 0")
         from ..core.scan import list_videos_recursive  # noqa: PLC0415
         files = [p for p in list_videos_recursive(config.SRC_DIR, args.max_depth)
                  if p.suffix.lower() == ".mp4"]
@@ -96,7 +116,9 @@ def run(args: argparse.Namespace) -> int:
         config.OUT_MANIFEST = od / "清单"
 
     t_all = time.time()
-    cv2 = self_check()
+    # 直接指定单文件时不要求默认 SRC_DIR 存在；其他 ffmpeg/cv2/磁盘自检照常执行。
+    cv2 = (self_check(require_src=False)
+           if args.file and _is_explicit_file(args.file) else self_check())
     cascades = load_cascades(cv2)
     bind_cascades(cascades)
 
