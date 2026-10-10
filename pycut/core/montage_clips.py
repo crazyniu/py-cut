@@ -569,7 +569,8 @@ def _seg_cmd(src: Path, offset: float, take: float, out: Path,
     ]
 
 
-def _normalize_segments(items: list[dict], canvas, fps, crf: str,\n                        seam_fade: float = 0.0) -> list[Path]:
+def _normalize_segments(items: list[dict], canvas, fps, crf: str,
+                        seam_fade: float = 0.0) -> list[Path]:
     """阶段1：每段按 offset/take 双 seek 精确截取，并统一成一致的流参数。
 
     统一后的段才能喂给 concat demuxer——这正是本模块不用 inpoint/outpoint 的原因。
@@ -718,7 +719,8 @@ def concat_clips(items: list[dict], out: Path, canvas=None, fps=None,
             res["error"] = f"输出目录创建失败: {e}"
             return res
 
-        cmd, lst = build_concat_cmd(usable, out, canvas, fps, str(crf),\n                                    seam_fade=seam_fade)
+        cmd, lst = build_concat_cmd(usable, out, canvas, fps, str(crf),
+                                    seam_fade=seam_fade)
         if not cmd or not lst.is_file():
             res["error"] = "拼接命令构造失败（分段截取全部失败）"
             return res
