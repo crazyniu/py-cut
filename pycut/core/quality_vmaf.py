@@ -51,8 +51,10 @@ def _read_score(path: Path) -> VMAFResult:
         value = float(pooled)
     except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
         raise VMAFError("libvmaf produced an invalid or missing JSON score") from exc
-    if not isinstance(frames, list) or not frames or not (0 <= value <= 100):
+    if not isinstance(frames, list) or not frames or not (0 <= value <= 100) or value != value:
         raise VMAFError("libvmaf returned an invalid score or zero frames")
+    if any(not isinstance(frame, dict) for frame in frames):
+        raise VMAFError("libvmaf returned malformed frame data")
     return VMAFResult(mean=value, frames=len(frames), model=str(model))
 
 
