@@ -1,0 +1,19 @@
+name: TUI regression
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Syntax check
+        run: python -m compileall -q pycut tests
+      - name: Terminal and CLI regression tests (no media/network dependencies)
+        run: python -m unittest discover -s tests -p 'test_tui_regression.py' -v
