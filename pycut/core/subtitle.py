@@ -181,11 +181,17 @@ def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
         [FFMPEG, "-y", "-loglevel", "error",
          "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", fps_s,
          "-i", "-",
+         # 视频来自修复后的 rawvideo，音轨必须重新从原视频读取。
+         # 旧代码仅有 stdin 这一路（无音轨），-c:a copy 并不能凭空保留声音。
+         "-i", str(clip),
+         "-map", "0:v:0", "-map", "1:a:0?",
          "-c:v", "h264_videotoolbox", "-b:v", "8M", "-pix_fmt", "yuv420p",
          "-c:a", "copy", "-movflags", "+faststart", str(tmp)],
         stdin=subprocess.PIPE, bufsize=10 ** 8)
     try:
         frame_bytes = W * H * 3
+        written = 0
+        broken_pipe = False
         while True:
             raw = dec.stdout.read(frame_bytes)
             if len(raw) < frame_bytes:
@@ -230,13 +236,18 @@ def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
             frame[Y:Y + BH, X:X + BW] = res
             try:
                 enc.stdin.write(frame.tobytes())
+                written += 1
             except BrokenPipeError:
+                broken_pipe = True
                 break
         enc.stdin.close()
         enc.wait(timeout=300)
         dec.wait(timeout=60)
-        if enc.returncode != 0 or not tmp.exists() or tmp.stat().st_size < 1024:
-            log(f"  [遮盖失败] {clip.name}: enc rc={enc.returncode}")
+        if (broken_pipe or written == 0 or dec.returncode != 0
+                or enc.returncode != 0 or not tmp.exists()
+                or tmp.stat().st_size < 1024):
+            log(f"  [遮盖失败] {clip.name}: dec rc={dec.returncode} / "
+                f"enc rc={enc.returncode} / 已编码帧 {written}")
             return False
         import os  # noqa: PLC0415
         os.replace(str(tmp), str(clip))
