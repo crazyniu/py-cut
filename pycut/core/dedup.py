@@ -400,7 +400,12 @@ def build_filter_complex(params: dict, info: VideoInfo,
     """
     logo = (logo_path or params.get("logo") or "").strip()
     border = bool(params.get("border"))
-    if not border and not logo:
+    # 贴纸也是多路输入（图片要单独 -i 再overlay），所以同样必须走 filter_complex。
+    # **早退条件必须把它算进去**：否则「只有贴纸、没有边框/画中画」的组合
+    # （例如 standard 档 + --sticker）会直接返回 None，贴纸被静默跳过——
+    # 实测踩过：命令跑成功、报告正常，但画面上根本没有贴纸。
+    sticker = str(params.get("sticker") or "").strip()
+    if not border and not logo and not sticker:
         return None
 
     W, H = int(info.width), int(info.height)
@@ -420,8 +425,12 @@ def build_filter_complex(params: dict, info: VideoInfo,
         parts.append("[dd_bgv][dd_fgs]overlay=(W-w)/2:(H-h)/2[dd_v0]")
         cur = "dd_v0"
     else:
-        # 只有画中画，不需要分路（多余的分路会产生没人用的输出 pad）
-        parts.append(f"[0:v]{head}[dd_v0]")
+        # 无边框：主画面不需要分路（多余的分路会产生没人用的输出 pad）。
+        # head 可能为空串（几何/像素层全关时），此时**必须走 null**，
+        # 否则会拼出裸标签 `[0:v][dd_v0]`——ffmpeg 报
+        # "No such filter: ''"（实测踩过：standard 档 + 只开贴纸就是这个坑）。
+        parts.append(f"[0:v]{head + ',' if head else ''}null[dd_v0]"
+                     if head else "[0:v]null[dd_v0]")
         cur = "dd_v0"
 
     if logo:
@@ -453,9 +462,10 @@ def build_filter_complex(params: dict, info: VideoInfo,
         off = {"tl": f"{sm}:{sm}", "tr": f"W-w-{sm}:{sm}",
                "bl": f"{sm}:H-h-{sm}"}.get(sp, f"W-w-{sm}:H-h-{sm}")
         op = config.MONTAGE_STICKER_OPACITY
-        # 羽化权重：四边到边距的 min 连乘（中心≈1、边缘≈0）
-        fw = (f"min(1\\,min(X\\,W-1-X)/{fade})*"
-              f"min(1\\,min(Y\\,H-1-Y)/{fade})")
+        # 羽化权重取两方向**平均**而非连乘：连乘会让「距边 100px、带宽 90px」
+        # 处权重只剩 0.55，再乘不透明度就几乎看不见贴纸（实测踩过）。
+        fw = (f"(min(1\\,min(X\\,W-1-X)/{fade})"
+              f"+min(1\\,min(Y\\,H-1-Y)/{fade}))/2")
         # 输入序号：logo 占 1，故贴纸在有 logo 时是 2，否则是 1。
         # （与 _build_cmd 里 -i 的追加顺序严格对应，改一处必须改另一处）
         sidx = 2 if logo else 1

@@ -397,8 +397,10 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     # 羽化带取画中画短边的 22%（太窄看不出融合，太宽会吃掉画面内容）。
     fade = max(6, int(pip_w * (config.MONTAGE_PIP_FEATHER or 0.22)))
     sh = max(2, int(pip_w * (config.MONTAGE_PIP_SHADOW or 0.035)))   # 投影扩散
-    # 边缘权重：四边到边距的 min 连乘（中心=1，边缘=0，四角两个方向都小→更透明）
-    fw = (f"min(1\\,min(X\\,W-1-X)/{fade})*min(1\\,min(Y\\,H-1-Y)/{fade})")
+    # 边缘权重取两方向**平均**（不是连乘）：连乘会让「距边 100px、带宽 41px」
+    # 处权重只剩 0.41，画中画主体会被压得半透明。平均后中心恒为 1。
+    fw = (f"(min(1\\,min(X\\,W-1-X)/{fade})"
+          f"+min(1\\,min(Y\\,H-1-Y)/{fade}))/2")
     for i, e in enumerate(entries):
         start = e["start"]
         # enable 的结束点同样截断：宁可区间略短，也不能让 overlay 在素材

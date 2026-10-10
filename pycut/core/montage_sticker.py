@@ -71,12 +71,13 @@ def sticker_chain(img: Path, canvas: tuple[int, int],
         off = f"W-w-{margin}:H-h-{margin}"
 
     # 边缘羽化：让贴纸四边渐隐，融进主画面而不是矩形硬边。
-    # 羽化带宽度取贴纸短边的 45%——实测 18% 太窄（202px 宽只有 36px，视觉上仍是硬边）。
-    # 权重 = min(到左边距/带宽, 1) × min(到上边距/带宽, 1) × 对称边：
-    # 中心≈1、边缘≈0，四角两个方向都小所以最暗。
+    # 权重 = min(1, 到边距离 / 带宽)，再取**平均**（不是连乘）——
+    # 连乘会让「距边 100px、带宽 90px」处权重只有 0.55，再乘不透明度就更看不见了
+    # （实测贴纸几乎透明）。取平均后中心区恒为 1，只在真正的边缘渐变。
     fade = max(8, int(sw * 0.45))
-    fw = (f"min(1\\,min(X\\,W-1-X)/{fade})*"
-          f"min(1\\,min(Y\\,H-1-Y)/{fade})")
+    ex = f"min(1\\,min(X\\,W-1-X)/{fade})"
+    ey = f"min(1\\,min(Y\\,H-1-Y)/{fade})"
+    fw = f"({ex}+{ey})/2"
     # 滤镜图正确写法（实测踩过两种错法）：
     #   错法1 `[0:v]<geq链>[stk];[0:v][stk]overlay` -> filter 输入标签不够
     #        （"More input link labels ... than it has inputs"）
