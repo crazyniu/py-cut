@@ -42,6 +42,7 @@ def run_cmd(args: list[str], timeout: int) -> tuple[int, str, str]:
     try:
         p = subprocess.run(
             args,
+            stdin=subprocess.DEVNULL,  # ffmpeg 不能偷读 TUI 的键盘输入
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
@@ -50,6 +51,8 @@ def run_cmd(args: list[str], timeout: int) -> tuple[int, str, str]:
         return -1, "", f"timeout after {timeout}s"
     except FileNotFoundError as e:
         return -1, "", f"executable not found: {e}"
+    except OSError as e:
+        return -1, "", f"cannot execute command: {e}"
     out = p.stdout.decode("utf-8", "replace")
     err = p.stderr.decode("utf-8", "replace")
     return p.returncode, out, err
