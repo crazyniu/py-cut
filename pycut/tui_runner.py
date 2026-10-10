@@ -140,7 +140,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
             errors="replace", bufsize=1, start_new_session=(os.name != "nt"),
         )
     except OSError as e:
-        history.append(_sanitize(_redact(f"[无法启动] {type(e).__name__}: {e}", argv)))
+        history.append(_redact(_sanitize(f"[无法启动] {type(e).__name__}: {e}"), argv))
         return 2, False
 
     events: queue.Queue[str] = queue.Queue(maxsize=2048)
@@ -151,10 +151,10 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
         assert proc.stdout is not None
         try:
             for line in proc.stdout:
-                events.put(_sanitize(_redact(line.rstrip("\r\n"), argv)))
+                events.put(_redact(_sanitize(line.rstrip("\r\n")), argv))
         except (OSError, UnicodeError) as exc:
             # A successful child exit is not success if its output stream failed.
-            message = _sanitize(_redact(f"[日志读取失败] {type(exc).__name__}: {exc}", argv))
+            message = _redact(_sanitize(f"[日志读取失败] {type(exc).__name__}: {exc}"), argv)
             read_errors.append(message)
         finally:
             try:
