@@ -753,120 +753,170 @@ def _run_feature_wizard(stdscr, key: str, w: int) -> list[list[str]] | str | Non
 # 各功能向导
 # ---------------------------------------------------------------------------
 def _wizard_slice(stdscr, w: int) -> list[list[str]] | None:
-    d = _pick_dir(stdscr, "切片 · 选择源视频目录", None)
-    if d is None:
-        return None
-    # TUI 所报数量必须与 slice 实际处理集合一致：3 层、过滤系统目录、仅 MP4。
+    """Choose a folder, review existing options, and go back one step on Esc."""
     from .core.scan import list_videos_recursive  # noqa: PLC0415
-    n = sum(p.suffix.lower() == ".mp4" for p in list_videos_recursive(d))
-    if n == 0:
-        _flash(stdscr, f"目录 3 层内没有可处理的 MP4：{d}", "bad")
-        return None
-    toggles = [
-        ("擦除字幕", "切片时顺带擦除画面字幕", True),
-        ("去重", "切片后对产出切片过平台查重", False),
-    ]
-    vals: list[bool] = []
-    ok = _confirm(stdscr, [("源目录", d), ("视频数量", f"{n} 个")], toggles, vals)
-    if not ok:
-        return None
-    sub_on = vals[0] if len(vals) > 0 else True
-    dedup_on = vals[1] if len(vals) > 1 else False
-    # 切片 argv：擦除字幕默认开启，关闭时加 --no-sub
-    argv = ["slice", "--src-dir", d, "--max-depth", "3"]
-    if not sub_on:
-        argv.append("--no-sub")
-    # 勾选「去重」时：切片完成后对桌面切片桶（有人脸/无人脸）自动去重
-    argv_list = [argv]
-    if dedup_on:
-        argv_list.append(["dedup", "--all"])
-    return argv_list
+
+    d: str | None = None
+    settings = [True, False]
+    while True:
+        selected = _pick_dir(stdscr, "切片 · 1/2 选择源视频目录",
+                             start=Path(d) if d else None)
+        if selected is None:
+            return None
+        d = selected
+        # Keep the TUI preview in sync with the CLI's explicit depth limit.
+        n = sum(p.suffix.lower() == ".mp4" for p in list_videos_recursive(d))
+        if n == 0:
+            _flash(stdscr, f"目录 3 层内没有可处理的 MP4：{d}", "bad")
+            continue
+
+        toggles = [
+            ("擦除字幕", "切片时顺带擦除画面字幕", settings[0]),
+            ("去重", "切片后对产出切片过平台查重", settings[1]),
+        ]
+        values: list[bool] = []
+        ok = _confirm(stdscr, [("源目录", d), ("视频数量", f"{n} 个")],
+                      toggles, values)
+        if len(values) == len(settings):
+            settings = values
+        if not ok:
+            # The next iteration revisits the selected directory, not main.
+            continue
+
+        argv = ["slice", "--src-dir", d, "--max-depth", "3"]
+        if not settings[0]:
+            argv.append("--no-sub")
+        argv_list = [argv]
+        if settings[1]:
+            argv_list.append(["dedup", "--all"])
+        return argv_list
 
 
 def _wizard_cover(stdscr, w: int) -> list[list[str]] | None:
-    d = _pick_dir(stdscr, "字幕擦除 · 选择视频目录", None)
-    if d is None:
-        return None
-    # 与 cover_cmd._pick_clips 一致：最多 3 层，只处理 MP4。
     from .core.scan import list_videos_recursive  # noqa: PLC0415
-    n = sum(p.suffix.lower() == ".mp4" for p in list_videos_recursive(d))
-    if n == 0:
-        _flash(stdscr, f"目录 3 层内没有可处理的 MP4：{d}", "bad")
-        return None
-    ok = _confirm(stdscr, [("源目录", d), ("MP4 数量", f"{n} 个")])
-    if not ok:
-        return None
-    return [["cover", "--src-dir", d]]
+
+    d: str | None = None
+    while True:
+        selected = _pick_dir(stdscr, "字幕擦除 · 1/2 选择视频目录",
+                             start=Path(d) if d else None)
+        if selected is None:
+            return None
+        d = selected
+        n = sum(p.suffix.lower() == ".mp4" for p in list_videos_recursive(d))
+        if n == 0:
+            _flash(stdscr, f"目录 3 层内没有可处理的 MP4：{d}", "bad")
+            continue
+        if _confirm(stdscr, [("源目录", d), ("MP4 数量", f"{n} 个")]):
+            return [["cover", "--src-dir", d]]
+        # Esc in the review opens the directory picker again.
 
 
 def _wizard_dedup(stdscr, w: int) -> list[list[str]] | None:
-    d = _pick_dir(stdscr, "去重 · 选择视频目录", None)
-    if d is None:
-        return None
-    n = count_videos_recursive(d)
-    if n == 0:
-        _flash(stdscr, f"该目录下没有视频：{d}", "bad")
-        return None
-    ok = _confirm(stdscr, [("源目录", d), ("视频数量", f"{n} 个")])
-    if not ok:
-        return None
-    return [["dedup", "--src-dir", d]]
+    d: str | None = None
+    while True:
+        selected = _pick_dir(stdscr, "去重 · 1/2 选择视频目录",
+                             start=Path(d) if d else None)
+        if selected is None:
+            return None
+        d = selected
+        n = count_videos_recursive(d)
+        if n == 0:
+            _flash(stdscr, f"该目录下没有视频：{d}", "bad")
+            continue
+        if _confirm(stdscr, [("源目录", d), ("视频数量", f"{n} 个")]):
+            return [["dedup", "--src-dir", d]]
 
 
 def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
-    # 1) 片段库目录（递归）
-    clip = _pick_dir(stdscr, "混剪 · 选择「混剪片段」目录（递归）", None)
-    if clip is None:
-        return None
-    nc = count_videos_recursive(clip)
-    if nc == 0:
-        _flash(stdscr, f"片段库内没有视频：{clip}", "bad")
-        return None
-    # 2) 画中画目录（递归）
-    pip = _pick_dir(stdscr, "混剪 · 选择「画中画切片」目录（递归）", None)
-    if pip is None:
-        return None
-    npip = count_videos_recursive(pip)
-    # 3) 爆款视频目录（非递归，列出视频多选）
-    src_dir = _pick_dir(stdscr, "混剪 · 选择「爆款视频」目录（非递归）", None)
-    if src_dir is None:
-        return None
-    files = list_videos_flat(src_dir)
-    if not files:
-        _flash(stdscr, f"该目录下没有视频：{src_dir}", "bad")
-        return None
-    selection = _multi_select(stdscr, "混剪 · 多选爆款视频并设裂变数量", files)
-    if selection is None:
-        return None
-    chosen, fission = selection
-    if not chosen:
-        return None
+    """Five existing steps with reversible navigation and preserved selection.
 
-    # 汇总确认
-    total_out = sum(fission[str(f)] for f in chosen)
-    out_dir = str(Path.home() / "Desktop/out")
-    lines = [
-        ("片段库", f"{clip}（{nc} 个）"),
-        ("画中画", f"{pip}（{npip} 个）"),
-        ("爆款视频", f"{len(chosen)} 支 × 裂变 = {total_out} 支成片"),
-        ("输出目录", out_dir),
-    ]
-    # Every selected source can be checked on the review page (PgDn to scroll).
-    for i, src in enumerate(chosen, 1):
-        lines.append((f"来源 {i}", f"{src.name} × {fission[str(src)]}"))
-    ok = _confirm(stdscr, lines)
-    if not ok:
-        return None
+    0: clip directory  1: PiP directory  2: source directory
+    3: source selection / fission  4: confirmation
+    """
+    titles = (
+        "混剪 · 1/5 混剪片段目录（递归）",
+        "混剪 · 2/5 画中画切片目录（递归）",
+        "混剪 · 3/5 爆款视频目录（非递归）",
+    )
+    directories: list[str | None] = [None, None, None]
+    clip_count = 0
+    pip_count = 0
+    selection: tuple[list[Path], dict[str, int]] | None = None
+    step = 0
 
-    # 多选爆款视频：逐支生成一条 argv（每支带自己的 --fission），run() 循环执行。
-    argv_list: list[list[str]] = []
-    for src in chosen:
-        n = fission[str(src)]
-        argv_list.append([
-            "montage", "--source", str(src), "--clip-dir", clip,
-            "--dedup-dir", pip, "--out-dir", out_dir, "--fission", str(n),
-        ])
-    return argv_list
+    while True:
+        if step < 3:
+            previous = directories[step]
+            if previous is None and step > 0:
+                previous = directories[step - 1]
+            selected = _pick_dir(stdscr, titles[step],
+                                 start=Path(previous) if previous else None)
+            if selected is None:
+                if step == 0:
+                    return None
+                step -= 1
+                continue
+
+            if step == 0:
+                clip_count = count_videos_recursive(selected)
+                if clip_count == 0:
+                    _flash(stdscr, f"片段库内没有视频：{selected}", "bad")
+                    continue
+            elif step == 1:
+                pip_count = count_videos_recursive(selected)
+                # A blank PiP directory is supported by the original pipeline.
+            else:
+                files = list_videos_flat(selected)
+                if not files:
+                    _flash(stdscr, f"该目录下没有视频：{selected}", "bad")
+                    continue
+            directories[step] = selected
+            step += 1
+            continue
+
+        if step == 3:
+            assert directories[2] is not None
+            files = list_videos_flat(directories[2])
+            if not files:
+                _flash(stdscr, f"该目录下没有视频：{directories[2]}", "bad")
+                step = 2
+                continue
+            result = _multi_select(stdscr, "混剪 · 4/5 选择视频及裂变数量",
+                                   files, initial=selection)
+            if result is None:
+                step = 2
+                continue
+            selection = result
+            step = 4
+            continue
+
+        assert selection is not None
+        assert all(d is not None for d in directories)
+        clip, pip, src_dir = directories
+        chosen, fission = selection
+        total_out = sum(fission[str(f)] for f in chosen)
+        out_dir = str(Path.home() / "Desktop/out")
+        lines = [
+            ("片段库", f"{clip}（{clip_count} 个）"),
+            ("画中画", f"{pip}（{pip_count} 个）"),
+            ("爆款视频", f"{len(chosen)} 支 × 裂变 = {total_out} 支成片"),
+            ("输出目录", out_dir),
+        ]
+        for i, src in enumerate(chosen, 1):
+            lines.append((f"来源 {i}", f"{src.name} × {fission[str(src)]}"))
+        if not _confirm(stdscr, lines):
+            step = 3
+            continue
+
+        # Preserve the existing argv/CLI contract exactly.
+        argv_list: list[list[str]] = []
+        for src in chosen:
+            argv_list.append([
+                "montage", "--source", str(src), "--clip-dir", clip,
+                "--dedup-dir", pip, "--out-dir", out_dir,
+                "--fission", str(fission[str(src)]),
+            ])
+        return argv_list
 
 
 
