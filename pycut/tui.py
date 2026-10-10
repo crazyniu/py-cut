@@ -29,6 +29,8 @@ import os
 import sys
 from pathlib import Path
 
+from . import config
+
 from . import __version__, cli
 from .core.scan import count_videos_recursive, list_dirs, list_videos_flat
 
