@@ -167,7 +167,8 @@
 | `standard` 标准（默认） | M1 + M2 + M3 + M6 | 裁 4~6px、微缩 1.02、色相 ±2、noise 4、变调 1.008、GOP 随机 | 轻微 | ~1.5× |
 | `aggressive` 激进 | 上述 + M4 + M5（转场/贴纸/画中画/边框） | 变速 1.05、抽插帧、xfade 转场、PiP | 可见改动 | ~2.5×+ |
 
-每个档位都应允许**单项开关**（`--no-mirror` 之类），因为不同素材适配不同（有人脸朝向的不能镜像）。
+每个档位都应允许**单项开关**（镜像/变速/边框/角标/画中画/贴纸/delogo，见第 7 节命令表），
+因为不同素材适配不同（有人脸朝向的不能镜像）。
 
 ---
 
@@ -254,7 +255,9 @@ PSNR 掉到 13~25dB 属正常，画面观感没问题（已抽帧人工确认）
 ./run.sh dedup --file "切片_有人脸/xxx/001.mp4" --preset standard
 
 # 对整个桶去重 + 出报告
-./run.sh dedup --all --preset aggressive --report
+./run.sh dedup --all --preset aggressive
+./run.sh dedup --file "切片.mp4" --sticker "某贴纸.png"   # 单条带贴纸
+./run.sh dedup --check --all
 
 # 只自检不改文件：看当前相似度/画质基线
 ./run.sh dedup --check --all
@@ -306,17 +309,18 @@ pycut/
 | M2 几何 | 边缘微裁、微缩放、微旋转、水平镜像 | 梯形变形（**已停用**，见第 6 节）、Ken Burns |
 | M3 像素 | 亮度/对比度/饱和度、色相、通道增益、微噪、微锐化 | — |
 | M4 时间 | 变速（含变速时长的时长容差放宽）、帧率微调 | 抽帧、关键帧重排、片段倒放 |
-| M5 结构 | 模糊边框填充、角标色块、画中画 | 转场 xfade、分屏/拼屏、片头片尾差异化 |
+| M5 结构 | 模糊边框填充、角标色块、画中画、**贴纸**（半透明+边缘羽化） | 转场 xfade、分屏/拼屏、片头片尾差异化 |
 | M6 音频 | 变调（保时长）、变速（音画同步） | 换 BGM、叠环境音、重新配音 |
 | M7 水印 | 可见水印 `delogo` | removelogo(mask)、暗水印检测与破坏 |
 | M8 文本 | — | OCR/ASR 文案改写（需接 ASR/OCR，已知是九源仙红线审核点） |
 
-实际会生成的滤镜共 14 个：
-`rotate crop scale eq hue colorchannelmixer noise unsharp fps setpts delogo drawbox overlay gblur`
+实际会生成的滤镜共 16 个：
+`rotate crop scale eq hue colorchannelmixer noise unsharp fps setpts delogo drawbox overlay gblur split boxblur geq colorchannelmixer(投影)`
 + 音频 `asetrate atempo`。
 
 > ⚠️ **本表需与实现同步维护**。新增/停用某项能力时必须回来更新这张表，
 > 否则文档会变成"看起来都有、实际没有"的承诺清单。
+> 另见 [`ISSUES.md`](ISSUES.md) §1.1（能力缺口）与 §4（踩过的坑）。
 
 ---
 

@@ -1,40 +1,59 @@
 # pycut —— 短视频智能处理工具箱
 
-统一处理抖音 / 微信等短视频的本地工具集。当前已落地**切片**功能，后续将扩展混剪、转场贴纸、平台查重等。
+统一处理抖音 / 微信等短视频的本地工具箱。已落地三大功能：**切片**、**去重（过查重）**、**混剪**。
+
+## 功能一览
+
+| 命令 | 做什么 | 产物位置 |
+|---|---|---|
+`slice` | 场景分段 → 人脸分流 → 字幕擦除 | `~/Desktop/切片_有人脸`、`切片_无人脸` |
+`cover` | 只重跑字幕擦除 | 同上（幂等，靠 `.covered.json` 标记） |
+`dedup` | 分层扰动 + pHash/PSNR 自检（过平台查重） | `~/Desktop/去重_输出` |
+`montage` | 话术基准 → 随机混剪 → 画中画 → 字幕 → 贴音轨 | `~/Desktop/混剪_输出` |
 
 ## 目录结构
 
 ```
 pycut/
-├── pycut.py                # 统一入口（命令行，后续演进为 TUI）
+├── pycut.py                # 统一入口（命令行 + TUI）
+├── run.sh                  # 一键脚本：选解释器 → 装依赖 → 读 .env → 运行
+├── requirements.txt        # 依赖（仅 numpy + opencv-python）
 ├── pyproject.toml          # 包元数据
+├── .env / .env.example     # 密钥与网关配置（.env 已 gitignore）
 ├── .gitignore
 ├── AGENTS.md               # 给 AI 协作的规范（务必先读，AI 工具自动识别）
-├── README.md
-├── .env.example            # 密钥模板（复制为 .env 并填 DEEPSEEK_API_KEY）
+├── README.md               # 本文件
 ├── docs/
-│   ├── ROADMAP.md          # 后续功能规划（混剪 / 转场 / 查重）
-│   └── DEDUP.md            # 去重（过查重）需求与技术方案全集（规划中，待开发）
+│   ├── ROADMAP.md          # 功能规划与实现状态
+│   ├── MONTAGE.md          # 混剪需求 + 素材实测 + 方案
+│   ├── DEDUP.md            # 去重需求 + 8 大模块 + 实测标定
+│   └── ISSUES.md           # 已知问题与未完成项（务必先读）
 ├── pycut/                  # 主包
-│   ├── cli.py              # CLI 路由（命令注册表，TUI 友好）
-│   ├── tui.py              # 终端 TUI（任务设置页 + 高级参数页）
-│   ├── config.py           # 全局常量 / 网关（主/备） / 路径
-│   ├── core/               # 核心处理（与命令编排解耦）
+│   ├── cli.py              # 命令注册表 + 路由
+│   ├── tui.py              # 终端 TUI（任务设置页 / 高级参数页两级）
+│   ├── config.py           # 全部可调常量与路径（标定值勿乱改）
+│   ├── core/
 │   │   ├── utils.py        # 日志 / 格式化 / 命令执行
 │   │   ├── runtime.py      # 中断标志 + 信号
 │   │   ├── ffmpeg.py       # 视频探测 / 启动自检
-│   │   ├── llm.py          # OpenAI 兼容 LLM 客户端（纯 urllib）
+│   │   ├── llm.py          # LLM 客户端（纯 urllib，主备网关自动容灾）
 │   │   ├── scene.py        # 场景检测 + 分段
 │   │   ├── faces.py        # Haar 人脸分筛 + 三态判定
-│   │   ├── subtitle.py     # 字幕检测 + 真实擦除
-│   │   └── slice_pipeline.py  # 切片编排（场景→人脸→字幕）
-│   └── commands/           # 命令实现（每个暴露 register / run）
-│       ├── slice_cmd.py    # slice 命令
-│       └── cover_cmd.py    # cover 命令（补跑字幕擦除）
-├── tools/
-│   └── verify.py           # 切片流水线独立质检
-└── tests/
-    └── test_smoke.py       # 冒烟测试
+│   │   ├── subtitle.py     # 字幕检测 + 真实擦除（掩膜+修复）
+│   │   ├── slice_pipeline.py   # 切片编排（场景→人脸→字幕）
+│   │   ├── dedup.py        # 去重滤镜链 + 编排 + 报告
+│   │   ├── dedup_presets.py # 三档预设 + seed 随机化参数
+│   │   ├── fingerprint.py  # pHash + PSNR 自检
+│   │   ├── montage_source.py   # 步骤A：语音节奏切槽
+│   │   ├── montage_clips.py    # 步骤B：素材扫描 / 挑片 / 拼接
+│   │   ├── montage_pip.py      # 步骤C：画中画（含四角阴影）
+│   │   ├── montage_sticker.py  # 贴纸叠加（半透明 + 边缘羽化）
+│   │   └── montage_subtitles.py# 步骤D：SRT→ASS→烧录
+│   └── commands/
+│       ├── slice_cmd.py / cover_cmd.py / dedup_cmd.py / montage_cmd.py
+│       └── montage_pipeline.py  # 混剪五步编排
+├── tools/verify.py         # 切片流水线独立质检
+└── tests/test_smoke.py     # 冒烟测试（7 项，无 pytest 也能跑）
 ```
 
 ## 运行环境
@@ -47,13 +66,40 @@ pycut/
 ## 快速开始
 
 ```bash
-./run.sh                 # 自动装依赖 -> 读 .env -> 进入 TUI
+./run.sh                 # 自动装依赖 -> 读 .env -> 进入 TUI（推荐）
 ./run.sh slice           # 或直接跑批量切片
 ```
 
 `run.sh` 会：选好自带 cv2 的解释器 → 缺 `cv2/numpy` 时按 `requirements.txt` 安装
 （已装则跳过，不重复联网）→ 校验 cv2 → 打印生效网关（**不打印密钥**）→ 运行入口。
 没有 `.env` 时自动由 `.env.example` 生成并提示填密钥。
+
+### 三个功能常用命令
+
+```bash
+# 1. 切片：场景分段 -> 人脸分流 -> 字幕擦除
+./run.sh slice                          # 批量（源目录 config.SRC_DIR）
+./run.sh slice --file "视频名" --dry-run # 试跑，只看切点不产出
+./run.sh slice --no-sub                 # 这次不擦字幕
+./run.sh cover --all --force            # 补跑字幕擦除
+
+# 2. 去重：分层扰动 + pHash/PSNR 自检
+./run.sh dedup --all --preset standard  # 批量去重
+./run.sh dedup --file "切片.mp4" --preset aggressive --border --badge
+./run.sh dedup --file "长视频.mp4"       # 支持单个长视频（360s 已实测）
+./run.sh dedup --all --check            # 只自检，不产出
+
+# 3. 混剪：话术基准 -> 随机混剪 -> 画中画 -> 字幕 -> 贴原声
+./run.sh montage                        # 全流程
+./run.sh montage --probe                # 先看素材库规模（竖屏/横屏/时长）
+./run.sh montage --seed 2026            # 固定结果可复现
+./run.sh montage --sticker-chance 0.9   # 贴纸更密
+./run.sh montage --no-sub --no-sticker   # 只要干净画面
+```
+
+> 每个命令的完整参数见 `./run.sh <命令> --help`。
+> TUI 里参数分两级：任务设置页只放该功能真正要你决定的几项，
+> 其余（网关/并发/阈值）在**高级参数页**（按 `A` 切换）。
 
 ## 配置（只需配密钥）
 
