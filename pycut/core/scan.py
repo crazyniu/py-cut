@@ -13,8 +13,8 @@
       便于逐个勾选。
 
 目录显示与处理范围彼此独立：
-    * 目录选择器列出操作系统返回的全部子目录，包括 `.` 开头的隐藏目录、
-      System/Library 等系统目录及指向目录的符号链接；不主动筛掉任何目录名称。
+    * 目录选择器只隐藏名称以 `.` 开头的子目录（包括目录链接）；
+      System/Library 等不以 `.` 开头的系统目录及有效目录符号链接仍显示。
     * 视频处理的递归统计/素材收集仍按既有 `_is_system_dir` 规则剪枝，
       保留已标定的深度、视频范围与处理逻辑。
     * 操作系统因权限限制不可读取的目录内容无法由 TUI 强行列出。
@@ -66,10 +66,11 @@ def _is_system_dir(path: Path) -> bool:
 
 
 def list_dirs(root: Path) -> list[Path]:
-    """列出 root 的所有一级子目录，包含隐藏、系统和目录符号链接。
+    """列出 root 下名称不以 `.` 开头的一级子目录。
 
-    仅服务 TUI 目录浏览；视频处理的递归剪枝由其他函数独立负责。
-    无法访问或已经失效的目录，仍遵循操作系统的权限/错误结果。
+    包括 Library/System 等系统目录和有效目录符号链接；只对 TUI
+    目录浏览按名称隐藏点前缀目录。视频处理的递归剪枝独立进行。
+    无法访问或已经失效的目录，遵循操作系统权限/错误结果。
     """
     root = Path(root).expanduser()
     if not root.is_dir():
@@ -78,7 +79,10 @@ def list_dirs(root: Path) -> list[Path]:
     try:
         for entry in os.scandir(str(root)):
             try:
-                # 单层列举不会递归进入链接；目录链接也应像普通目录显示。
+                # 仅隐藏点开头的文件夹（包括同名目录软链接），不限制其他名称。
+                if entry.name.startswith("."):
+                    continue
+                # 单层列举不会递归进入链接；有效目录链接保持可见。
                 if entry.is_dir(follow_symlinks=True):
                     out.append(Path(entry.path))
             except OSError:

@@ -41,7 +41,7 @@ class _Screen:
 
 
 class ScanDirsTests(unittest.TestCase):
-    def test_browser_lists_hidden_system_and_normal_directories(self):
+    def test_browser_hides_only_dot_prefix_directories(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             for name in ("Volumes", "System", "Library", "private",
@@ -55,8 +55,7 @@ class ScanDirsTests(unittest.TestCase):
             self.assertEqual(names, sorted(names, key=lambda name: (name.casefold(), name)))
             self.assertEqual(
                 set(names),
-                {"Volumes", "System", "Library", "private",
-                 "node_modules", ".Spotlight-V100", ".hidden"},
+                {"Volumes", "System", "Library", "private", "node_modules"},
             )
             self.assertEqual(scan.list_dirs(root / "Volumes"), [disk])
             # The processing pipeline can still filter system paths;
@@ -77,6 +76,7 @@ class ScanDirsTests(unittest.TestCase):
                 self.skipTest(f"测试环境不支持符号链接: {exc}")
             (volume / "notes.txt").write_text("not a folder", encoding="utf-8")
             (volume / "broken").symlink_to(volume / "missing", target_is_directory=True)
+            (volume / ".secret-link").symlink_to(root, target_is_directory=True)
             self.assertEqual(scan.list_dirs(volume), [link, volume / "素材"])
 
     def test_unmounted_or_unreadable_directory_is_safe(self):
@@ -91,6 +91,7 @@ class ScanDirsTests(unittest.TestCase):
         class Entry:
             def __init__(self, path, *, broken=False):
                 self.path = str(path)
+                self.name = path.name
                 self.broken = broken
 
             def is_dir(self, follow_symlinks=True):
@@ -109,7 +110,7 @@ class ScanDirsTests(unittest.TestCase):
             with mock.patch.object(scan.os, "scandir", return_value=entries):
                 self.assertEqual(scan.list_dirs(root), [root / "A", root / "B"])
 
-    def test_picker_renders_hidden_and_system_folders(self):
+    def test_picker_shows_system_but_not_dot_prefix_folders(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             for name in (".git", ".hidden", "Library", "System", "node_modules"):
@@ -118,10 +119,12 @@ class ScanDirsTests(unittest.TestCase):
             with mock.patch.object(tui, "_attr", return_value=0):
                 self.assertIsNone(tui._pick_dir(screen, "选择目录", start=root))
             output = "\n".join(screen.printed)
-            for name in (".git/", ".hidden/", "Library/", "System/",
-                         "node_modules/"):
+            for name in ("Library/", "System/", "node_modules/"):
                 with self.subTest(name=name):
                     self.assertIn(name, output)
+            for name in (".git/", ".hidden/"):
+                with self.subTest(name=name):
+                    self.assertNotIn(name, output)
 
     def test_browser_enters_volumes_and_selects_the_mounted_disk(self):
         with tempfile.TemporaryDirectory() as temp:
