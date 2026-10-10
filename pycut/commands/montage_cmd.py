@@ -225,13 +225,17 @@ def run(args: argparse.Namespace) -> int:
         workers=args.workers,
     )
     result = montage_pipeline.run_pipeline(opts)
+    if result.get("error"):
+        log(f"[失败] 混剪未完成：{result['error']}")
+        return 2
 
     # ---------------- 批量裂变 ----------------
     # --fission N 表示「每支爆款视频出 N 支不同成片」。首支已由上面那次跑出
     # （复用 opts.seed），第 2..N 支换个 seed + 换个输出名再跑，随机选片/扰动不同
     # 但话术与节奏不变。seed 派生：用户显式给 seed 时在其上累加，否则按源+序号。
     fission = max(1, int(getattr(args, "fission", 1) or 1))
-    if fission > 1 and not result.get("error"):
+    failed_fissions = 0
+    if fission > 1 and args.step != "a":
         from ..core.dedup_presets import derive_seed  # noqa: PLC0415
         base_seed = args.seed if args.seed else derive_seed(source)
         for i in range(2, fission + 1):
@@ -255,12 +259,18 @@ def run(args: argparse.Namespace) -> int:
                 out_name=f"混剪_{source.stem}_{i}.mp4",
             )
             r = montage_pipeline.run_pipeline(vopts)
-            if not r.get("error") and r.get("final"):
+            if r.get("error") or not r.get("final"):
+                failed_fissions += 1
+                log(f"  [失败] 裂变 {i}/{fission}: {r.get('error') or '无产物'}")
+            else:
                 log(f"  裂变 {i} 产出: {r['final']}")
 
     log("")
     log("=" * 62)
-    log(f"混剪完成（裂变 {fission} 支）" if fission > 1 else "混剪完成")
+    if failed_fissions:
+        log(f"混剪部分失败：{failed_fissions}/{fission} 支失败")
+    else:
+        log(f"混剪完成（裂变 {fission} 支）" if fission > 1 else "混剪完成")
     log("=" * 62)
     log(f"{'基准时长':<12}{fmt_dur(result['source_duration'])}")
     log(f"{'语音段数':<12}{result['segments']:>10}")
@@ -273,4 +283,4 @@ def run(args: argparse.Namespace) -> int:
     log(f"{'成片路径':<12}{result['final']}")
     log(f"{'总耗时':<12}{fmt_dur(time.time() - t0):>10}")
     log("=" * 62)
-    return 0
+    return 2 if failed_fissions else 0
