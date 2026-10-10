@@ -1,6 +1,6 @@
 """无需外部视频、ffmpeg、网络或 API 密钥的 TUI 端到端交互回归。
 
-覆盖目录导航、确认开关、五项功能的 CLI 映射、取消/窄窗口与任务循环。
+覆盖四个处理向导的 CLI 映射、目录导航、键盘菜单、取消/窄窗口与任务循环。
 """
 
 from __future__ import annotations
@@ -148,15 +148,27 @@ class TUIIntegrationTests(unittest.TestCase):
             confirm.assert_not_called()
             multi.assert_not_called()
 
-    def test_unicode_search_displays_results_and_returns_to_menu(self):
-        result = Path("/tmp/视频素材/婚礼现场.mp4")
-        scr = FakeScreen([curses.KEY_DOWN, 27])
-        with mock.patch.object(tui, "_pick_dir", return_value="/tmp/视频素材"), \
-             mock.patch.object(tui, "_prompt_text", return_value="婚礼"), \
-             mock.patch.object(tui, "search_videos", return_value=[result]) as search:
-            self.assertIsNone(tui._wizard_search(scr, 100))
-            search.assert_called_once_with("/tmp/视频素材", "婚礼")
-        self.assertTrue(any("婚礼现场" in s for _, _, s in scr.printed))
+    def test_only_processing_features_are_accessible_from_main_menu(self):
+        self.assertEqual(
+            [key for key, _, _ in tui.FEATURES],
+            ["slice", "cover", "dedup", "montage"],
+        )
+        # The former search shortcut "5" must not dispatch an unavailable item.
+        with mock.patch.object(tui.curses, "curs_set"), \
+             mock.patch.object(tui, "_run_feature_wizard") as dispatch:
+            result = tui._loop(FakeScreen([ord("5"), 27]))
+        self.assertEqual(result, ("quit", None))
+        dispatch.assert_not_called()
+
+    def test_saved_menu_focus_outside_current_features_is_clamped(self):
+        with mock.patch.object(tui.curses, "curs_set"), \
+             mock.patch.object(tui._loop, "_feat_sel", 99), \
+             mock.patch.object(tui, "_run_feature_wizard",
+                               return_value=[["montage"]]) as dispatch:
+            result = tui._loop(FakeScreen([10]))
+        self.assertEqual(result, ("run", [["montage"]]))
+        dispatch.assert_called_once()
+        self.assertEqual(dispatch.call_args.args[1], "montage")
 
     def test_narrow_screen_allows_cancel_without_out_of_bounds(self):
         tiny = (12, 40)
