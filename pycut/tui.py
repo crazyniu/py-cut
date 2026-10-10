@@ -171,6 +171,19 @@ def _small_screen(stdscr) -> bool:
     return True
 
 
+def _frame(stdscr, title: str, subtitle: str = "") -> None:
+    """统一顶栏 / 页面标题 / 上下文，保留主要内容从第 5 行开始。"""
+    _h, w = stdscr.getmaxyx()
+    _safe_add(stdscr, 0, 0, " " * w, w, "text", curses.A_REVERSE)
+    _safe_add(stdscr, 0, 2, "◈  PYCUT", w, "accent", curses.A_REVERSE | curses.A_BOLD)
+    version = f"v{__version__}"
+    _safe_add(stdscr, 0, max(20, w - len(version) - 3), version,
+              w, "dim", curses.A_REVERSE)
+    _safe_add(stdscr, 2, 2, title, w, "keyword", curses.A_BOLD)
+    _safe_add(stdscr, 3, 2, subtitle, w, "info")
+    _safe_add(stdscr, 4, 2, "─" * max(0, w - 4), w, "muted")
+
+
 # ---------------------------------------------------------------------------
 # 输入框（数字 / 简单文本，带默认值）
 # ---------------------------------------------------------------------------
@@ -273,16 +286,17 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
     sel = 0
     while True:
         h, w = stdscr.getmaxyx()
+        if _small_screen(stdscr):
+            if stdscr.getch() in (27, ord("q"), ord("Q")):
+                return None
+            continue
         stdscr.erase()
-        # 标题 + 当前路径（面包屑）
-        _safe_add(stdscr, 2, 2, title, w, "keyword", curses.A_BOLD)
-        _safe_add(stdscr, 3, 2, str(cur), w, "info")
-        _safe_add(stdscr, 4, 2, "─" * (w - 4), w, "muted")
+        _frame(stdscr, title, str(cur))
 
         if sel >= len(entries):
             sel = max(0, len(entries) - 1)
         start_y = 5
-        max_rows = h - 9
+        max_rows = max(1, h - 9)
         top = 0
         if sel >= max_rows:
             top = sel - max_rows + 1
@@ -365,10 +379,13 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
 
     while True:
         h, w = stdscr.getmaxyx()
+        if _small_screen(stdscr):
+            if stdscr.getch() in (27, ord("q"), ord("Q")):
+                return False
+            continue
         stdscr.erase()
-        _safe_add(stdscr, 2, 2, "处理前确认", w, "keyword", curses.A_BOLD)
-        _safe_add(stdscr, 3, 2, "─" * (w - 4), w, "muted")
-        y = 4
+        _frame(stdscr, "处理前确认", "检查输入与选项，按 Enter 开始执行")
+        y = 5
         for label, value in lines:
             _safe_add(stdscr, y, 2, _pad(label, 16), w, "dim")
             _safe_add(stdscr, y, 2 + 16, value, w, "value")
@@ -431,21 +448,22 @@ def _multi_select(stdscr, title: str, files: list[Path]) -> tuple[list[Path], di
 
     空格勾选/取消；选中项上按数字键 0-9 设置裂变数量（默认 1）；A 全选/取消全选。
     """
+    if not files:
+        return None
     selected: set[int] = set()
     fission: dict[str, int] = {str(f): 1 for f in files}
     sel = 0
-
-    def refresh_view():
-        pass
-
     while True:
         h, w = stdscr.getmaxyx()
+        if _small_screen(stdscr):
+            if stdscr.getch() in (27, ord("q"), ord("Q")):
+                return None
+            continue
         stdscr.erase()
-        _safe_add(stdscr, 2, 2, title, w, "keyword", curses.A_BOLD)
-        _safe_add(stdscr, 3, 2, f"共 {len(files)} 个视频，已选 {len(selected)} 个", w, "dim")
-        _safe_add(stdscr, 4, 2, "─" * (w - 4), w, "muted")
+        total = sum(fission[str(files[i])] for i in selected)
+        _frame(stdscr, title, f"{len(files)} 个视频 · 已选 {len(selected)} 个 · 预计输出 {total} 支")
 
-        max_rows = h - 8
+        max_rows = max(1, h - 8)
         top = 0
         if sel >= max_rows:
             top = sel - max_rows + 1
@@ -469,7 +487,7 @@ def _multi_select(stdscr, title: str, files: list[Path]) -> tuple[list[Path], di
             _safe_add(stdscr, y, w - 12, f"裂变 x{n}", w, "value", attr)
 
         _safe_add(stdscr, h - 2, 2,
-                  " ↑/↓ 移动 · 空格 勾选 · 数字 设裂变数 · A 全选/取消 · Enter 确认 · Esc 返回 ",
+                  " ↑/↓ 移动 · 空格 勾选 · E 设裂变数(1~99) · A 全选 · Enter 确认 · Esc 返回 ",
                   w, "dim", curses.A_REVERSE)
         stdscr.refresh()
 
@@ -490,9 +508,14 @@ def _multi_select(stdscr, title: str, files: list[Path]) -> tuple[list[Path], di
                 selected.clear()
             else:
                 selected = set(range(len(files)))
-        elif ord("0") <= k <= ord("9"):
-            n = k - ord("0")
-            fission[str(files[sel])] = n if n >= 1 else 1
+        elif k in (ord("e"), ord("E")):
+            p = str(files[sel])
+            n = _prompt_int(stdscr, h - 4, 2, w, "设置裂变数量",
+                            fission[p], 1, 99)
+            if n is not None:
+                fission[p] = n
+        elif ord("1") <= k <= ord("9"):
+            fission[str(files[sel])] = k - ord("0")
         elif k in (10, curses.KEY_ENTER, ord("\r")):
             if not selected:
                 continue
@@ -522,15 +545,15 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
     feat_sel = getattr(_loop, "_feat_sel", 0)  # 选中项只初始化一次，循环内保持
     while True:
         h, w = stdscr.getmaxyx()
+        if _small_screen(stdscr):
+            if stdscr.getch() in (27, ord("q"), ord("Q")):
+                return ("quit", None)
+            continue
         stdscr.erase()
-        draw_header(0, w)
-
-        # ---- 主菜单 ----
-        _safe_add(stdscr, 2, 2, "选择功能", w, "keyword", curses.A_BOLD)
-        _safe_add(stdscr, 3, 2, "─" * (w - 4), w, "muted")
+        _frame(stdscr, "选择功能", "本地视频工作台  /  ↑↓ 导航，Enter 进入")
         sel = feat_sel
         for i, (key, name, desc) in enumerate(FEATURES):
-            y = 4 + i
+            y = 5 + i
             active = (i == sel)
             mark = "❯" if active else " "
             attr = curses.A_REVERSE | curses.A_BOLD if active else curses.A_NORMAL
@@ -585,9 +608,11 @@ def _wizard_slice(stdscr, w: int) -> list[list[str]] | None:
     d = _pick_dir(stdscr, "切片 · 选择源视频目录", None)
     if d is None:
         return None
-    n = count_videos_recursive(d)
+    # TUI 所报数量必须与 slice 实际处理集合一致：3 层、过滤系统目录、仅 MP4。
+    from .core.scan import list_videos_recursive  # noqa: PLC0415
+    n = sum(p.suffix.lower() == ".mp4" for p in list_videos_recursive(d))
     if n == 0:
-        _flash(stdscr, f"该目录下没有视频：{d}", "bad")
+        _flash(stdscr, f"目录 3 层内没有可处理的 MP4：{d}", "bad")
         return None
     toggles = [
         ("擦除字幕", "切片时顺带擦除画面字幕", True),
@@ -600,7 +625,7 @@ def _wizard_slice(stdscr, w: int) -> list[list[str]] | None:
     sub_on = vals[0] if len(vals) > 0 else True
     dedup_on = vals[1] if len(vals) > 1 else False
     # 切片 argv：擦除字幕默认开启，关闭时加 --no-sub
-    argv = ["slice", "--src-dir", d]
+    argv = ["slice", "--src-dir", d, "--max-depth", "3"]
     if not sub_on:
         argv.append("--no-sub")
     # 勾选「去重」时：切片完成后对桌面切片桶（有人脸/无人脸）自动去重
@@ -644,6 +669,9 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     if clip is None:
         return None
     nc = count_videos_recursive(clip)
+    if nc == 0:
+        _flash(stdscr, f"片段库内没有视频：{clip}", "bad")
+        return None
     # 2) 画中画目录（递归）
     pip = _pick_dir(stdscr, "混剪 · 选择「画中画切片」目录（递归）", None)
     if pip is None:
@@ -657,8 +685,11 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     if not files:
         _flash(stdscr, f"该目录下没有视频：{src_dir}", "bad")
         return None
-    chosen, fission = _multi_select(stdscr, "混剪 · 多选爆款视频并设裂变数量", files)
-    if chosen is None or not chosen:
+    selection = _multi_select(stdscr, "混剪 · 多选爆款视频并设裂变数量", files)
+    if selection is None:
+        return None
+    chosen, fission = selection
+    if not chosen:
         return None
 
     # 汇总确认
@@ -707,12 +738,13 @@ def _wizard_search(stdscr, w: int) -> None:
     n = len(files)
     while True:
         h, w2 = stdscr.getmaxyx()
+        if _small_screen(stdscr):
+            if stdscr.getch() in (27, ord("q"), ord("Q")):
+                return None
+            continue
         stdscr.erase()
-        _safe_add(stdscr, 2, 2, f"查素材 · 匹配「{kw.strip()}」共 {n} 个", w2,
-                  "keyword", curses.A_BOLD)
-        _safe_add(stdscr, 3, 2, f"搜索起点: {start}", w2, "info")
-        _safe_add(stdscr, 4, 2, "─" * (w2 - 4), w2, "muted")
-        max_rows = h - 7
+        _frame(stdscr, f"查素材 · 「{kw.strip()}」共 {n} 个", f"搜索起点: {start}")
+        max_rows = max(1, h - 7)
         top = 0
         if sel >= max_rows:
             top = sel - max_rows + 1
