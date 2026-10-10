@@ -88,7 +88,7 @@ class TUIRegression(unittest.TestCase):
 
     def test_montage_escape_returns_without_unpack_error(self):
         files = [Path("/tmp/a.mp4")]
-        with mock.patch.object(tui, "_pick_dir", return_value="/tmp"), \
+        with mock.patch.object(tui, "_pick_dir", side_effect=["/tmp", "/tmp", "/tmp", None, None, None]), \
              mock.patch.object(tui, "count_videos_recursive", return_value=2), \
              mock.patch.object(tui, "list_videos_flat", return_value=files), \
              mock.patch.object(tui, "_multi_select", return_value=None), \
