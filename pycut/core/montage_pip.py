@@ -150,7 +150,7 @@ def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
 # 时间轴规划
 # ---------------------------------------------------------------------------
 def plan_pip_timeline(pool: list[PipItem], total_duration: float,
-                      slot=None, seed=None) -> list[dict]:
+                      slot=None, seed=None, continuous: bool = False) -> list[dict]:
     """规划画中画在成片时间轴上的出现区间。
 
     返回每项形如
@@ -181,7 +181,7 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
 
     used: set[int] = set()
     timeline: list[dict] = []
-    t = min(PIP_LEAD_IN, total)
+    t = 0.0 if continuous else min(PIP_LEAD_IN, total)
     reached_end = False
 
     while True:
@@ -201,8 +201,8 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
             # 素材用完了 —— 这才是「素材不够填满」，标reached_end
             reached_end = True
             break
-        if rest < PIP_MIN_SHOT:
-            # 成片剩下的时间放不下一个画中画：正常收尾，不算素材不够
+        if rest < (0.01 if continuous else PIP_MIN_SHOT):
+            # 连续模式允许尾段不足常规最短镜头，以免末尾出现空白。
             break
 
         idx, it, dur = picked
@@ -225,11 +225,12 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
             "duration": dur_r,
             "offset": off_r,
             "reached_end": False,
+            "allow_short": continuous and dur < PIP_MIN_SHOT,
         })
 
-        gap = rng.uniform(PIP_GAP - PIP_GAP_JITTER, PIP_GAP + PIP_GAP_JITTER)
+        gap = 0.0 if continuous else rng.uniform(PIP_GAP - PIP_GAP_JITTER, PIP_GAP + PIP_GAP_JITTER)
         t += dur + gap
-        if t >= total - PIP_MIN_SHOT:
+        if t >= total - (0.01 if continuous else PIP_MIN_SHOT):
             # 时间轴排满了，正常结束（不是素材不够）
             break
 
@@ -282,7 +283,9 @@ def _clamp_entries(timeline: list[dict]) -> list[dict]:
         want = float(entry.get("duration") or 0.0)
         avail = float(item.duration) - offset
         dur = min(want, avail)
-        if dur < PIP_MIN_SHOT:
+        if dur < PIP_MIN_SHOT and not entry.get("allow_short"):
+            continue
+        if dur <= 0:
             continue
         out.append({
             "path": Path(item.path),
