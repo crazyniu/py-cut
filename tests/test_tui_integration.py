@@ -98,6 +98,9 @@ class TUIIntegrationTests(unittest.TestCase):
             with self.subTest(command=command), \
                  mock.patch.object(tui, "_pick_dir", return_value="/tmp/videos"), \
                  mock.patch.object(tui, "count_videos_recursive", return_value=3), \
+                 mock.patch("pycut.core.scan.list_videos_recursive",
+                            return_value=[Path("/tmp/videos/clip.mp4"),
+                                          Path("/tmp/videos/not-supported.mov")]), \
                  mock.patch.object(tui, "_confirm", return_value=True):
                 result = wizard(FakeScreen(), 100)
                 self.assertEqual(result, [[command, "--src-dir", "/tmp/videos"]])
