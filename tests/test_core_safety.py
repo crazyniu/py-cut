@@ -268,5 +268,52 @@ class CoreSafetyTests(unittest.TestCase):
             self.assertFalse(staged.exists())
 
 
+    def test_montage_landscape_flag_changes_actual_scan_results(self):
+        from pycut.core import montage_clips
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            portrait = root / "portrait.mp4"
+            landscape = root / "landscape.mp4"
+            portrait.write_bytes(b"p" * 1200)
+            landscape.write_bytes(b"l" * 1300)
+            def probe(path):
+                width, height = ((1920, 1080) if path == landscape else (720, 1280))
+                return montage_clips.ClipItem(
+                    path=path, duration=10.0, width=width,
+                    height=height, has_audio=False)
+            with mock.patch.object(montage_clips, "_probe_one", side_effect=probe), \
+                 mock.patch.object(montage_clips, "log"):
+                normal = montage_clips.scan_library(
+                    root, min_dur=1.0, workers=1)
+                allowed = montage_clips.scan_library(
+                    root, min_dur=1.0, workers=1, allow_landscape=True)
+            self.assertEqual({item.path for item in normal}, {portrait})
+            self.assertEqual({item.path for item in allowed},
+                             {portrait, landscape})
+
+    def test_montage_pipeline_passes_landscape_setting_to_scan(self):
+        from pycut.core import montage_clips, montage_source
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            prof = SimpleNamespace(
+                duration=10.0, width=720, height=1280,
+                segments=[], speech_total=10.0, has_audio=False)
+            opts = montage_pipeline.MontageOptions(
+                source=root / "src.mp4", clip_dir=root,
+                out_dir=root / "out", srt="", allow_landscape=True)
+            with mock.patch.object(config, "MONTAGE_TMP", root / "tmp"), \
+                 mock.patch.object(montage_source, "probe_source", return_value=prof), \
+                 mock.patch.object(montage_source, "plan_clip_slots",
+                                   return_value=[(0.0, 10.0)]), \
+                 mock.patch.object(montage_clips, "scan_library",
+                                   return_value=[]) as scanned, \
+                 mock.patch.object(montage_pipeline, "log"):
+                result = montage_pipeline.run_pipeline(opts)
+            self.assertEqual(result.get("error"), "素材库为空")
+            scanned.assert_called_once_with(
+                root, min_dur=opts.min_clip, max_dur=opts.max_clip,
+                workers=opts.workers, allow_landscape=True)
+
+
 if __name__ == "__main__":
     unittest.main()
