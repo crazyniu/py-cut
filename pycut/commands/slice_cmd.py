@@ -183,7 +183,7 @@ def run(args: argparse.Namespace) -> int:
             t_detect += r.detect_s
             t_enc += r.enc_s
             results.append(r)
-            progress("源视频", idx, len(files), success=sum(not (r.failed or r.sub_fail) for r in results), failed=sum(bool(r.failed or r.sub_fail) for r in results), detail=("字幕擦除失败，此批切片尚未完成" if r.sub_fail else "切片流程已处理的源视频"), output=str(config.OUT_FACE.parent))
+            progress("源视频", idx, len(files), success=sum(not (r.failed or r.sub_fail) for r in results), failed=sum(bool(r.failed or r.sub_fail) for r in results), review=sum(r.sub_review for r in results), detail=("字幕擦除失败，此批切片尚未完成" if r.sub_fail else "切片流程已处理的源视频"), output=str(config.OUT_FACE.parent))
     finally:
         manifest.close()
 
@@ -238,6 +238,9 @@ def _summary(results, llm, manifest, t_detect, t_enc, t_all) -> int:
     if _stopped():
         log("[中断] 任务未完整完成，退出码 130")
         return 130
+    review = sum(r.sub_review for r in results)
+    if review:
+        log(f"[待复查] {review} 片字幕识别不确定或可能残留；切片已保留，继续后续任务")
     sub_failed = sum(r.sub_fail for r in results)
     if tot_fail or sub_failed:
         log(f"[失败] 切片错误 {tot_fail}，字幕处理错误 {sub_failed}")

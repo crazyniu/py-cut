@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +19,13 @@ from .utils import log
 SAMPLES = 5             # 每片段抽帧检测数（越多越能覆盖所有文字行）
 DETECT_WIDTH = 480      # 送检帧宽（足够 LLM 定位，省 token）
 PAD_Y = 0.12  # 按字幕高度增加上下余量
+DETECT_TIMEOUT = 30.0   # 每轮检测共用等待预算，不按采样帧反复等待90秒
+
+
+class SubtitleReviewNeeded(RuntimeError):
+    """识别不确定，保留产物等待复查，不当作编码失败。"""
+
+
 WORKERS = 4             # 并发片段数（每片段 = N 次 LLM + 1 次逐帧修复）
 
 # 切片桶在运行时可能被 slice/dedup 的 --src-dir/--out-dir 覆盖，故 collect_clips
@@ -34,12 +42,12 @@ DETECT_PROMPT = (
 )
 
 
-def _grab_frame(clip: Path, t: float, jp: Path, width: int = DETECT_WIDTH) -> bool:
+def _grab_frame(clip: Path, t: float, jp: Path, width: int = DETECT_WIDTH, *, timeout: float = 60) -> bool:
     """ffmpeg 单帧抽图（检测用途，不要求帧级精度，输入侧 seek 足够）。"""
     r = subprocess.run(
         [FFMPEG, "-y", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(clip),
          "-frames:v", "1", "-vf", f"scale={width}:-2", "-q:v", "4", str(jp)],
-        capture_output=True, timeout=60)
+        capture_output=True, timeout=timeout)
     return r.returncode == 0 and jp.exists()
 
 
@@ -64,6 +72,7 @@ def detect_region(llm: LLMClient, clip: Path,
         raise RuntimeError("无法探测视频分辨率")
     W, H = int(w_s), int(h_s)
 
+    deadline = time.monotonic() + DETECT_TIMEOUT
     boxes: list[list[float]] = []
     texts: list[str] = []
     clean_replies = 0
@@ -72,14 +81,18 @@ def detect_region(llm: LLMClient, clip: Path,
         for i in range(samples):
             if STOP.flag:
                 raise RuntimeError("用户中断字幕检测")
+            if time.monotonic() >= deadline:
+                raise SubtitleReviewNeeded("识别等待超时")
+            if not getattr(llm, "enabled", True) and not getattr(llm, "_delegate", None):
+                raise SubtitleReviewNeeded("识别服务暂不可用")
             t = dur * (i + 0.5) / samples
             jp = Path(td) / f"f{i}.jpg"
-            if not _grab_frame(clip, t, jp):
+            if not _grab_frame(clip, t, jp, timeout=max(0.01, deadline - time.monotonic())):
                 continue
             frame = cv2.imread(str(jp))
             if frame is None:
                 continue
-            r = llm.ask_vision(frame, DETECT_PROMPT)
+            r = llm.ask_vision(frame, DETECT_PROMPT, deadline=deadline)
             if not isinstance(r, dict):
                 continue
             if r.get("has_subtitle") is False:
@@ -108,7 +121,7 @@ def detect_region(llm: LLMClient, clip: Path,
         # 的冲突回复，才能持久标记无字幕。其余情形保留重试机会。
         if clean_replies >= (samples // 2 + 1) and uncertain_positive == 0:
             return None
-        raise RuntimeError(
+        raise SubtitleReviewNeeded(
             f"字幕检测结果不可靠：有效无字幕答复 {clean_replies}/{samples}，"
             f"无法定位的字幕答复 {uncertain_positive}；未标记已处理"
         )
@@ -132,7 +145,7 @@ def detect_region(llm: LLMClient, clip: Path,
     BW = min(BW, W - X)
     BH = min(BH, H - Y)
     if BW < 8 or BH < 8:
-        raise RuntimeError("字幕区域过小，无法可靠遮盖；未标记无字幕")
+        raise SubtitleReviewNeeded("字幕区域过小，无法可靠遮盖；未标记无字幕")
     return X, Y, BW, BH, texts
 
 
@@ -221,19 +234,24 @@ def verified_clip(clip: Path) -> bool:
 
 def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
                  dry_run: bool = False, samples: int = SAMPLES) -> str:
-    """处理单个切片，返回状态: covered / nosub / skip / fail / dryrun。"""
+    """处理单个切片，返回状态: covered / nosub / skip / review / fail / dryrun。"""
     mk = _marker(clip)
     if verified_clip(clip) and not force:
         return "skip"
 
+    if not dry_run:
+        mk.unlink(missing_ok=True)
     try:
         region = detect_region(llm, clip, samples)
+    except (SubtitleReviewNeeded, TimeoutError, subprocess.TimeoutExpired) as exc:
+        log(f"  [待复查] {clip.name}: {exc}；继续处理后续片段")
+        return "review"
     except (RuntimeError, ValueError, OSError) as exc:
         log(f"  [字幕检测失败] {clip.name}: {exc}")
         return "fail"
     if region is None:
         if not llm.enabled:
-            return "fail"  # LLM 不可用时不能盲盖
+            return "review"  # LLM 不可用时不能盲盖，也不阻断已有切片
         if dry_run:
             log(f"  [无字幕] {clip.name}")
             return "nosub"
@@ -252,12 +270,12 @@ def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
     mk.unlink(missing_ok=True)
     try:
         residual = detect_region(llm, clip, min(samples, 3))
-    except (RuntimeError, ValueError, OSError) as exc:
-        log(f"  [字幕复检失败] {clip.name}: {exc}；未标记完成")
-        return "fail"
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
+        log(f"  [待复查] {clip.name}: 复检不确定（{exc}）；继续处理")
+        return "review"
     if residual is not None:
-        log(f"  [字幕残留] {clip.name}: 擦除后仍检测到字幕；未标记完成，请重试或检查画面")
-        return "fail"
+        log(f"  [待复查] {clip.name}: 擦除后可能仍有字幕；继续处理，未标记擦除成功")
+        return "review"
     mk.write_text(json.dumps({"version": 2, "subtitle": True, "verified": True, "verified_samples": min(samples, 3), "region": [X, Y, BW, BH],
                               "texts": texts,
                               "covered_at": datetime.now().isoformat()},

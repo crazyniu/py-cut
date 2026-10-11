@@ -99,9 +99,9 @@ Markdown 仅保留有效需求、业务流程、架构、接口/数据契约、�
 三步，顺序不可乱：
 1. **场景分段**（默认 2–15 秒，不识别语义，合并短尾段后仍检查上限）→ `core/scene.py`：`detect_scenes`（ffmpeg `select='gt(scene,TH)'`）+ `build_segments`（去重/合并过短/切分超长）。
 2. **人脸分流** → `core/faces.py`：Haar 严格/宽松两档 → 三态 `face/noface/ambiguous`；仅 ambiguous 送 LLM 兜底。产出按「有人脸/无人脸」分目录。
-3. **字幕擦除** → `core/subtitle.py`：`detect_region`（LLM 并集框 + 中位数聚合，高度跟随真实字幕）+ `cover_clip`（FFmpeg 内按字幕高度覆盖整幅视频宽度的矩形马赛克，音轨直接 copy；验证尺寸、时长与音轨后原子替换）。
+3. **字幕擦除** → `core/subtitle.py`：`detect_region`（LLM 跨帧并集框，高度跟随真实字幕）+ `cover_clip`（FFmpeg 内按字幕高度覆盖整幅视频宽度的矩形马赛克，音轨直接 copy；验证尺寸、时长与音轨后原子替换）。
 
-入口编排：`core/slice_pipeline.py` 的 `process_video`。
+入口编排：`core/slice_pipeline.py` 的 `process_video`。识别不确定、超时或复检可能残留返回 review（待复查），不写完成标记，继续其他片与后继去重；真正编码失败与中断仍非零。每轮检测共享30秒等待预算，单次HTTP超时15秒，等待后台片段时每秒更新进度。
 
 ## 5. 关键坑（踩过，别再踩）
 

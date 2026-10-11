@@ -17,7 +17,7 @@ from ..core.ffmpeg import self_check
 from ..core.llm import make_llm
 from ..core.runtime import install_signal_handlers, reset_stop, STOP
 from ..core.subtitle import SAMPLES, WORKERS, collect_clips, process_clip, verified_clip
-from ..core.progress import progress
+from ..core.progress import progress, completed_futures
 from ..core.utils import log
 
 
@@ -104,7 +104,7 @@ def run(args: argparse.Namespace) -> int:
     log(f"[范围] {len(clips)} 个切片")
 
     t0 = time.time()
-    stat = {"covered": 0, "nosub": 0, "skip": 0, "fail": 0, "dryrun": 0}
+    stat = {"covered": 0, "nosub": 0, "skip": 0, "fail": 0, "dryrun": 0, "review": 0}
 
     def _do(c: Path) -> str:
         if STOP.flag:
@@ -125,22 +125,34 @@ def run(args: argparse.Namespace) -> int:
                 if verified_clip(c) and not args.force:
                     shutil.copy2(original_marker, staged_marker)
                 status = process_clip(llm, staged, force=args.force, samples=args.samples)
-                if status in ("covered", "nosub", "skip") and not STOP.flag:
+                if status == "review" and dst.is_file():
+                    log(f"  [待复查] {c.name}: 保留已有输出，未用不确定结果覆盖")
+                    return status
+                if status in ("covered", "nosub", "skip", "review") and not STOP.flag:
                     staged.replace(dst)
                     if staged_marker.exists():
                         staged_marker.replace(marker)
+                    else:
+                        marker.unlink(missing_ok=True)
                 return status
 
         except Exception as e:  # noqa: BLE001 单片段失败不拖垮整批
             log(f"  [异常] {c.name}: {type(e).__name__} {e}")
             return "fail"
 
-    progress("字幕擦除", 0, len(clips), detail="检测 → 像素修复 → 成品复检")
+    def report(waiting=False):
+        progress("字幕擦除", sum(stat.values()), len(clips),
+                 success=stat['covered'] + stat['nosub'], failed=stat['fail'],
+                 skipped=stat['skip'], review=stat['review'],
+                 detail=(f"正在识别/覆盖剩余 {len(clips) - sum(stat.values())} 片；识别超时转待复查" if waiting else
+                         f"复检通过 {stat['covered']} · 未检出字幕 {stat['nosub']} · 待复查 {stat['review']}"),
+                 output=str(destination(clips[0]).parent))
+    report()
     with futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
-        for future in futures.as_completed([ex.submit(_do, c) for c in clips]):
+        for future in completed_futures([ex.submit(_do, c) for c in clips], lambda: report(True)):
             s = future.result()
             stat[s] = stat.get(s, 0) + 1
-            progress("字幕擦除", sum(stat.values()), len(clips), success=stat['covered'] + stat['nosub'], failed=stat['fail'], skipped=stat['skip'], detail=f"复检通过 {stat['covered']} · 未检出字幕 {stat['nosub']}", output=str(destination(clips[0]).parent))
+            report()
 
     log("")
     log("=" * 56)
@@ -148,6 +160,8 @@ def run(args: argparse.Namespace) -> int:
         f"{'无字幕':<8}{stat['nosub']:>4}   "
         f"{'跳过':<6}{stat['skip']:>4}   "
         f"{'失败':<6}{stat['fail']:>4}")
+    if stat["review"]:
+        log(f"[待复查] {stat['review']} 片识别不确定或仍可能有字幕；输出已保留，可继续后续任务")
     if stat["dryrun"]:      # 试跑：只报检测到的区域，不落盘
         log(f"{'试跑命中':<10}{stat['dryrun']:>6}   （--dry-run，未改写文件）")
     note = f"（失败 {llm.failures}）"

@@ -24,7 +24,7 @@ from .ffmpeg import FFMPEG, VideoInfo
 from .runtime import STOP
 from .scene import build_segments, detect_scenes
 from .subtitle import process_clip, verified_clip
-from .progress import progress
+from .progress import progress, completed_futures
 from .utils import fmt_bytes, fmt_dur, log, run_cmd
 
 
@@ -94,6 +94,7 @@ class VideoResult:
     sub_s: float = 0.0
     sub_covered: int = 0
     sub_fail: int = 0
+    sub_review: int = 0
     skipped: bool = False
 
 
@@ -392,7 +393,7 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
                     old.with_name(old.name + ".covered.json").unlink(missing_ok=True)
 
     # --- 流水线第三步：字幕擦除（--no-sub 跳过）---
-    if not opts.no_sub and llm.enabled and done_clips and not STOP.flag:
+    if not opts.no_sub and done_clips and not STOP.flag:
         t_sub = time.time()
         log(f"[字幕] 检测并擦除 {len(done_clips)} 个切片 ...")
 
@@ -405,18 +406,26 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
                 log(f"  [字幕异常] {p.name}: {type(e).__name__} {e}")
                 return "fail"
 
-        sub_stat: dict[str, int] = {"covered": 0, "nosub": 0, "skip": 0, "fail": 0}
-        progress("字幕擦除", 0, len(done_clips), detail="检测 → 像素修复 → 成品复检")
+        sub_stat: dict[str, int] = {"covered": 0, "nosub": 0, "skip": 0, "fail": 0, "review": 0}
+        def report(waiting=False):
+            progress("字幕擦除", sum(sub_stat.values()), len(done_clips),
+                     success=sub_stat['covered'] + sub_stat['nosub'], failed=sub_stat['fail'],
+                     skipped=sub_stat['skip'], review=sub_stat['review'],
+                     detail=(f"正在识别/覆盖剩余 {len(done_clips) - sum(sub_stat.values())} 片；识别超时转待复查" if waiting else
+                             f"复检通过 {sub_stat['covered']} · 未检出字幕 {sub_stat['nosub']} · 待复查 {sub_stat['review']}"),
+                     output=str(face_dir.parent))
+        report()
         with futures.ThreadPoolExecutor(max_workers=opts.workers_llm) as ex2:
-            for future in futures.as_completed([ex2.submit(_cov, p) for p in done_clips]):
+            for future in completed_futures([ex2.submit(_cov, p) for p in done_clips], lambda: report(True)):
                 s = future.result()
                 sub_stat[s] = sub_stat.get(s, 0) + 1
-                progress("字幕擦除", sum(sub_stat.values()), len(done_clips), success=sub_stat['covered'] + sub_stat['nosub'], failed=sub_stat['fail'], skipped=sub_stat['skip'], detail=f"复检通过 {sub_stat['covered']} · 未检出字幕 {sub_stat['nosub']} · 已处理跳过 {sub_stat['skip']}", output=str(face_dir.parent))
+                report()
         res.sub_s = time.time() - t_sub
         res.sub_covered = sub_stat["covered"]
         res.sub_fail = sub_stat["fail"]
+        res.sub_review = sub_stat["review"]
         log(f"[字幕] 遮盖 {sub_stat['covered']} / 无字幕 {sub_stat['nosub']} / "
-            f"失败 {sub_stat['fail']}，{res.sub_s:.1f}s")
+            f"待复查 {sub_stat['review']} / 失败 {sub_stat['fail']}，{res.sub_s:.1f}s")
 
     res.enc_s = time.time() - t_enc
     log(f"[完成] {info.stem}: 有人脸 {res.face} / 无人脸 {res.noface} / 失败 {res.failed}, "

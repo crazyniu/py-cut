@@ -60,7 +60,7 @@ def test_residual_subtitle_or_failed_verification_does_not_mark_complete():
             clip.write_bytes(b'source')
             subtitle._marker(clip).write_text('{}')
             with mock.patch.object(subtitle, 'detect_region', side_effect=[region, after]), mock.patch.object(subtitle, 'cover_clip', return_value=True):
-                assert subtitle.process_clip(SimpleNamespace(enabled=True), clip) == 'fail'
+                assert subtitle.process_clip(SimpleNamespace(enabled=True), clip) == 'review'
             assert not subtitle._marker(clip).exists()
 
 
@@ -91,22 +91,3 @@ def test_runner_consumes_structured_events_and_retains_final_counts():
         assert tui_runner._run_one(screen, ['slice'], 1, 1, history) == (0, False)
     assert launch.call_args.kwargs['env']['PYCUT_PROGRESS'] == '1'
     assert [progress.parse(line) for line in history] == [event]
-
-
-def test_caption_background_is_removed_with_text_without_masking_whole_dark_scene():
-    import numpy as np
-    gray = np.full((120, 240), 60, np.uint8)
-    gray[40:60, 30:200] = 0
-    gray[45:55, 60:70] = 240
-    strokes = np.zeros_like(gray)
-    strokes[45:55, 60:70] = 255
-    # Contrast detection also sees the black rectangle edges.
-    strokes[40, 30:200] = 255
-    strokes[59, 30:200] = 255
-    strokes[40:60, 30] = 255
-    strokes[40:60, 199] = 255
-    mask = subtitle._caption_background_mask(gray, strokes)
-    assert (mask[40:60, 30:200] == 255).all()
-    assert not mask[:30].any()
-    dark = np.zeros_like(gray)
-    assert np.array_equal(subtitle._caption_background_mask(dark, strokes), strokes)

@@ -129,7 +129,7 @@ class CoverSafetyTests(unittest.TestCase):
                                    side_effect=lambda p, entry: info[entry]), \
                  mock.patch.object(subtitle, "_grab_frame", return_value=False), \
                  mock.patch.object(subtitle, "log"):
-                self.assertEqual(subtitle.process_clip(model, clip), "fail")
+                self.assertEqual(subtitle.process_clip(model, clip), "review")
             self.assertFalse(subtitle._marker(clip).exists())
             model.ask_vision.assert_not_called()
 
@@ -171,7 +171,7 @@ class CoverSafetyTests(unittest.TestCase):
                      mock.patch.object(subtitle, "_grab_frame", return_value=True), \
                      mock.patch.object(subtitle.cv2, "imread", return_value=object()), \
                      mock.patch.object(subtitle, "log"):
-                    self.assertEqual(subtitle.process_clip(model, clip), "fail")
+                    self.assertEqual(subtitle.process_clip(model, clip), "review")
                 self.assertFalse(subtitle._marker(clip).exists())
 
     def test_one_valid_subtitle_detection_remains_actionable(self):
