@@ -183,6 +183,15 @@ def _is_portrait(p: Path) -> bool:
 
 
 def run(args: argparse.Namespace) -> int:
+    prepared = {}
+    try:
+        return _run(args, prepared)
+    finally:
+        for directory in prepared.get("temporary_dirs", []):
+            directory.cleanup()
+
+
+def _run(args: argparse.Namespace, prepared: dict) -> int:
     import math
     if not math.isfinite(args.seam_fade) or args.seam_fade < 0:
         log("[错误] --seam-fade 必须为有限的非负秒数")
@@ -234,6 +243,7 @@ def run(args: argparse.Namespace) -> int:
     from . import montage_pipeline  # noqa: PLC0415
 
     opts = montage_pipeline.MontageOptions(
+        prepared=prepared,
         step=args.step,
         intro_dir=(Path(args.intro_dir).expanduser() if args.intro_dir else
                    config.INTRO_DIR if args.intro_dir is None and os.environ.get("PYCUT_INTRO_DIR") else None),
@@ -263,6 +273,11 @@ def run(args: argparse.Namespace) -> int:
         pip_scale=args.pip_scale,
         workers=args.workers,
     )
+    if opts.intro_dir is not None and opts.step in ("all", "c"):
+        from ..core.scan import list_videos_recursive
+        if not list_videos_recursive(opts.intro_dir):
+            log(f"[错误] 前贴目录没有可用视频：{opts.intro_dir}")
+            return 2
     if STOP.flag:
         log("[中断] 已取消混剪，未启动处理（退出码 130）")
         return 130

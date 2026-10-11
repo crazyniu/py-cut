@@ -47,8 +47,6 @@ def _media_tool(name: str) -> str:
         str(bundled) if bundled.is_file() else shutil.which(name) or name)
 
 
-FFMPEG = _media_tool("ffmpeg")
-FFPROBE = _media_tool("ffprobe")
 SLICE_ENCODER = "h264_videotoolbox" if sys.platform == "darwin" else "libx264"
 
 # ---------------------------------------------------------------------------
@@ -58,6 +56,8 @@ SLICE_ENCODER = "h264_videotoolbox" if sys.platform == "darwin" else "libx264"
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent          # pycut/.. => 项目根
 _load_dotenv()   # 在读取任何密钥前加载 .env（用户只需在 .env 配置 DEEPSEEK_API_KEY）
+FFMPEG = _media_tool("ffmpeg")
+FFPROBE = _media_tool("ffprobe")
 
 SRC_DIR = _path("PYCUT_SOURCE_DIR", PROJECT_ROOT / "materials" / "source")
 CLIP_DIR = _path("PYCUT_CLIP_DIR", PROJECT_ROOT / "materials" / "background")

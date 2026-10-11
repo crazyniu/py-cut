@@ -28,6 +28,8 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from .. import config
 from .ffmpeg import FFMPEG, FFPROBE, probe_video
 from .utils import log, run_cmd
@@ -135,8 +137,15 @@ def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
 
     items: list[PipItem] = []
     skipped = 0
-    for path in sorted(_iter_mp4(base), key=lambda p: str(p)):
-        dur = _probe_duration(path)
+    paths = sorted(_iter_mp4(base), key=lambda p: str(p))
+    durations = {}
+    with ThreadPoolExecutor(max_workers=max(1, config.MONTAGE_WORKERS)) as executor:
+        jobs = {executor.submit(_probe_duration, path): path for path in paths}
+        for future in as_completed(jobs):
+            durations[jobs[future]] = future.result()
+    # 探测并发完成，仍按源路径顺序配对，以保持 seed 可复现。
+    for path in paths:
+        dur = durations[path]
         if dur < lo:
             skipped += 1
             continue

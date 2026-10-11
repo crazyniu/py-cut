@@ -12,91 +12,43 @@ from pycut.commands import cover_cmd
 from pycut.core import scan, subtitle
 
 
-class _Decoder:
-    def __init__(self, frames: list[bytes], returncode: int = 0):
-        self.frames = frames.copy()
-        self.stdout = self
-        self.returncode = returncode
-
-    def read(self, amount):
-        return self.frames.pop(0) if self.frames else b""
-
-    def wait(self, timeout=None):
-        return self.returncode
-
-    def poll(self):
-        return self.returncode
-
-    def kill(self):
-        pass
-
-
-class _Encoder:
-    def __init__(self, target: Path):
-        self.target = target
-        self.returncode = 0
-        self.stdin = self
-        self.writes = 0
-
-    def write(self, data):
-        self.writes += 1
-        return len(data)
-
-    def close(self):
-        pass
-
-    def wait(self, timeout=None):
-        self.target.write_bytes(b"processed" * 180)
-        return self.returncode
-
-    def poll(self):
-        return self.returncode
-
-    def kill(self):
-        pass
-
-
 class CoverSafetyTests(unittest.TestCase):
     def test_cover_keeps_original_audio_with_optional_stream_mapping(self):
         with tempfile.TemporaryDirectory() as td:
             clip = Path(td) / "voice.mp4"
             clip.write_bytes(b"original" * 200)
             tmp = clip.with_name("voice.tmp_cover.mp4")
-            dec = _Decoder([bytes([30]) * (16 * 16 * 3)])
-            enc = _Encoder(tmp)
-            probe = {"stream=width": "16", "stream=height": "16",
-                     "stream=avg_frame_rate": "30/1"}
-            with mock.patch.object(subtitle, "probe_scalar",
-                                   side_effect=lambda p, key: probe[key]), \
-                 mock.patch.object(subtitle.subprocess, "Popen",
-                                   side_effect=[dec, enc]) as popen:
-                ok = subtitle.cover_clip(clip, (2, 2, 8, 8))
-            self.assertTrue(ok)
-            self.assertEqual(enc.writes, 1)
+            info = SimpleNamespace(width=16, height=16, duration=1, has_audio=True)
+            child = mock.Mock(returncode=0)
+            child.poll.return_value = 0
+            def launch(*args, **kwargs):
+                tmp.write_bytes(b"processed" * 180)
+                return child
+            with mock.patch("pycut.core.montage_clips._probe_one", return_value=info), \
+                 mock.patch.object(subtitle.subprocess, "Popen", side_effect=launch) as popen:
+                self.assertTrue(subtitle.cover_clip(clip, (2, 2, 8, 8)))
             self.assertEqual(clip.read_bytes(), b"processed" * 180)
-            cmd = popen.call_args_list[1].args[0]
-            self.assertIn(["-map", "0:v:0", "-map", "1:a:0?"],
-                          [cmd[i:i+4] for i in range(len(cmd) - 3)])
-            self.assertIn(["-c:a", "copy"],
-                          [cmd[i:i+2] for i in range(len(cmd) - 1)])
-            self.assertIn(["-i", str(clip)],
-                          [cmd[i:i+2] for i in range(len(cmd) - 1)])
+            cmd = popen.call_args.args[0]
+            self.assertIn("0:a:0?", cmd)
+            self.assertIn(["-c:a", "copy"], [cmd[i:i+2] for i in range(len(cmd)-1)])
+            self.assertNotIn("rawvideo", cmd)
 
-    def test_zero_frames_or_decoder_error_do_not_replace_original(self):
+    def test_failed_or_missing_output_does_not_replace_original(self):
         with tempfile.TemporaryDirectory() as td:
             clip = Path(td) / "voice.mp4"
             original = b"original" * 200
             tmp = clip.with_name("voice.tmp_cover.mp4")
-            probe = {"stream=width": "16", "stream=height": "16",
-                     "stream=avg_frame_rate": "30/1"}
-            for frames, dec_rc in (([], 0),
-                                   ([bytes([30]) * (16 * 16 * 3)], 1)):
+            info = SimpleNamespace(width=16, height=16, duration=1, has_audio=True)
+            for rc, content in ((0, None), (1, b"partial" * 200)):
                 clip.write_bytes(original)
-                with mock.patch.object(subtitle, "probe_scalar",
-                                       side_effect=lambda p, key: probe[key]), \
-                     mock.patch.object(subtitle.subprocess, "Popen",
-                                       side_effect=[_Decoder(frames, dec_rc),
-                                                    _Encoder(tmp)]), \
+                child = mock.Mock(returncode=rc)
+                child.poll.return_value = rc
+                def launch(*args, **kwargs):
+                    if content is not None:
+                        tmp.write_bytes(content)
+                    return child
+                with mock.patch("pycut.core.montage_clips._probe_one", return_value=info), \
+                     mock.patch.object(subtitle.subprocess, "Popen", side_effect=launch), \
                      mock.patch.object(subtitle, "log"):
                     self.assertFalse(subtitle.cover_clip(clip, (2, 2, 8, 8)))
                 self.assertEqual(clip.read_bytes(), original)

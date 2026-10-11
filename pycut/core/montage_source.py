@@ -225,7 +225,8 @@ def detect_speech_segments(path: Path, noise_db: float | None = None,
     return segs
 
 
-def probe_source(path: Path) -> SourceProfile | None:
+def probe_source(path: Path, *, noise_db: float | None = None,
+                 min_silence: float | None = None) -> SourceProfile | None:
     """探测基准视频并跑一遍语音检测，返回完整画像；失败返回 None。"""
     path = Path(path)
     if not path.is_file():
@@ -251,7 +252,7 @@ def probe_source(path: Path) -> SourceProfile | None:
         timeout=_PROBE_TIMEOUT)
     has_audio = rc == 0 and out.strip() != ""
 
-    segments = detect_speech_segments(path) if has_audio else []
+    segments = detect_speech_segments(path, noise_db=noise_db, min_silence=min_silence) if has_audio else []
     speech_total = sum(s.duration for s in segments)
 
     profile = SourceProfile(

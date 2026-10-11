@@ -6,7 +6,6 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from unittest import mock
-import numpy as np
 from pycut import config, settings, web_config, tui
 from pycut.core import subtitle
 
@@ -78,15 +77,6 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(values['PYCUT_CLIP_DIR'], 'external')
             self.assertIn('背景切片目录', settings.overrides())
 
-    def test_mosaic_is_full_width_rectangle_with_unchanged_exterior(self):
-        frame = np.random.default_rng(4).integers(0, 255, (100, 90, 3), dtype=np.uint8)
-        original = frame.copy()
-        subtitle.mosaic_region(frame, 30, 24)
-        np.testing.assert_array_equal(frame[:30], original[:30])
-        np.testing.assert_array_equal(frame[54:], original[54:])
-        self.assertFalse(np.array_equal(frame[30:54, :12], original[30:54, :12]))
-        self.assertFalse(np.array_equal(frame[30:54, -12:], original[30:54, -12:]))
-        np.testing.assert_array_equal(frame[30, 0], frame[30, 1])
 
 
 if __name__ == '__main__':

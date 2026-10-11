@@ -18,6 +18,7 @@ from ..core.utils import log
 
 @dataclass
 class MontageOptions:
+    prepared: dict | None = field(default=None, repr=False)  # 仅同一批裂变共享准备结果
     step: str = "all"
     source: Path = field(default_factory=lambda: config.MONTAGE_SRC)
     clip_dir: Path = field(default_factory=lambda: config.MONTAGE_CLIP_DIR)
@@ -72,7 +73,11 @@ def run_pipeline(opts: MontageOptions) -> dict:
 
     # ---------------- 步骤A：基准 ----------------
     log("--- 步骤A：提取话术节奏与时长基准 ---")
-    prof = probe_source(opts.source)
+    prepared = opts.prepared if opts.prepared is not None else {}
+    if "source" not in prepared:
+        prepared["source"] = probe_source(opts.source, noise_db=opts.noise_db,
+                                          min_silence=opts.min_silence)
+    prof = prepared["source"]
     if prof is None:
         log(f"  [失败] 基准视频探测失败: {opts.source}")
         return {"source_duration": 0.0, "segments": 0, "clips_used": 0,
@@ -144,16 +149,20 @@ def run_pipeline(opts: MontageOptions) -> dict:
 
     # ---------------- 步骤B：随机混剪 ----------------
     log("--- 步骤B：随机混剪拼接 ---")
-    stickers = _load_stickers(opts.sticker_dir)
-    if opts.online_stickers and opts.sticker_chance > 0:
-        from ..core.online_stickers import download_stickers
-        import tempfile
-        try:
-            stickers = download_stickers(Path(tempfile.mkdtemp(prefix="stickers_", dir=tmp)))
-        except (OSError, ValueError) as exc:
-            result["error"] = f"在线贴纸下载失败：{type(exc).__name__}"
-            log(f"  [失败] {result['error']}；未发布成片")
-            return result
+    if "stickers" not in prepared:
+        prepared["stickers"] = _load_stickers(opts.sticker_dir) if opts.sticker_chance > 0 else []
+        if opts.online_stickers and opts.sticker_chance > 0:
+            from ..core.online_stickers import download_stickers
+            import tempfile
+            try:
+                directory = tempfile.TemporaryDirectory(prefix="stickers_", dir=tmp)
+                prepared.setdefault("temporary_dirs", []).append(directory)
+                prepared["stickers"] = download_stickers(Path(directory.name))
+            except (OSError, ValueError) as exc:
+                result["error"] = f"在线贴纸下载失败：{type(exc).__name__}"
+                log(f"  [失败] {result['error']}；未发布成片")
+                return result
+    stickers = prepared["stickers"]
     if opts.sticker_chance > 0 and not stickers:
         directory = opts.sticker_dir or str(config.MONTAGE_STICKER_DIR)
         result["error"] = f"启用了贴纸但目录没有可用图片：{directory}"
@@ -161,9 +170,11 @@ def run_pipeline(opts: MontageOptions) -> dict:
         return result
     if stickers:
         log(f"  贴纸素材 {len(stickers)} 张（叠在片段上：背面半透明 + 边缘羽化）")
-    items = scan_library(opts.clip_dir, min_dur=opts.min_clip,
-                         max_dur=opts.max_clip, workers=opts.workers,
-                         allow_landscape=opts.allow_landscape)
+    if "background" not in prepared:
+        prepared["background"] = scan_library(opts.clip_dir, min_dur=opts.min_clip,
+                                               max_dur=opts.max_clip, workers=opts.workers,
+                                               allow_landscape=opts.allow_landscape)
+    items = prepared["background"]
     if opts.allow_landscape:
         log(f"  素材 {len(items)} 条（已允许横屏）")
     else:
@@ -188,6 +199,15 @@ def run_pipeline(opts: MontageOptions) -> dict:
         result["error"] = f"可用片段不足以填满基准时长（缺 {picked[0]['shortfall']:.2f}s）"
         log(f"  [失败] {result['error']}；拒绝产出缩水成片")
         return result
+
+    # 先确认画中画池，再编码正文；避免素材不足时白做整段混剪。
+    if opts.use_pip and opts.step != "b":
+        if "pip" not in prepared:
+            prepared["pip"] = scan_dedup_pool(opts.dedup_dir, min_dur=opts.min_clip)
+        if not prepared["pip"]:
+            result["error"] = f"画中画素材目录没有可用 MP4：{opts.dedup_dir}"
+            log(f"  [失败] {result['error']}（请检查素材长度/路径或显式使用 --no-pip）")
+            return result
 
     base = tmp / f"base_{seed}.mp4"
     # 用 montage_clips.concat_clips（内部完成「分段截取 → concat → 原子替换」两阶段）
@@ -235,41 +255,36 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 return result
         else:
             log("--- 步骤C：画中画叠加 ---")
-            pool = scan_dedup_pool(opts.dedup_dir, min_dur=opts.min_clip)
+            pool = prepared["pip"]
             log(f"  画中画素材 {len(pool)} 条")
-            if not pool:
-                result["error"] = f"画中画素材目录没有可用 MP4：{opts.dedup_dir}"
-                log(f"  [失败] {result['error']}（请检查素材长度/路径或显式使用 --no-pip）")
-                return result
-            else:
-                timeline = plan_pip_timeline(pool, target, slot=opts.pip_slot,
+            timeline = plan_pip_timeline(pool, target, slot=opts.pip_slot,
                                              seed=seed, continuous=opts.pip_continuous)
-                # 用户反馈「画中画不连续」：上游 plan_pip_timeline 每段之间固定留
-                # ~0.6s 空档，实测 19% 的时间画面上没有画中画。连续模式下重排时间轴，
-                # 让画中画**首尾相接**（gap=0），符合「全程都有」的观感。
-                if opts.pip_continuous:
-                    timeline = _make_continuous(timeline, target)
-                cov = sum(t["duration"] for t in timeline)
-                log(f"  画中画 {len(timeline)} 段，累计 {cov:.1f}s / {target:.1f}s"
-                    f"（覆盖率 {cov / target * 100:.0f}%"
-                    f"{'，连续模式' if opts.pip_continuous else ''}）")
-                if not timeline or (opts.pip_continuous and target - cov > frame_tolerance):
-                    result["error"] = (
-                        f"画中画素材不足：需覆盖 {target:.2f}s，实际 {cov:.2f}s")
-                    log(f"  [失败] {result['error']}；拒绝输出没有画中画的成片")
-                    return result
-                # build_pip_cmd 不是纯命令构造器：它已经运行 FFmpeg、
-                # 校验输出并原子发布到传入路径。不可再用 _publish_stage
-                # 执行一次返回的 argv，否则画中画会被重复编码。
-                try:
-                    build_pip_cmd(base, timeline, working, canvas=canvas,
-                                  scale=opts.pip_scale, fps=config.MONTAGE_FPS,
-                                  crf=opts.crf, variation_seed=seed)
-                except (RuntimeError, ValueError, OSError) as exc:
-                    log(f"  [失败] 画中画叠加失败: {exc}")
-                    result["error"] = "步骤C 失败"
-                    return result
-                result["pip_count"] = len(timeline)
+            # 用户反馈「画中画不连续」：上游 plan_pip_timeline 每段之间固定留
+            # ~0.6s 空档，实测 19% 的时间画面上没有画中画。连续模式下重排时间轴，
+            # 让画中画**首尾相接**（gap=0），符合「全程都有」的观感。
+            if opts.pip_continuous:
+                timeline = _make_continuous(timeline, target)
+            cov = sum(t["duration"] for t in timeline)
+            log(f"  画中画 {len(timeline)} 段，累计 {cov:.1f}s / {target:.1f}s"
+                f"（覆盖率 {cov / target * 100:.0f}%"
+                f"{'，连续模式' if opts.pip_continuous else ''}）")
+            if not timeline or (opts.pip_continuous and target - cov > frame_tolerance):
+                result["error"] = (
+                    f"画中画素材不足：需覆盖 {target:.2f}s，实际 {cov:.2f}s")
+                log(f"  [失败] {result['error']}；拒绝输出没有画中画的成片")
+                return result
+            # build_pip_cmd 不是纯命令构造器：它已经运行 FFmpeg、
+            # 校验输出并原子发布到传入路径。不可再用 _publish_stage
+            # 执行一次返回的 argv，否则画中画会被重复编码。
+            try:
+                build_pip_cmd(base, timeline, working, canvas=canvas,
+                              scale=opts.pip_scale, fps=config.MONTAGE_FPS,
+                              crf=opts.crf, variation_seed=seed)
+            except (RuntimeError, ValueError, OSError) as exc:
+                log(f"  [失败] 画中画叠加失败: {exc}")
+                result["error"] = "步骤C 失败"
+                return result
+            result["pip_count"] = len(timeline)
 
         if not working.is_file() or working.stat().st_size < 1024:
             log("  [失败] 成片未生成或文件异常")

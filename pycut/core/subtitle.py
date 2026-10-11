@@ -8,7 +8,6 @@ from datetime import datetime
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 from .. import config
 from .ffmpeg import FFMPEG, probe_scalar
@@ -148,93 +147,77 @@ def detect_region(llm: LLMClient, clip: Path,
     BW = min(BW, W - X)
     BH = min(BH, H - Y)
     if BW < 8 or BH < 8:
-        return None
+        raise RuntimeError("字幕区域过小，无法可靠遮盖；未标记无字幕")
     return X, Y, BW, BH, texts
 
 
-def mosaic_region(frame: np.ndarray, y: int, height: int) -> None:
-    """修改一条全宽矩形带；带外像素保持不变。"""
-    h, w = frame.shape[:2]
-    top, bottom = max(0, y), min(h, y + height)
-    if bottom <= top:
-        raise ValueError("字幕区域高度无效")
-    roi = frame[top:bottom, :]
-    block = max(12, w // 30)
-    small = cv2.resize(roi, (max(1, w // block), max(1, (bottom - top) // block)),
-                       interpolation=cv2.INTER_AREA)
-    frame[top:bottom, :] = cv2.resize(small, (w, bottom - top),
-                                    interpolation=cv2.INTER_NEAREST)
-
-
 def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
-    """全宽矩形马赛克，保留原声，编码成功才替换原文件。"""
-    X, Y, BW, BH = region
-    w_s = probe_scalar(clip, "stream=width")
-    h_s = probe_scalar(clip, "stream=height")
-    fps_s = (probe_scalar(clip, "stream=avg_frame_rate").splitlines() or ["30"])[0].strip() or "30"
-    if not w_s or not h_s:
-        log(f"  [遮盖失败] {clip.name}: probe 不到分辨率")
+    """FFmpeg 内完成全宽矩形马赛克，避免整帧往返 Python。"""
+    import os
+    import time
+    from .montage_clips import _probe_one
+
+    if STOP.flag:
         return False
-    W, H = int(w_s), int(h_s)
-    dec = subprocess.Popen(
-        [FFMPEG, "-loglevel", "error", "-i", str(clip),
-         "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
-        stdout=subprocess.PIPE, bufsize=10 ** 8)
+    info = _probe_one(clip)
+    if info is None:
+        log(f"  [遮盖失败] {clip.name}: 无法探测视频")
+        return False
+    _, y, _, height = region
+    top, bottom = max(0, y), min(info.height, y + height)
+    if bottom <= top:
+        log(f"  [遮盖失败] {clip.name}: 字幕区域高度无效")
+        return False
+    height = bottom - top
+    block = max(12, info.width // 30)
+    small_w, small_h = max(1, info.width // block), max(1, height // block)
+    filters = (f"[0:v:0]split[base][sub];"
+               f"[sub]crop={info.width}:{height}:0:{top}:exact=1,"
+               f"scale={small_w}:{small_h}:flags=area,"
+               f"scale={info.width}:{height}:flags=neighbor[mask];"
+               f"[base][mask]overlay=0:{top}:shortest=1[v]")
     tmp = clip.with_name(clip.stem + ".tmp_cover.mp4")
-    enc = subprocess.Popen(
-        [FFMPEG, "-y", "-loglevel", "error",
-         "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", fps_s,
-         "-i", "-",
-         # 视频来自修复后的 rawvideo，音轨必须重新从原视频读取。
-         # 旧代码仅有 stdin 这一路（无音轨），-c:a copy 并不能凭空保留声音。
-         "-i", str(clip),
-         "-map", "0:v:0", "-map", "1:a:0?",
-         "-c:v", config.SLICE_ENCODER, "-b:v", "8M", "-pix_fmt", "yuv420p",
-         "-c:a", "copy", "-movflags", "+faststart", str(tmp)],
-        stdin=subprocess.PIPE, bufsize=10 ** 8)
+    cmd = [FFMPEG, "-y", "-loglevel", "error", "-nostdin", "-i", str(clip),
+           "-filter_complex", filters, "-map", "[v]", "-map", "0:a:0?",
+           "-c:v", config.SLICE_ENCODER, "-b:v", "8M", "-pix_fmt", "yuv420p",
+           "-c:a", "copy", "-movflags", "+faststart", str(tmp)]
+    proc = None
     try:
-        frame_bytes = W * H * 3
-        written = 0
-        broken_pipe = False
-        while True:
-            if STOP.flag:
-                broken_pipe = True
-                break
-            raw = dec.stdout.read(frame_bytes)
-            if len(raw) < frame_bytes:
-                break
-            frame = np.frombuffer(raw, np.uint8).reshape(H, W, 3).copy()
-            mosaic_region(frame, Y, BH)
-            try:
-                enc.stdin.write(frame.tobytes())
-                written += 1
-            except BrokenPipeError:
-                broken_pipe = True
-                break
-        enc.stdin.close()
-        enc.wait(timeout=300)
-        dec.wait(timeout=60)
-        if (broken_pipe or written == 0 or dec.returncode != 0
-                or enc.returncode != 0 or not tmp.exists()
-                or tmp.stat().st_size < 1024):
-            log(f"  [遮盖失败] {clip.name}: dec rc={dec.returncode} / "
-                f"enc rc={enc.returncode} / 已编码帧 {written}")
+        with tempfile.TemporaryFile() as errors:
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=errors)
+            deadline = time.monotonic() + max(300, info.duration * 20)
+            while proc.poll() is None:
+                if STOP.flag or time.monotonic() >= deadline:
+                    proc.terminate()
+                    return False
+                try:
+                    proc.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    pass
+            if proc.returncode or not tmp.is_file() or tmp.stat().st_size < 1024:
+                errors.seek(0)
+                detail = errors.read().decode("utf-8", "replace").strip().splitlines()
+                log(f"  [遮盖失败] {clip.name}: FFmpeg rc={proc.returncode} "
+                    + (detail[-1] if detail else "无有效输出"))
+                return False
+        output = _probe_one(tmp)
+        if (STOP.flag or output is None or (output.width, output.height) != (info.width, info.height)
+                or abs(output.duration - info.duration) > 0.15
+                or output.has_audio != info.has_audio):
+            log(f"  [遮盖失败] {clip.name}: 成片尺寸、时长或音轨不一致")
             return False
-        import os  # noqa: PLC0415
-        os.replace(str(tmp), str(clip))
+        os.replace(tmp, clip)
         return True
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"  [遮盖失败] {clip.name}: {type(exc).__name__}")
+        return False
     finally:
-        for p in (dec, enc):
-            try:
-                if p.poll() is None:
-                    p.kill()
-            except Exception:
-                pass
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+        if proc is not None:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+        tmp.unlink(missing_ok=True)
 
 
 def _marker(clip: Path) -> Path:
