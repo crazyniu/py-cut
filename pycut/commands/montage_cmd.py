@@ -263,7 +263,9 @@ def run(args: argparse.Namespace) -> int:
     if STOP.flag:
         log("[中断] 已取消混剪，未启动处理（退出码 130）")
         return 130
-    progress("裂变生成", 0, args.fission, detail="每条成片独立选片与扰动")
+    progress_stage = "基准分析" if args.step == "a" else "裂变生成"
+    progress_total = 1 if args.step == "a" else args.fission
+    progress(progress_stage, 0, progress_total, detail="分析参考素材" if args.step == "a" else "每条成片独立选片与扰动")
     result = montage_pipeline.run_pipeline(opts)
     if STOP.flag:
         log("[中断] 混剪任务已取消，不执行后续裂变（退出码 130）")
@@ -272,10 +274,11 @@ def run(args: argparse.Namespace) -> int:
     # run_pipeline 负责实际产物完整性检查；这里防止异常结果字典漏报 error。
     if result.get("error") or (args.step != "a" and not result.get("final")):
         reason = result.get("error") or "处理结果缺少成片路径"
+        progress(progress_stage, 1, progress_total, failed=1, detail="当前任务失败，停止后续处理")
         log(f"[失败] 混剪未完成：{reason}")
         return 2
 
-    progress("裂变生成", 1, args.fission, success=1, detail="首条成片已生成", output=str(out_dir))
+    progress(progress_stage, 1, progress_total, success=1, detail="基准分析完成" if args.step == "a" else "首条成片已生成", output="" if args.step == "a" else str(out_dir))
 
     # ---------------- 批量裂变 ----------------
     # --fission N 表示「每支爆款视频出 N 支不同成片」。首支已由上面那次跑出
