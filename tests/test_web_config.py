@@ -48,6 +48,12 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as error:
                 urllib.request.urlopen(url + 'api/config')
             self.assertEqual(error.exception.code, 403)
+            with urllib.request.urlopen(url) as response:
+                page = response.read().decode('utf-8')
+            self.assertIn('data-panel="llm"', page)
+            self.assertNotIn('DIRECTORY_FIELDS', page)
+            for key in settings.FIELDS:
+                self.assertIn(f'id="{key}"', page)
             headers = {'X-Config-Token':web_config._TOKEN, 'Content-Type':'application/json'}
             req = urllib.request.Request(url+'api/config', headers=headers)
             with urllib.request.urlopen(req) as response:
@@ -58,6 +64,18 @@ class ConfigTests(unittest.TestCase):
             with urllib.request.urlopen(req) as response:
                 self.assertEqual(response.status, 200)
             self.assertEqual(settings.read_env()['PYCUT_MAIN_KEY'], 'test-secret')
+            before = Path(td, '.env').read_bytes()
+            invalid = {'PYCUT_CLIP_DIR':str(Path(td, 'missing'))}
+            req = urllib.request.Request(url+'api/config', json.dumps(invalid).encode(), headers, method='POST')
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(req)
+            feedback = json.loads(error.exception.read())
+            self.assertEqual(feedback['problems'], ['背景切片目录不存在或无法访问'])
+            self.assertEqual(before, Path(td, '.env').read_bytes())
+            req = urllib.request.Request(url+'api/config', b'{', headers, method='POST')
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(req)
+            self.assertEqual(error.exception.code, 400)
             headers['Origin'] = 'https://example.com'
             req = urllib.request.Request(url+'api/config', b'{}', headers, method='POST')
             with self.assertRaises(urllib.error.HTTPError) as error:
