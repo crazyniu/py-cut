@@ -769,7 +769,7 @@ def _wizard_slice(stdscr, w: int) -> list[list[str]] | None:
             from .core.output_paths import sibling
             output = str(sibling(Path(d), "切片"))
             argv.extend(["--out-dir", output])
-            argv_list.append(["dedup", "--src-dir", output, "--source-stems",
+            argv_list.append(["dedup", "--src-dir", output, "--force", "--source-stems",
                               *[p.stem for p in list_videos_recursive(d) if p.suffix.lower() == ".mp4"]])
         return argv_list
 
