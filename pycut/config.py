@@ -59,9 +59,9 @@ _load_dotenv()   # 在读取任何密钥前加载 .env（用户只需在 .env �
 
 SRC_DIR = PROJECT_ROOT / "materials" / "source"
 DESKTOP = Path.home() / "Desktop"
-OUT_FACE = DESKTOP / "切片_有人脸"
-OUT_NOFACE = DESKTOP / "切片_无人脸"
-OUT_MANIFEST = DESKTOP / "切片_清单"
+OUT_FACE = SRC_DIR.parent / "切片" / "有人脸"
+OUT_NOFACE = SRC_DIR.parent / "切片" / "无人脸"
+OUT_MANIFEST = SRC_DIR.parent / "切片" / "清单"
 
 # ---------------------------------------------------------------------------
 # 场景检测 / 分段
@@ -149,7 +149,7 @@ MIN_FREE_BYTES = 2 * 1024 ** 3   # 输出盘最小剩余空间
 #   平台是 5 层指纹比对（文件哈希/元数据/视觉 pHash+CNN+光流/音频/文本），
 #   本模块按「容器→几何→像素→时间→结构→音频」分层扰动，并用 pHash 距离 + PSNR 自检。
 # ---------------------------------------------------------------------------
-DEDUP_OUT = DESKTOP / "去重_输出"      # 默认输出（保留切片桶的子目录结构）
+DEDUP_OUT = SRC_DIR.parent / "去重"      # 默认输出（保留切片桶的子目录结构）
 DEDUP_REPORT = DESKTOP / "去重_报告"   # JSON 报告目录
 DEDUP_PRESETS = ("light", "standard", "aggressive")
 DEDUP_DEFAULT_PRESET = "standard"
@@ -228,8 +228,8 @@ DEDUP_AUDIO_RATE = 44100
 # ---------------------------------------------------------------------------
 MONTAGE_SRC = PROJECT_ROOT / "materials" / "reference" / "1.mp4"
 MONTAGE_CLIP_DIR = PROJECT_ROOT / "materials" / "background"
-MONTAGE_DEDUP_DIR = DESKTOP / "去重_输出"                                # 步骤C 画中画素材
-MONTAGE_OUT = DESKTOP / "混剪_输出"
+MONTAGE_DEDUP_DIR = DEDUP_OUT                                # 步骤C 画中画素材
+MONTAGE_OUT = SRC_DIR.parent / "混剪"
 MONTAGE_TMP = Path("/tmp/pycut_montage")   # 中间产物（步骤B 结果），不进桌面
 
 # 目标画布固定为 720P 竖屏；仅时长、字幕和音轨来自步骤A 基准视频

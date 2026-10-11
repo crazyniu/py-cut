@@ -20,7 +20,7 @@ class MontagePublicationTests(unittest.TestCase):
             src.write_bytes(b"source")
             out_dir = root / "output"
             out_dir.mkdir()
-            final = out_dir / "混剪_source.mp4"
+            final = out_dir / "source_1.mp4"
             old_bytes = b"previous good output" * 100
             final.write_bytes(old_bytes)
             srt = root / "source.srt"

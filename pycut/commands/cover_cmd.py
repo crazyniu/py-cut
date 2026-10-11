@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import argparse
-import sys
+import shutil
+import tempfile
 import time
 from concurrent import futures
 from pathlib import Path
@@ -23,9 +24,10 @@ def register(subparsers) -> None:
     p = subparsers.add_parser(
         "cover", help="字幕擦除：对切片单独检测并擦除字幕（流水线第三步）")
     p.add_argument("--file", nargs="+", help="要处理的切片 mp4 路径（可多个）")
-    p.add_argument("--all", action="store_true", help="处理桌面两个切片目录的全部切片")
+    p.add_argument("--all", action="store_true", help="处理默认有人脸／无人脸切片目录的全部切片")
     p.add_argument("--src-dir", default="",
                    help="要擦除字幕的视频目录（递归扫描所有 mp4；留空则用 --all/--file）")
+    p.add_argument("--out-dir", default="", help="输出目录（默认源目录同级的字幕查重）")
     p.add_argument("--gateway", default=config.DEFAULT_GATEWAY,
                    choices=list(config.GATEWAYS.keys()),
                    help="起始网关：main=主网关 / backup=备用网关")
@@ -82,6 +84,17 @@ def run(args: argparse.Namespace) -> int:
         log("[错误] 所选范围没有可处理的 MP4 视频")
         return 1
 
+    from ..core.output_paths import flat_output, sibling, source_root, validate_targets
+    def destination(c: Path) -> Path:
+        root = (Path(args.out_dir).expanduser() if args.out_dir else
+                sibling(Path(args.src_dir) if args.src_dir else source_root(c), "字幕查重"))
+        return flat_output(c, root)
+    try:
+        validate_targets([(c, destination(c)) for c in clips])
+    except ValueError as exc:
+        log(f"[错误] {exc}")
+        return 2
+
     install_signal_handlers()
     reset_stop()
     self_check(require_src=False)
@@ -96,8 +109,27 @@ def run(args: argparse.Namespace) -> int:
         if STOP.flag:
             return "skip"
         try:
-            return process_clip(llm, c, force=args.force,
-                                dry_run=args.dry_run, samples=args.samples)
+            if args.dry_run:
+                return process_clip(llm, c, force=args.force, dry_run=True, samples=args.samples)
+            dst = destination(c)
+            marker = dst.with_name(dst.name + ".covered.json")
+            if dst.is_file() and marker.is_file() and not args.force:
+                return "skip"
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix=".cover-", dir=dst.parent) as tmp:
+                staged = Path(tmp) / dst.name
+                shutil.copy2(c, staged)
+                original_marker = c.with_name(c.name + ".covered.json")
+                staged_marker = staged.with_name(staged.name + ".covered.json")
+                if original_marker.is_file() and not args.force:
+                    shutil.copy2(original_marker, staged_marker)
+                status = process_clip(llm, staged, force=args.force, samples=args.samples)
+                if status in ("covered", "nosub", "skip") and not STOP.flag:
+                    staged.replace(dst)
+                    if staged_marker.exists():
+                        staged_marker.replace(marker)
+                return status
+
         except Exception as e:  # noqa: BLE001 单片段失败不拖垮整批
             log(f"  [异常] {c.name}: {type(e).__name__} {e}")
             return "fail"

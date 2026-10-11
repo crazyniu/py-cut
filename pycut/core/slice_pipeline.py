@@ -14,6 +14,7 @@ import threading
 import time
 from concurrent import futures
 from dataclasses import dataclass
+import re
 from pathlib import Path
 from typing import Any
 
@@ -96,7 +97,7 @@ class VideoResult:
 
 
 def out_dirs_for(stem: str) -> tuple[Path, Path]:
-    return config.OUT_FACE / stem, config.OUT_NOFACE / stem
+    return config.OUT_FACE, config.OUT_NOFACE
 
 
 def video_done(stem: str, segments: int, *, require_sub: bool = False) -> bool:
@@ -111,8 +112,9 @@ def video_done(stem: str, segments: int, *, require_sub: bool = False) -> bool:
     clips = []
     for directory in out_dirs_for(stem):
         if directory.is_dir():
-            clips.extend(directory.glob("*.mp4"))
-    expected = {f"{idx:03d}.mp4" for idx in range(1, segments + 1)}
+            clips.extend(p for p in directory.glob("*.mp4")
+                         if re.fullmatch(re.escape(stem) + r"_[1-9][0-9]*\.mp4", p.name))
+    expected = {f"{stem}_{idx}.mp4" for idx in range(1, segments + 1)}
     if len(clips) != segments or {p.name for p in clips} != expected:
         return False
     for clip in clips:
@@ -317,7 +319,7 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
                               else "LLM 不可用/失败，按 loose 兜底")
 
         out_dir = face_dir if v == "face" else noface_dir
-        out_path = out_dir / f"{i + 1:03d}.mp4"
+        out_path = out_dir / f"{info.stem}_{i + 1}.mp4"
 
         row = {
             "video": info.stem,
@@ -361,6 +363,15 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
             else:
                 res.failed += 1
             manifest.add(row)
+
+    # Only remove stale segments of this source after the replacement set succeeds.
+    if not res.failed and not STOP.flag:
+        current = set(done_clips)
+        for directory in (face_dir, noface_dir):
+            for old in directory.glob("*.mp4"):
+                if re.fullmatch(re.escape(info.stem) + r"_[1-9][0-9]*\.mp4", old.name) and old not in current:
+                    old.unlink()
+                    old.with_name(old.name + ".covered.json").unlink(missing_ok=True)
 
     # --- 流水线第三步：字幕擦除（--no-sub 跳过）---
     if not opts.no_sub and llm.enabled and done_clips and not STOP.flag:

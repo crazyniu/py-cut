@@ -37,6 +37,7 @@ def register(subparsers) -> None:
     g = p.add_argument_group("范围")
     g.add_argument("--file", nargs="+", help="要处理的视频/切片路径（可多个）")
     g.add_argument("--all", action="store_true", help="处理切片桶（有人脸/无人脸）的全部切片")
+    g.add_argument("--source-stems", nargs="*", help="仅处理指定源视频的编号切片（切片后继任务）")
     g.add_argument("--src-dir", default="",
                    help="视频目录（递归扫描所有 mp4；优先于 --all）")
 
@@ -81,7 +82,7 @@ def register(subparsers) -> None:
                    help="整条混合音轨末尾淡出秒数 0～10")
 
     g = p.add_argument_group("输出与自检")
-    g.add_argument("--out-dir", default="", help="输出目录（默认 ~/Desktop/去重_输出）")
+    g.add_argument("--out-dir", default="", help="输出目录（默认源目录同级的去重）")
     g.add_argument("--in-place", action="store_true", help="原地覆盖源文件（危险）")
     g.add_argument("--check", action="store_true",
                    help="只自检：与已有去重产物比对 pHash/PSNR，不产出文件")
@@ -251,6 +252,22 @@ def run(args: argparse.Namespace) -> int:
             return 2
 
     srcs = _pick_srcs(args)
+    from ..core.output_paths import sibling, validate_targets
+    if args.src_dir and not args.out_dir:
+        args.out_dir = str(sibling(Path(args.src_dir), "去重"))
+    if args.source_stems is not None:
+        import re
+        srcs = [p for p in srcs if any(re.fullmatch(re.escape(stem) + r"_[1-9][0-9]*", p.stem)
+                                      for stem in args.source_stems)]
+    try:
+        if not args.in_place:
+            validate_targets([(p, resolve_output_path(p, DedupOptions(out_dir=args.out_dir))) for p in srcs])
+    except ValueError as exc:
+        log(f"[错误] {exc}")
+        return 2
+    if not srcs:
+        log("[错误] 所选范围没有可处理的视频")
+        return 1
     log(f"[范围] {len(srcs)} 个视频   档位 {args.preset}")
     if profile_snapshot is not None:
         log(f"[账号预设] {profile_snapshot['account']} · version={profile_snapshot['version']}")
@@ -320,7 +337,7 @@ def run(args: argparse.Namespace) -> int:
             item["account_profile"] = profile_snapshot
 
     if not args.no_report:
-        path = write_report(items)
+        path = write_report(items, report_dir=Path(args.out_dir) if args.out_dir else None)
         log(f"{'报告':<12}{path}")
     log("=" * 62)
     if STOP.flag:

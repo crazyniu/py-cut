@@ -138,13 +138,8 @@ def find_source_videos():
 
 
 def has_output(stem):
-    d1 = os.path.join(OUT_FACE, stem)
-    d2 = os.path.join(OUT_NOFACE, stem)
-    found = [d for d in (d1, d2) if os.path.isdir(d)]
-    if not found:
-        return None
-    newest = max(os.path.getmtime(d) for d in found)
-    return newest
+    clips = list_clips(stem)
+    return max((os.path.getmtime(path) for _, path, _ in clips), default=None)
 
 
 def detect_source_video():
@@ -310,14 +305,14 @@ def list_clips(stem):
     """返回 [(seg_index, abs_path, bucket)]。"""
     clips = []
     for bucket, base in (("有人脸", OUT_FACE), ("无人脸", OUT_NOFACE)):
-        d = os.path.join(base, stem)
+        d = base
         if not os.path.isdir(d):
             continue
         for name in os.listdir(d):
             full = os.path.join(d, name)
             if not os.path.isfile(full):
                 continue
-            m = re.match(r"^(\d+)\.mp4$", name, re.IGNORECASE)
+            m = re.match(r"^" + re.escape(stem) + r"_([1-9][0-9]*)\.mp4$", name, re.IGNORECASE)
             if m:
                 clips.append((int(m.group(1)), full, bucket))
     clips.sort(key=lambda x: x[0])
@@ -335,7 +330,7 @@ def index_clips(clips):
 # ---------------------------------------------------------------- 主检查
 
 def main():
-    global SRC_DIR, OUT_FACE, OUT_NOFACE
+    global SRC_DIR, OUT_FACE, OUT_NOFACE, MANIFEST_DIR
     ap = argparse.ArgumentParser(
         prog="verify.py",
         description="视频切片流水线独立质检（不信任 slicer 清单，全部从源视频重新推导）",
@@ -381,6 +376,15 @@ def main():
         checks.append(Check("源视频定位", False, f"未找到源视频: {args.video or '(自动检测)'}", fatal=True))
         report(checks, extra=["源目录不可达或无产出：请确认 slicer 已运行"])
         return 2
+    from pathlib import Path
+    from pycut.core.output_paths import sibling
+    output = sibling(Path(video).parent, "切片")
+    if args.out_dir:
+        output = Path(args.out_dir).expanduser().resolve()
+    elif args.manifest:
+        output = Path(args.manifest).expanduser().resolve().parent.parent
+    OUT_FACE, OUT_NOFACE = str(output / "有人脸"), str(output / "无人脸")
+    MANIFEST_DIR = str(output / "清单")
     stem = os.path.splitext(os.path.basename(video))[0]
     print(f"源视频 : {os.path.basename(video)}")
     print(f"视频基名: {stem}")
@@ -475,8 +479,8 @@ def main():
 
     by_seg = {x["seg"]: x for x in vrows}
 
-    dir_face = os.path.join(OUT_FACE, stem)
-    dir_noface = os.path.join(OUT_NOFACE, stem)
+    dir_face = OUT_FACE
+    dir_noface = OUT_NOFACE
     dirs_exist = [d for d in (dir_face, dir_noface) if os.path.isdir(d)]
     if not dirs_exist:
         checks.append(Check("输出目录", False,

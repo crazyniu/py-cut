@@ -353,6 +353,7 @@ def collect_clips(paths: list[Path] | None = None) -> list[Path]:
     for bucket in (config.OUT_FACE, config.OUT_NOFACE):
         if not bucket.is_dir():
             continue
+        out += sorted(bucket.glob("*.mp4"))
         for vd in sorted(bucket.iterdir()):
             if vd.is_dir():
                 out += sorted(vd.glob("*.mp4"))

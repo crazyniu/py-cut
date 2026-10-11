@@ -119,39 +119,16 @@ class _Report:
 # 输出路径
 # ---------------------------------------------------------------------------
 def default_output_path(src: Path) -> Path:
-    """默认输出路径。
-
-    src 位于桌面切片桶（切片_有人脸 / 切片_无人脸）里时，
-    输出到 `config.DEDUP_OUT/<视频名>/<桶内子目录>/xxx.mp4`（保留桶内的层级结构）；
-    其它情况输出到 `config.DEDUP_OUT/<src 父目录名>/<stem>_去重.mp4`。
-    """
-    src = Path(src)
-    out_root = Path(opts_out_root())
-
-    for bucket in (config.OUT_FACE, config.OUT_NOFACE):
-        try:
-            rel = src.resolve().relative_to(Path(bucket).resolve())
-        except (ValueError, OSError):
-            continue
-        # rel = <视频名>[/<子目录>...]/<文件名>；整体搬到 DEDUP_OUT 下
-        return out_root / rel
-
-    return out_root / src.parent.name / f"{src.stem}_去重{src.suffix}"
-
-
-def opts_out_root() -> Path:
-    """默认输出根目录（未显式指定 out_dir 时）。"""
-    return Path(config.DEDUP_OUT)
+    from .output_paths import flat_output, sibling, source_root
+    return flat_output(src, sibling(source_root(src), "去重"))
 
 
 def resolve_output_path(src: Path, opts: DedupOptions) -> Path:
-    """按opts 算出最终输出路径：in_place 覆盖源文件，out_dir 只换根目录。"""
-    src = Path(src)
+    from .output_paths import flat_output
     if opts.in_place:
         return src
     if opts.out_dir:
-        rel = default_output_path(src).relative_to(Path(opts_out_root()))
-        return Path(opts.out_dir).expanduser() / rel
+        return flat_output(src, Path(opts.out_dir).expanduser())
     return default_output_path(src)
 
 

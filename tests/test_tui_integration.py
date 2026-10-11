@@ -122,7 +122,7 @@ class TUIIntegrationTests(unittest.TestCase):
         second = Path("/tmp/video/second.mp4")
         selection = ([first, second], {str(first): 12, str(second): 2})
         with mock.patch.object(tui, "_pick_dir",
-                               side_effect=["/tmp/clips", "/tmp/pip", "/tmp/video"]), \
+                               side_effect=["/tmp/video", "/tmp/clips", "/tmp/pip"]), \
              mock.patch.object(tui, "count_videos_recursive", side_effect=[4, 3]), \
              mock.patch.object(tui, "_count_sticker_images", return_value=1), \
              mock.patch.object(tui, "list_videos_flat", return_value=[first, second]), \
@@ -146,7 +146,7 @@ class TUIIntegrationTests(unittest.TestCase):
             video = Path("/tmp/video/one.mp4")
             selection = ([video], {str(video): 1})
             with mock.patch.object(tui, "_pick_dir", side_effect=[
-                     "/tmp/clips", "/tmp/pip", "/tmp/video"]) as picker, \
+                     "/tmp/video", "/tmp/clips", "/tmp/pip"]) as picker, \
                  mock.patch.object(tui, "count_videos_recursive", return_value=2), \
                  mock.patch.object(tui, "_count_sticker_images",
                                    side_effect=[0, 1]), \
