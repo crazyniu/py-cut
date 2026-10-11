@@ -22,6 +22,7 @@ Markdown 只保留长期需求、架构、技术约定与可复现限制，不�
 - **统一入口 `./run.sh`**：自动选解释器 → 按 `requirements.txt` 装依赖（已装则跳过）
   → 校验 cv2 → 打印生效网关 → 运行。日常跑任务一律用 `./run.sh <command> ...`，
   不要绕过它直接 `python3 pycut.py`（会踩解释器/依赖坑）。
+  Windows 的对应入口为 `run.cmd`，使用 winget 安装缺失的 Python/FFmpeg，安装后重新检测；仅检查通过才启动 CLI/TUI。
 - **解释器**：macOS 优先使用自带 cv2/numpy 的托管解释器
   `/Users/apple/.workbuddy/binaries/python/versions/3.13.12/bin/python3`（存在时）。
   其他环境由 `./run.sh` 选择当前解释器并校验 OpenCV 4.x 的 Haar 支持，不要求 macOS 路径存在；禁止绕过启动器运行处理任务。
