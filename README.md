@@ -17,7 +17,7 @@
 pycut/
 ├── pycut.py                # 统一入口（命令行 + TUI）
 ├── run.sh                  # 一键脚本：选解释器 → 装依赖 → 读 .env → 运行
-├── requirements.txt        # 依赖（仅 numpy + opencv-python）
+├── requirements.txt        # 依赖（numpy/OpenCV、Textual 目录组件、Windows curses）
 ├── pyproject.toml          # 包元数据
 ├── .env / .env.example     # 密钥与网关配置（.env 已 gitignore）
 ├── .gitignore
@@ -25,9 +25,9 @@ pycut/
 ├── README.md               # 本文件
 ├── docs/
 │   ├── ROADMAP.md          # 产品能力与演进设计（不跟踪开发状态）
-│   ├── MONTAGE.md          # 混剪需求 + 素材实测 + 方案
+│   ├── MONTAGE.md          # 混剪需求 + 处理契约 + 方案
 │   ├── DEDUP.md            # 去重需求 + 8 大模块 + 实测标定
-│   └── ISSUES.md           # 工程限制与验证记录（不管理 Bug/Todo）
+│   └── ENGINEERING.md      # 工程限制与验证记录（不管理 Bug/Todo）
 ├── pycut/                  # 主包
 │   ├── cli.py              # 命令注册表 + 路由
 │   ├── tui.py              # 终端 TUI（导航 / 引导式向导 / 目录选择器）
@@ -77,7 +77,7 @@ pycut/
 
 Windows 在 CMD 中使用 `run.cmd`（无参数进入 TUI），例如 `run.cmd slice --file example.mp4`。脚本检查 Python、OpenCV、终端组件及 ffmpeg/ffprobe；缺少 Python 或 FFmpeg 时通过 winget 安装，Python 依赖按 `requirements.txt` 安装，包含 `windows-curses`。安装后刷新 PATH 并复检，失败停止启动；缺少 winget 时需先安装 Microsoft App Installer。脚本不会显示密钥，CLI 退出码原样返回。Windows 脚本需在真实 Windows 环境验收，Linux 上的静态检查不能替代运行验证。
 
-启动安装脚本目前仅支持 Linux 和 macOS，Windows 暂不处理。启动时检查 ffmpeg/ffprobe 能否运行，缺少时自动用系统包管理器安装 FFmpeg，并在安装后重新检查。macOS 使用 Homebrew；Linux 支持 apt、dnf、yum、pacman、zypper 和 apk，普通用户安装系统包时会使用 sudo。Python 缺失时也尝试安装。系统 Python 限制全局 pip 安装时，自动使用项目 `.venv`；依赖齐全时直接启动。安装失败或无可用安装器会明确报错并停止。`PYCUT_FFMPEG` / `PYCUT_FFPROBE` 自定义路径必须有效。
+`run.sh` 负责 Linux 和 macOS，Windows 使用上述 `run.cmd`。启动时检查 ffmpeg/ffprobe 能否运行，缺少时自动用系统包管理器安装 FFmpeg，并在安装后重新检查。macOS 使用 Homebrew；Linux 支持 apt、dnf、yum、pacman、zypper 和 apk，普通用户安装系统包时会使用 sudo。Python 缺失时也尝试安装。系统 Python 限制全局 pip 安装时，自动使用项目 `.venv`；依赖齐全时直接启动。安装失败或无可用安装器会明确报错并停止。`PYCUT_FFMPEG` / `PYCUT_FFPROBE` 自定义路径必须有效。
 
 ### 各功能常用命令
 
@@ -167,7 +167,7 @@ cp .env.example .env
 - **粘贴完整路径**：在 Textual 目录选择页按 `P` 或 `Tab` 将焦点移至路径输入框，直接粘贴绝对路径、`~/...`、相对目录或中文空格路径后按 `Enter`，只有真实存在的目录可跳转。使用 `↑↓` 浏览、`Enter` 进入子目录、`Backspace`/`←` 返回上级，在选择按钮上确认当前目录，`Esc` 取消并返回此前的向导步骤。目录选择界面由开源组件维护，不再有之前 `/Users/apple/Users/apple` 的自造路径拼接。
 - **跨平台启动**：安装依赖 `python -m pip install -r requirements.txt` 后，在 macOS/Linux 用 `./run.sh`，在 Windows PowerShell 用 `python -m pycut` 或 `py -3 -m pycut`。Windows 通过 `windows-curses` 兼容现有主界面，文件夹选择由 Textual 负责。使用 Python 3.13 或项目所支持的版本。
 - **内部素材统计**：各处理向导最多下探 3 层；切片仅统计可处理的 MP4，执行端显式传 `--max-depth 3`，确保确认数量与处理集合一致。CLI 默认仍保持原有无限递归，也可指定 `--max-depth N`
-- **混剪多选**：空格勾选，`E` 编辑每支裂变数（1～99），数字 1～9 可快捷设置，`A` 全选/取消；确认页展示总产出数量，输出到桌面 `out` 目录
+- **混剪多选**：空格勾选，`E` 编辑每支裂变数（1～99），数字 1～9 可快捷设置，`A` 全选/取消；确认页展示总产出数量，输出到爆款目录同级的 `混剪/MMDD`
 - **统一快捷键**：终端 TUI 的主菜单和混剪多选页继续使用 `↑/↓` 上下移动、`←` 返回、`→` 进入；`Space` 在混剪视频列表勾选/取消**多个视频**。系统文件夹对话框使用操作系统原生按键；`→` 在最终确认页只聚焦操作按钮，必须显式 `Enter` 才会开始处理。
 - **视觉与响应**：焦点采用边栏和文字高亮，不再整行反色；页脚按实际终端列宽选择短提示。`Esc` 默认设置为 75ms 识别等待，避免传统 curses 的较长按键延迟；用户自定义 `ESCDELAY` 时不覆盖。
 - **返回逻辑**：`Esc` 从确认页返回上一目录步骤；混剪按「确认 → 多选 → 爆款目录 → 画中画目录 → 片段目录 → 主菜单」逐步返回，重新进入多选时保留已选视频和裂变数量。在主菜单按 `Esc`/`←`/Backspace 不会关闭程序，**只允许在主菜单按 `Q` 主动退出**。
@@ -196,24 +196,30 @@ cp .env.example .env
 
 ## 当前功能：slice
 
-流水线三步，产出落到桌面：
+流水线三步，默认产出到源目录同级的 `切片/`：
 
 1. **场景分段**：ffmpeg `scene` 分数检测切点，过短段合并（≥2s），超长段切分。
 2. **人脸分流**：Haar 快速分筛，仅 ambiguous 段送 LLM 兜底；按「有人脸 / 无人脸」
    分目录落盘（`切片/有人脸`、`切片/无人脸`）。
 3. **字幕擦除**：LLM 定位叠加文字 → 逐帧文字掩膜 + TELEA 修复（真实擦除，非毛玻璃）
-   → 按周边纹理补偿颗粒。幂等，标记 `<切片>.covered.json`。
+   → 按周边纹理补偿颗粒。修复后抽帧复检；残留或网关失败不能写成功标记。仅认可 version=2 的 `<切片>.covered.json`，旧标记须重做。
+
+续跑按源视频判断：对应编号和数量齐全、文件大小合格且必要字幕标记有效时跳过；不完整则重切整个源并覆盖原编号，不从最后一个切片继续。当前检查不包含源文件内容指纹，源内容替换后应显式 `--force`，不能把同名旧产物当作新内容验证。切片向导衔接去重会强制刷新当前源对应的派生成品。
 
 清单：`切片/清单/切片清单_<时间戳>.csv`（utf-8-sig）+ `.json`。
 
 ## 扩展能力与需求文档
 
-长期产品需求见 [docs/ROADMAP.md](docs/ROADMAP.md)：段间转场、去重增强、AI 级字幕修复及 ASR 语义选片；具体任务统一引用 [GitHub Issues #19](https://github.com/natefox2017/py-cut/issues/19)，不在 Markdown 跟踪 Todo、负责人或进度。工程技术限制与复现记录见 [docs/ISSUES.md](docs/ISSUES.md)。
+长期产品需求见 [docs/ROADMAP.md](docs/ROADMAP.md)：段间转场、去重增强、AI 级字幕修复及 ASR 语义选片；任务、Bug、测试、负责人和验收统一使用 [Linear 项目](https://linear.app/gengyun/project/py-cut-development-963524cf0d78)，不在 Markdown 跟踪 Todo、负责人或进度。工程技术限制与复现记录见 [docs/ENGINEERING.md](docs/ENGINEERING.md)。
 已实现的三大功能（切片 / 去重 / 混剪）详见各文档：
 去重需求与实测标定见 [docs/DEDUP.md](docs/DEDUP.md)，
 混剪五步流程见 [docs/MONTAGE.md](docs/MONTAGE.md)。
 
 ## 给协作者
+
+任务从 [Linear 项目](https://linear.app/gengyun/project/py-cut-development-963524cf0d78) 查找和领取，先读 [AGENTS.md](AGENTS.md)。GitHub 只管理代码、PR、Review、CI 和合并；历史 Issues 不再用于领取，不启用 Issues Sync。Markdown 仅记录长期知识。
+
+普通 PR 使用必要轻量 CI；完整合成媒体回归手动运行 Actions 的 `TUI regression`（`workflow_dispatch` 即完整合成媒体模式）。发布、重要接口/架构或安全变更，以及明确要求全量测试时，执行对应完整验证；不得绕过必需检查。
 
 使用启动器输出的 Python 解释器运行 `-m pytest tests/ -q`。普通回归不访问真实 LLM；`tests/test_llm_safety.py` 使用模拟响应检查解析、重试和主网关模式。真实媒体检查需设置 `PYCUT_TEST_MEDIA=1`，并在 `materials/source` 放置测试 MP4；模拟通过不能代替真实模型识别准确率验证。
 

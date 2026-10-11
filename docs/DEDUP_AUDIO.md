@@ -45,4 +45,4 @@
 
 ## 模块边界
 
-`pycut/commands/dedup_cmd.py` 负责 argparse 与输入合法性检查；`pycut/core/dedup_audio.py` 负责音轨探测、滤镜图生成与暂存文件验证；`pycut/core/dedup.py` 在原编码成功后按需调用音频混合，不更改 `dedup_presets.py` 或视频滤镜标定参数。所有外部进程都通过标准库 `subprocess` 列表参数、项目现有 `core.utils.run_cmd` 与已配置的 FFmpeg/FFprobe 绝对路径调用。目标环境为项目已有的 macOS FFmpeg full；Ubuntu CI 只验证纯逻辑，实际音质和音画同步仍以授权素材实机验收为准。
+`pycut/commands/dedup_cmd.py` 负责 argparse 与输入合法性检查；`pycut/core/dedup_audio.py` 负责音轨探测、滤镜图生成与暂存文件验证；`pycut/core/dedup.py` 在原编码成功后按需调用音频混合，不更改 `dedup_presets.py` 或视频滤镜标定参数。所有外部进程都通过标准库 `subprocess` 列表参数、项目现有 `core.utils.run_cmd` 与已配置的 FFmpeg/FFprobe 绝对路径调用。使用当前平台可用的 FFmpeg；合成媒体测试可以验证流映射与时长，实际音质和音画同步仍需授权素材审听验收，不能只针对 macOS。
