@@ -113,6 +113,20 @@ class MontageSyntheticMediaTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(mod, "FFPROBE", ffprobe))
         stack.enter_context(mock.patch.dict(os.environ, {"PYCUT_FFMPEG": ffmpeg}))
 
+    def test_reference_uses_video_duration_when_audio_is_longer(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "longer-audio.mp4"
+            self._run("-f", "lavfi", "-i",
+                      "color=c=gray:size=160x284:rate=30:duration=2",
+                      "-f", "lavfi", "-i", "sine=duration=2.4",
+                      "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                      "-c:a", "aac", source)
+            self.assertGreater(self._duration(source), 2.3)
+            profile = montage_source.probe_source(source)
+            self.assertIsNotNone(profile)
+            self.assertAlmostEqual(profile.duration, 2.0, places=3)
+            self.assertTrue(all(s.end <= profile.duration for s in profile.segments))
+
     def test_rendered_video_has_both_overlays_and_reference_duration(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -123,7 +137,7 @@ class MontageSyntheticMediaTests(unittest.TestCase):
             self._video(source, "gray", 2.333333)
             self._video(root / "clips" / "main.mp4", "gray", 5.0)
             for i in range(3):
-                self._video(root / "pips" / f"pip{i}.mp4", "red", 2.0)
+                self._video(root / "pips" / f"pip{i}.mp4", f"0x{220 + i * 10:02x}0000", 2.0)
             self._run("-f", "lavfi", "-i",
                       "color=c=green:size=64x64", "-frames:v", "1",
                       root / "stickers" / "logo.png")
@@ -155,11 +169,11 @@ class MontageSyntheticMediaTests(unittest.TestCase):
             frame = self._run("-ss", "0.5", "-i", final,
                               "-frames:v", "1", "-f", "rawvideo",
                               "-pix_fmt", "rgb24", "pipe:1")
-            self.assertEqual(len(frame), 160 * 284 * 3)
+            self.assertEqual(len(frame), 720 * 1280 * 3)
             def rgb(x, y):
-                pos = (y * 160 + x) * 3
+                pos = (y * 720 + x) * 3
                 return frame[pos], frame[pos + 1], frame[pos + 2]
-            red, green, blue = rgb(135, 43)
+            red, green, blue = rgb(540, 230)
             self.assertGreater(red, green + 35, "upper-right PiP must be visible")
             self.assertGreater(red, blue + 35)
             green_pixels = sum(

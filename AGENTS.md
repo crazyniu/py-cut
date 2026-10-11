@@ -22,12 +22,12 @@ Markdown 只保留长期需求、架构、技术约定与可复现限制，不�
 - **统一入口 `./run.sh`**：自动选解释器 → 按 `requirements.txt` 装依赖（已装则跳过）
   → 校验 cv2 → 打印生效网关 → 运行。日常跑任务一律用 `./run.sh <command> ...`，
   不要绕过它直接 `python3 pycut.py`（会踩解释器/依赖坑）。
-- **解释器**：必须用自带 `cv2 4.13.0` / `numpy` 的托管解释器：
-  `/Users/apple/.workbuddy/binaries/python/versions/3.13.12/bin/python3`
-  **禁止 `python3` 裸命令（可能指向系统 3.9）、禁止进 venv（丢 cv2）。**
+- **解释器**：macOS 优先使用自带 cv2/numpy 的托管解释器
+  `/Users/apple/.workbuddy/binaries/python/versions/3.13.12/bin/python3`（存在时）。
+  其他环境由 `./run.sh` 选择当前解释器并校验 OpenCV 4.x 的 Haar 支持，不要求 macOS 路径存在；禁止绕过启动器运行处理任务。
 - **依赖**：视频核心仅 `numpy` + `opencv-python`，目录选择明确复用 MIT 开源的 `textual-fspicker==1.0.1`（传递依赖 `textual`），Windows 使用 `windows-curses`。其余 LLM、.env 和 CLI 仍优先标准库，除目录选择所需依赖外不得随意扩展。
-- **ffmpeg**：homebrew `ffmpeg-full`（含 `h264_videotoolbox` 硬件编码），路径在
-  `pycut/config.py` 的 `FFMPEG` / `FFPROBE`。**不要假设系统 `ffmpeg`。**
+- **ffmpeg**：macOS 优先 Homebrew `ffmpeg-full` 与 VideoToolbox，其他环境使用 PATH 的 ffmpeg/ffprobe 与 libx264。
+  `PYCUT_FFMPEG` / `PYCUT_FFPROBE` 环境变量可覆盖路径，集中定义在 `pycut/config.py`。
 - **ffmpeg 9.0 差异**：`-vsync` 已移除，用 `-fps_mode cfr`；`-threads N` 在 scene 检测下反而更慢，**不要加**。
 
 ## 2. 目录约定（已在 README 画树）
@@ -91,7 +91,7 @@ Markdown 只保留长期需求、架构、技术约定与可复现限制，不�
 ## 4. 切片流水线
 
 三步，顺序不可乱：
-1. **场景分段** → `core/scene.py`：`detect_scenes`（ffmpeg `select='gt(scene,TH)'`）+ `build_segments`（去重/合并过短/切分超长）。
+1. **场景分段**（默认 2–15 秒，不识别语义，合并短尾段后仍检查上限）→ `core/scene.py`：`detect_scenes`（ffmpeg `select='gt(scene,TH)'`）+ `build_segments`（去重/合并过短/切分超长）。
 2. **人脸分流** → `core/faces.py`：Haar 严格/宽松两档 → 三态 `face/noface/ambiguous`；仅 ambiguous 送 LLM 兜底。产出按「有人脸/无人脸」分目录。
 3. **字幕擦除** → `core/subtitle.py`：`detect_region`（LLM 并集框 + 中位数聚合，高度跟随真实字幕）+ `cover_clip`（逐帧文字掩膜 + TELEA 修复 + 颗粒补偿）。
 

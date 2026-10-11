@@ -54,7 +54,7 @@ def list_dirs(root: Path, *, raise_on_error: bool = False) -> list[Path]:
     """列出 root 下名称不以 `.` 开头的一级子目录。
 
     兼容旧目录列举调用，包括 Library/System 等系统目录和目录链接。
-    此接口不再供 TUI 选文件夹使用；真正的目录选择委托系统图形对话框。
+    此接口不再供 TUI 选文件夹使用；真正的目录选择委托 Textual 终端组件。
     默认遇到不可读目录返回空列表，raise_on_error=True 可转交错误。
     """
     root = Path(root).expanduser()

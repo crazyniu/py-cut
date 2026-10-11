@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import sys
 import time
 from pathlib import Path
@@ -65,7 +66,7 @@ def register(subparsers) -> None:
     g.add_argument("--sticker-chance", type=float, default=config.MONTAGE_STICKER_CHANCE,
                    help="每个片段叠贴纸的概率")
     g.add_argument("--no-sticker", action="store_true", help="不叠贴纸")
-    g.add_argument("--seam-fade", type=float, default=0.0,
+    g.add_argument("--seam-fade", type=float, default=0.2,
                    help="可选段间黑场淡化秒数（0=关闭；不会缩短成片时长）")
     g.add_argument("--pip-gap", action="store_true",
                    help="画中画段间留空档（默认首尾相接、连续显示）")
@@ -243,6 +244,7 @@ def run(args: argparse.Namespace) -> int:
         mirror_chance=max(0.0, min(1.0, args.mirror_chance)),
         speed_range=(1.0, max(1.0, args.speed_max)),
         sticker_dir=args.sticker_dir,
+        online_stickers=not args.sticker_dir and not args.no_sticker,
         seam_fade=args.seam_fade,
         sticker_chance=0.0 if args.no_sticker else max(0.0, min(1.0, args.sticker_chance)),
         srt=srt,
@@ -284,24 +286,8 @@ def run(args: argparse.Namespace) -> int:
                 return 130
             log("")
             log(f"--- 裂变 {i}/{fission}（同一爆款视频，换 seed 重混）---")
-            vopts = montage_pipeline.MontageOptions(
-                step=args.step, source=source, clip_dir=clip_dir,
-                dedup_dir=dedup_dir, out_dir=out_dir,
-                seed=base_seed + i * 10007,   # 派生新 seed，保证与首支不同
-                allow_landscape=args.allow_landscape,
-                pip_slot=args.pip_slot, use_pip=not args.no_pip,
-                pip_continuous=not args.pip_gap, keep_audio=not args.no_audio,
-                mirror_chance=max(0.0, min(1.0, args.mirror_chance)),
-                speed_range=(1.0, max(1.0, args.speed_max)),
-                sticker_dir=args.sticker_dir,
-                seam_fade=args.seam_fade,
-                sticker_chance=0.0 if args.no_sticker else max(0.0, min(1.0, args.sticker_chance)),
-                srt=srt, crf=args.crf, fill_ratio=args.fill_ratio,
-                noise_db=args.noise_db, min_silence=args.min_silence,
-                min_clip=args.min_clip, max_clip=args.max_clip,
-                pip_scale=args.pip_scale, workers=args.workers,
-                out_name=f"混剪_{source.stem}_{i}.mp4",
-            )
+            vopts = replace(opts, seed=base_seed + i * 10007,
+                            out_name=f"混剪_{source.stem}_{i}.mp4")
             r = montage_pipeline.run_pipeline(vopts)
             if STOP.flag:
                 log(f"[中断] 裂变 {i}/{fission} 未完整完成，不再继续（退出码 130）")
@@ -327,7 +313,7 @@ def run(args: argparse.Namespace) -> int:
     log(f"{'语音段数':<12}{result['segments']:>10}")
     log(f"{'步骤B 用片段':<12}{result['clips_used']:>10}")
     if result.get("clips_reused"):
-        log(f"{'其中复用':<12}{result['clips_reused']:>10}  （素材不足以填满，已截短）")
+        log(f"{'其中复用':<12}{result['clips_reused']:>10}")
     if result.get("pip_count"):
         log(f"{'步骤C 画中画':<12}{result['pip_count']:>10}  个")
     log(f"{'成片时长':<12}{fmt_dur(result['final_duration'])}")

@@ -119,6 +119,10 @@ class FissionTests(unittest.TestCase):
             8, 2, 100, "裂变", 1, 1, 99,
         ))
 
+    def test_integer_editor_q_cancels_at_normal_size(self):
+        self.assertIsNone(tui._prompt_int(Screen([ord("q")]),
+                                         8, 2, 100, "裂变", 1, 1, 99))
+
     def test_empty_file_list_skips_indexing(self):
         self.assertIsNone(tui._multi_select(Screen([]), "混剪", []))
 

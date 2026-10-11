@@ -8,7 +8,7 @@
 |---|---|---|
 `slice` | 把长视频切成多段，分流有人脸/无人脸，擦除字幕 | `~/Desktop/切片_有人脸`、`切片_无人脸` |
 `cover` | 只重跑字幕擦除 | 同上（幂等，靠 `.covered.json` 标记） |
-`dedup` | 去除重复、相似的视频（过平台查重） | `~/Desktop/去重_输出` |
+`dedup` | 调整视频画面，降低相似度 | `~/Desktop/去重_输出` |
 `montage` | 组合片段生成新视频，可批量裂变 | `~/Desktop/混剪_输出` |
 
 ## 目录结构
@@ -60,10 +60,9 @@ pycut/
 
 ## 运行环境
 
-- **解释器**：必须用自带 `cv2 4.13.0` 的托管解释器
-  `/Users/apple/.workbuddy/binaries/python/versions/3.13.12/bin/python3`。
-  **不要进 venv**（会丢失 cv2）。
-- **ffmpeg**：homebrew 安装的 `ffmpeg-full`（含 videotoolbox 硬件编码），路径见 `config.py`。
+- **解释器**：通过 `./run.sh` 自动选择 Python 3，安装并校验 OpenCV 4.x；当前环境支持 Linux、macOS 和 Windows 的终端入口。
+- **ffmpeg**：使用 PATH 中的 ffmpeg/ffprobe；macOS 可优先使用 Homebrew 版本。可通过 `PYCUT_FFMPEG` / `PYCUT_FFPROBE` 覆盖工具路径；Linux/Windows 使用 libx264，macOS 使用 VideoToolbox。
+- **素材目录**：默认使用项目下 `materials/source`（切片源）、`materials/reference/1.mp4`（爆款视频及同名字幕）和 `materials/background`（背景片段），不依赖个人 Mac 挂载盘。CLI 参数及 TUI 可选择实际素材位置。
 
 ## 快速开始
 
@@ -100,6 +99,16 @@ pycut/
 ```
 
 > 每个命令的完整参数见 `./run.sh <命令> --help`。
+
+## 固定生成规则
+
+切片按镜头检测，默认 2–15 秒，不做语义识别。混剪固定 720×1280（9:16）、30fps，右上角默认 216×384 画中画。背景与画中画独立随机选择、标准档扰动并静音；最后贴回爆款原声，字幕使用同名 SRT 原时间轴。
+
+默认在线下载 Twemoji PNG 贴纸（Twitter 及贡献者，CC BY 4.0），并加入 0.2 秒段间淡化；`--sticker-dir` 可使用本地图片，`--no-sticker` 和 `--seam-fade 0` 可关闭。下载失败、素材重复或不足会拒绝发布。`--fission N` 指定每支爆款的生成数量，默认 1；成片旁 JSON 保存实际参数，暗水印提取结果仍需独立验证。
+
+默认保留基准原声；基准没有音轨时明确报错，不发布静音成片。只有显式指定 `--no-audio` 才允许静音输出。处理中断或字幕、音轨处理失败时，不覆盖已有成片。
+
+macOS 优先使用 Homebrew ffmpeg-full 与 VideoToolbox；其他环境使用 PATH 中的 ffmpeg/ffprobe 与 libx264。可用环境变量 `PYCUT_FFMPEG` / `PYCUT_FFPROBE` 指定工具路径。OpenCV 限定 4.x，以保留 Haar 级联支持。
 
 ## 配置（只需配密钥）
 
@@ -201,6 +210,17 @@ cp .env.example .env
 混剪五步流程见 [docs/MONTAGE.md](docs/MONTAGE.md)。
 
 ## 给协作者
+
+使用启动器输出的 Python 解释器运行 `-m pytest tests/ -q`。普通回归不访问真实 LLM；`tests/test_llm_safety.py` 使用模拟响应检查解析、重试和主网关模式。真实媒体检查需设置 `PYCUT_TEST_MEDIA=1`，并在 `materials/source` 放置测试 MP4；模拟通过不能代替真实模型识别准确率验证。
+
+切片后可独立验证自定义目录：
+
+```bash
+python3 tools/verify.py --video example.mp4 --source-dir materials/source \
+  --out-dir work/slices --manifest "work/slices/清单/切片清单_<时间戳>.csv"
+```
+
+`work/`、`materials/` 和 `.env` 均不提交；测试素材、成片和密钥留在本地。
 
 改代码前先读 **AGENTS.md**。新增功能 = 在 `pycut/commands/` 加一个命令模块并在
 `cli.py` 的 `COMMANDS` 注册表登记；复用 `pycut/core/` 的成熟能力，不要在命令层重复造轮子。

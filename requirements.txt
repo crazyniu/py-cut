@@ -1,6 +1,6 @@
 # pycut runtime dependencies
 numpy>=1.26
-opencv-python>=4.8
+opencv-python>=4.8,<5
 # Pure terminal folder dialog (Textual, MIT); no GUI/Tk dependencies
 textual-fspicker==1.0.1
 # Python on Windows has no built-in curses module

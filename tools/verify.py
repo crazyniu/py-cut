@@ -41,6 +41,7 @@ MIN_CLIP_BYTES = 1024    # 小于 1KB 视为坏文件
 COARSE_SEEK_BACK = 2.0   # 输入侧粗 seek 回退秒数（双 seek）
 COMPARE_WIDTH = 320      # MAE 比对时的统一宽度
 MIN_CLIP_DUR = 2.0       # 切片最短时长(秒)，低于此值视为不合格（满足"大于两秒"）
+MAX_CLIP_DUR = 15.0      # 用户确认的镜头切片上限
 
 # 清单列名候选（不同版本 slicer 可能有细微差异）
 COL_VIDEO = ["video", "video_name", "source", "source_video", "src", "文件名", "视频"]
@@ -296,18 +297,13 @@ def frame_mae(a_path, b_path, mask_rows=None):
 def spread_sample(items, n):
     """在列表上做跨越全程的均匀抽样（含首尾），非只取前 n 个。"""
     m = len(items)
+    if not items or n <= 0:
+        return []
     if m <= n:
-        return list(range(m))
-    if n <= 1:
-        return [random.randrange(m)]
-    step = m / float(n)
-    idxs = sorted({min(m - 1, int(i * step + step / 2)) for i in range(n)})
-    i = 0
-    while len(idxs) < n and i < m:
-        if i not in idxs:
-            idxs.append(i)
-        i += 1
-    return sorted(idxs[:n])
+        return list(items)
+    if n == 1:
+        return [random.choice(items)]
+    return [items[round(i * (m - 1) / (n - 1))] for i in range(n)]
 
 
 def list_clips(stem):
@@ -339,7 +335,7 @@ def index_clips(clips):
 # ---------------------------------------------------------------- 主检查
 
 def main():
-    global SRC_DIR
+    global SRC_DIR, OUT_FACE, OUT_NOFACE
     ap = argparse.ArgumentParser(
         prog="verify.py",
         description="视频切片流水线独立质检（不信任 slicer 清单，全部从源视频重新推导）",
@@ -358,10 +354,14 @@ def main():
     ap.add_argument("--samples", "-n", type=int, default=3,
                     help="抽验切片数量（默认 3，会跨越全片均匀取样）")
     ap.add_argument("--source-dir", default=SRC_DIR, help="源视频根目录")
+    ap.add_argument("--out-dir", default=None, help="切片输出根目录（与 slice --out-dir 一致）")
     ap.add_argument("--seed", type=int, default=None, help="随机种子（便于复现）")
     args = ap.parse_args()
 
     SRC_DIR = args.source_dir
+    if args.out_dir:
+        OUT_FACE = os.path.join(args.out_dir, "有人脸")
+        OUT_NOFACE = os.path.join(args.out_dir, "无人脸")
     random.seed(args.seed if args.seed is not None else 20240921)
 
     checks = []
@@ -526,6 +526,7 @@ def main():
     checks.append(Check("无坏文件/残留", clean_ok, clean_detail))
 
     too_short = []
+    too_long = []
     for idx, cpath, _ in clips:
         info = probe(cpath)
         if not info:
@@ -534,11 +535,15 @@ def main():
         dur = float(info.get("format", {}).get("duration") or 0.0)
         if dur < MIN_CLIP_DUR - 0.01:
             too_short.append(f"{idx:03d}({dur:.2f}s)")
+        if dur > MAX_CLIP_DUR + 0.01:
+            too_long.append(f"{idx:03d}({dur:.2f}s)")
     min_ok = not too_short
     min_detail = (f"全部切片 ≥ {MIN_CLIP_DUR:.1f}s（共 {len(clips)} 个）" if min_ok
                  else f"{len(too_short)} 个 < {MIN_CLIP_DUR:.1f}s: "
                       + "，".join(too_short[:12]))
     checks.append(Check(f"最小片段时长≥{MIN_CLIP_DUR:.1f}s", min_ok, min_detail))
+    checks.append(Check(f"最大片段时长≤{MAX_CLIP_DUR:.1f}s", not too_long,
+                        "全部切片符合上限" if not too_long else "，".join(too_long)))
 
     sample_keys = spread_sample(sorted(clips_by_idx.keys()), max(1, args.samples))
     print(f"抽验 {len(sample_keys)} 个切片: {[f'{k:03d}' for k in sample_keys]}")
@@ -580,13 +585,13 @@ def main():
         gh = int(cv_.get("height") or 0)
         codec_ok = (cv_.get("codec_name") == "h264")
         geo_ok = (gw == src_w and gh == src_h)
-        audio_ok = ca_ is not None
+        audio_ok = (ca_ is not None) == has_audio_src
         okg_pass = geo_ok and codec_ok and audio_ok
         n_geo += okg_pass
         geo_detail.append(
             f"{tag}:{gw}x{gh}{'✓' if geo_ok else f'≠{src_w}x{src_h}'}"
             f"/{cv_.get('codec_name','?')}{'✓' if codec_ok else '✗'}"
-            f"/音轨{'有✓' if audio_ok else '无✗'}")
+            f"/音轨与源{'一致✓' if audio_ok else '不一致✗'}")
 
         t0 = max(0.0, meta["start"] + 0.001)
         f_clip = os.path.join(tmpdir, f"{tag}_clip.jpg")

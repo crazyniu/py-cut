@@ -27,6 +27,7 @@ from pathlib import Path
 
 from .. import config
 from .ffmpeg import FFMPEG, FFPROBE, probe_scalar
+from .dedup import _video_duration
 from .utils import log, run_cmd
 
 # ffprobe 解析失败时的兜底帧率（本素材实测 30fps）
@@ -189,9 +190,9 @@ def detect_speech_segments(path: Path, noise_db: float | None = None,
     seg_min = config.MONTAGE_SEG_MIN_DUR if seg_min is None else seg_min
     seg_max = config.MONTAGE_SEG_MAX_DUR if seg_max is None else seg_max
 
-    duration = _float_or_zero(probe_scalar(Path(path), "format=duration"))
+    duration = _video_duration(Path(path))
     if duration <= 0:
-        log(f"[步骤A] {Path(path).name}: 探测不到容器时长，语音段为空")
+        log(f"[步骤A] {Path(path).name}: 探测不到视频时长，语音段为空")
         return []
 
     args = [
@@ -231,9 +232,9 @@ def probe_source(path: Path) -> SourceProfile | None:
         log(f"[步骤A] 基准视频不存在: {path}")
         return None
 
-    duration = _float_or_zero(probe_scalar(path, "format=duration"))
+    duration = _video_duration(path)
     if duration <= 0:
-        log(f"[步骤A] {path.name}: 探测不到容器时长")
+        log(f"[步骤A] {path.name}: 探测不到视频时长")
         return None
 
     width = int(_float_or_zero(probe_scalar(path, "stream=width")))

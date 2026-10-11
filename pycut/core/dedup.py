@@ -218,6 +218,22 @@ def build_video_chain(params: dict, info: VideoInfo) -> list[str] | None:
     return _build_chain(params, info)
 
 
+def montage_variation(width: int, height: int, seed: int) -> tuple[dict, str]:
+    """复用标准档几何/像素扰动，不改变混剪时长、帧率或原声音轨。"""
+    from .dedup_presets import build_params
+
+    params = build_params("standard", seed, has_audio=False,
+                          width=width, height=height)
+    params["fps"] = ""
+    info = VideoInfo(Path("."), "", 0, width, height, False, 0, "")
+    chain = ",".join(build_video_chain(params, info))
+    # 混剪只复用画面层，报告不记录未执行的音频、CRF/GOP 或帧率设置。
+    fields = ("crop_px", "zoom", "rotate_deg", "brightness", "contrast",
+              "saturation", "hue_deg", "rgb_drift", "channel_gains",
+              "noise", "sharpen", "preset", "seed")
+    return {key: params[key] for key in fields}, chain
+
+
 def _ken_burns_chain(params: dict, info: VideoInfo) -> list[str]:
     """逐帧放大后裁回原画幅；不改变原始 PTS/FPS 或音轨。
 

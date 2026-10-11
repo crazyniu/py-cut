@@ -27,3 +27,7 @@ venv/
 *.covered.json
 .workbuddy
 .workbuddy/**
+
+# 本地测试输入、脚本和渲染产物
+/work/
+/materials/

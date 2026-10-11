@@ -27,7 +27,7 @@ class MontagePublicationTests(unittest.TestCase):
             srt.write_text("dummy subtitle", encoding="utf-8")
             opts = montage_pipeline.MontageOptions(
                 source=src, clip_dir=root, dedup_dir=root, out_dir=out_dir,
-                use_pip=False, keep_audio=(fail_at == "audio"),
+                use_pip=False, keep_audio=(fail_at in ("audio", "missing_audio")),
                 srt=str(srt) if fail_at == "subtitle" else "",
             )
             profile = SimpleNamespace(
@@ -70,9 +70,12 @@ class MontagePublicationTests(unittest.TestCase):
                  mock.patch.object(montage_pipeline, "log"):
                 result = montage_pipeline.run_pipeline(opts)
             if fail_at:
+                expected = ("基准视频无音轨，无法保留原声；未发布成片"
+                            if fail_at == "missing_audio" else
+                            "步骤D 字幕烧录失败" if fail_at == "subtitle" else
+                            "步骤E 音轨贴回失败")
                 self.assertEqual(result.get("error"),
-                                 ("步骤D 字幕烧录失败" if fail_at == "subtitle"
-                                  else "步骤E 音轨贴回失败"))
+                                 expected)
                 self.assertEqual(result.get("final", ""), "")
                 self.assertEqual(final.read_bytes(), old_bytes)
             else:
@@ -88,6 +91,9 @@ class MontagePublicationTests(unittest.TestCase):
 
     def test_failed_audio_attach_preserves_previous_final(self):
         self._exercise("audio")
+
+    def test_missing_reference_audio_preserves_previous_final(self):
+        self._exercise("missing_audio")
 
     def test_complete_pipeline_publishes_new_final(self):
         self._exercise(None)

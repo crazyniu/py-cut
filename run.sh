@@ -38,9 +38,9 @@ IS_TUI=0
 if [ "$#" -eq 0 ] || [ "${1:-}" = "tui" ]; then
   IS_TUI=1
 fi
-REQUIRED_IMPORTS='import cv2, numpy'
+REQUIRED_IMPORTS='import cv2, numpy; assert hasattr(cv2, "CascadeClassifier")'
 if [ "$IS_TUI" -eq 1 ]; then
-  REQUIRED_IMPORTS='import cv2, numpy, textual, textual_fspicker'
+  REQUIRED_IMPORTS='import cv2, numpy, textual, textual_fspicker; assert hasattr(cv2, "CascadeClassifier")'
 fi
 if [ -f requirements.txt ]; then
   if "$PY" -c "$REQUIRED_IMPORTS" >/dev/null 2>&1; then
@@ -57,8 +57,8 @@ if [ "$IS_TUI" -eq 1 ] && ! "$PY" -c 'import textual, textual_fspicker' >/dev/nu
   exit 1
 fi
 # ---------- 4. 硬校验 cv2（没有就别往下跑，切片必然失败）----------
-if ! "$PY" -c "import cv2" >/dev/null 2>&1; then
-  echo "[pycut] 错误: 当前解释器 ($PY) 没有 cv2。"
+if ! "$PY" -c 'import cv2; assert hasattr(cv2, "CascadeClassifier")' >/dev/null 2>&1; then
+  echo "[pycut] 错误: 当前解释器 ($PY) 缺少兼容的 OpenCV 4 Haar 支持。"
   echo "        手动安装: $PY -m pip install -r requirements.txt"
   exit 1
 fi
@@ -68,7 +68,7 @@ fi
 import sys
 sys.path.insert(0, '.')
 from pycut import config
-for line in config.gateways_summary().splitlines():
+for line in config.gateway_summary().splitlines():
     print('[pycut] ' + line)
 if not config.key_ready():
     print('[pycut] 警告: 主网关未配置密钥（.env 的 PYCUT_MAIN_KEY），LLM 步骤会 401。')

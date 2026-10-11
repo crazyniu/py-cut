@@ -12,6 +12,19 @@ from pycut.core import scene
 
 
 class SceneSafetyTests(unittest.TestCase):
+    def test_two_to_fifteen_seconds_survive_short_tail_merge(self):
+        for cuts, duration in [([15], 16), ([14, 15.5], 17),
+                               ([], 60), ([1, 14.9, 15.1], 31)]:
+            with self.subTest(cuts=cuts, duration=duration):
+                segments = scene.build_segments(cuts, duration, 2, 15)
+                self.assertEqual(segments[0][0], 0)
+                self.assertEqual(segments[-1][1], duration)
+                self.assertTrue(all(2 <= e - s <= 15 for s, e in segments))
+                self.assertTrue(all(a[1] == b[0] for a, b in zip(segments, segments[1:])))
+
+    def test_source_shorter_than_minimum_is_not_a_valid_slice(self):
+        self.assertEqual(scene.build_segments([], 1.9, 2, 15), [])
+
     def test_short_trailing_segment_is_merged_without_losing_end(self):
         # 过去尾段 [3.0, 3.5] 被“合并”成 [0, 3.0]，导致丢掉末尾 0.5s。
         self.assertEqual(scene.build_segments([3.0], 3.5, 2.0, 60.0),
