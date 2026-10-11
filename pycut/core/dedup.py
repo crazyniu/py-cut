@@ -33,6 +33,7 @@ from .dedup_presets import (build_params, derive_seed, ken_burns_for_seed,
 from .ffmpeg import FFMPEG, FFPROBE, VideoInfo, probe_scalar, probe_video
 from .fingerprint import compare
 from .runtime import STOP
+from .progress import progress
 from .utils import fmt_bytes, fmt_dur, log, run_cmd
 
 # 模糊边框：前景缩到 80% 居中，背景同片放大铺满 + 高斯模糊
@@ -1056,6 +1057,8 @@ def process_batch(srcs: list[Path], opts: DedupOptions,
     remaining = [(i, s) for i, s in enumerate(srcs) if i not in collided]
     if not remaining:
         return out
+    completed = len(collided)
+    progress("去重", completed, len(srcs), failed=len(collided), detail="编码扰动 → pHash / PSNR 自检")
     with futures.ThreadPoolExecutor(max_workers=min(n, len(remaining))) as ex:
         futs = {ex.submit(_one, (i, s)): i for i, s in remaining}
         for fut in futures.as_completed(futs):
@@ -1068,6 +1071,15 @@ def process_batch(srcs: list[Path], opts: DedupOptions,
                           "psnr": 0.0, "dur_src": 0.0, "dur_dst": 0.0,
                           "seconds": 0.0, "gates": {},
                           "error": f"{type(e).__name__}: {e}"}
+            completed += 1
+            good = sum(bool(item.get("ok")) for item in out if item)
+            failed = sum(not item.get("ok") and not item.get("skipped") for item in out if item)
+            metrics = f"pHash {(out[i].get('phash_dist') or 0):.2f} · PSNR {(out[i].get('psnr') or 0):.1f} dB"
+            detail = ("已有产物跳过，本次未执行扰动" if out[i].get("skipped") else
+                      ("自检达标：" if out[i].get("ok") else "处理或自检失败：") + metrics)
+            if out[i].get("gates", {}).get("over_modified"):
+                detail = "变化偏大，请目检；" + metrics
+            progress("去重", completed, len(srcs), success=good, failed=failed, skipped=sum(bool(item.get("skipped")) for item in out if item), detail=detail, output=str(resolve_output_path(srcs[i], opts).parent))
     return out
 
 

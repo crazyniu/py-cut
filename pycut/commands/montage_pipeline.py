@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import config
+from ..core.progress import progress
 from ..core.utils import log
 from ..core.output_paths import montage_output
 
@@ -71,6 +72,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ---------------- 步骤A：基准 ----------------
+    progress("混剪合成", 0, 5, detail="分析爆款时长与原声")
     log("--- 步骤A：提取话术节奏与时长基准 ---")
     prof = probe_source(opts.source)
     if prof is None:
@@ -143,6 +145,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
         return result
 
     # ---------------- 步骤B：随机混剪 ----------------
+    progress("混剪合成", 1, 5, detail="选片、扰动与背景合成")
     log("--- 步骤B：随机混剪拼接 ---")
     stickers = _load_stickers(opts.sticker_dir)
     if opts.online_stickers and opts.sticker_chance > 0:
@@ -234,6 +237,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 result["error"] = "步骤C 失败"
                 return result
         else:
+            progress("混剪合成", 2, 5, detail="合成画中画")
             log("--- 步骤C：画中画叠加 ---")
             pool = scan_dedup_pool(opts.dedup_dir, min_dur=opts.min_clip)
             log(f"  画中画素材 {len(pool)} 条")
@@ -282,6 +286,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
         # 顺序很关键：字幕烧录用 `-an`，所以**必须放在贴音轨之前**，
         # 否则刚贴上的基准音轨会被字幕这一步的 -an 抹掉（实测踩过：成片又变静音）。
         if opts.srt and Path(opts.srt).is_file():
+            progress("混剪合成", 3, 5, detail="烧录参考字幕")
             log("--- 步骤D：字幕烧录 ---")
             if _burn_subtitles(working, slots, canvas, opts):
                 log(f"  烧录后: {_size(working)}  {_duration(working):.2f}s")
@@ -297,6 +302,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
         # 但**基准视频的话术音频必须保留**——用户要求成片时长与话术对齐，
         # 静音成片没法用。这里最后把基准音频贴回去，并按视频长度截断。
         if opts.keep_audio and prof.has_audio:
+            progress("混剪合成", 4, 5, detail="恢复爆款原声")
             log("--- 步骤E：贴回基准视频音轨（最后一步）---")
             if _attach_audio(working, opts.source, opts.crf):
                 result["audio"] = True
@@ -356,6 +362,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
             log(f"  [报告失败] 成片已生成，但参数报告无法保存：{exc}")
         finally:
             _unlink(manifest_tmp)
+        progress("混剪合成", 5, 5, success=1, detail="成片规格检查与发布完成", output=str(final.parent))
         log(f"  成片: {final.name}  {_size(final)}  {duration:.2f}s")
 
         return result
