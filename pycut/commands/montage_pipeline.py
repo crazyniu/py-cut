@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .. import config
 from ..core.utils import log
+from ..core.output_paths import montage_output
 
 
 @dataclass
@@ -22,7 +23,7 @@ class MontageOptions:
     source: Path = field(default_factory=lambda: config.MONTAGE_SRC)
     clip_dir: Path = field(default_factory=lambda: config.MONTAGE_CLIP_DIR)
     dedup_dir: Path = field(default_factory=lambda: config.MONTAGE_DEDUP_DIR)
-    out_dir: Path = field(default_factory=lambda: config.MONTAGE_OUT)
+    out_dir: Path = field(default_factory=lambda: montage_output(config.MONTAGE_SRC.parent))
     seed: int | None = None
     allow_landscape: bool = False
     pip_slot: float = 2.5
@@ -44,7 +45,7 @@ class MontageOptions:
     max_clip: float = config.MONTAGE_CLIP_MAX_DUR
     pip_scale: float = config.MONTAGE_PIP_SCALE
     workers: int = 0
-    out_name: str = ""   # 覆盖默认成片名（批量裂变时给每支唯一名）；空=用 混剪_{stem}.mp4
+    out_name: str = ""   # 覆盖默认成片名（批量裂变时给每支唯一名）；空=用 {stem}_1.mp4
 
 
 def run_pipeline(opts: MontageOptions) -> dict:
@@ -217,7 +218,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
         return result
 
     # ---------------- 步骤C：画中画叠加 ----------------
-    final = out_dir / (opts.out_name or f"混剪_{opts.source.stem}.mp4")
+    final = out_dir / (opts.out_name or f"{opts.source.stem}_1.mp4")
     # C/D/E 均写入独立工作文件，全部成功才发布最终成片。
     working = final.with_name(
         f"{final.stem}.working_{os.getpid()}_{threading.get_ident():x}.mp4")

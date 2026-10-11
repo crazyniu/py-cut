@@ -20,7 +20,7 @@ class SinglePassPipTests(unittest.TestCase):
             source.write_bytes(b"source")
             out_dir = root / "output"
             out_dir.mkdir()
-            final = out_dir / "混剪_source.mp4"
+            final = out_dir / "source_1.mp4"
             final.write_bytes(b"old good result" * 200)
 
             profile = SimpleNamespace(

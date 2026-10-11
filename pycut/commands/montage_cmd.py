@@ -36,7 +36,7 @@ def register(subparsers) -> None:
     g.add_argument("--dedup-dir", default="",
                    help=f"步骤C 画中画素材目录（默认 {config.MONTAGE_DEDUP_DIR}）")
     g.add_argument("--out-dir", default="",
-                   help=f"最终成片输出目录（默认 {config.MONTAGE_OUT}；TUI 混剪默认桌面 out）")
+                   help="最终成片输出目录（默认爆款目录同级的混剪/MMDD）")
     g.add_argument("--fission", type=int, default=1,
                    help="每支爆款视频裂变生成几支成片（每支随机选片/扰动不同、话术相同）")
 
@@ -198,7 +198,8 @@ def run(args: argparse.Namespace) -> int:
     source = Path(args.source).expanduser() if args.source else config.MONTAGE_SRC
     clip_dir = Path(args.clip_dir).expanduser() if args.clip_dir else config.MONTAGE_CLIP_DIR
     dedup_dir = Path(args.dedup_dir).expanduser() if args.dedup_dir else config.MONTAGE_DEDUP_DIR
-    out_dir = Path(args.out_dir).expanduser() if args.out_dir else config.MONTAGE_OUT
+    from ..core.output_paths import montage_output
+    out_dir = Path(args.out_dir).expanduser() if args.out_dir else montage_output(source.parent)
 
     # --probe 只检查片段库，不需要基准视频、字幕或已有成片。
     if args.probe:
@@ -230,6 +231,7 @@ def run(args: argparse.Namespace) -> int:
     from . import montage_pipeline  # noqa: PLC0415
 
     opts = montage_pipeline.MontageOptions(
+        out_name=f"{source.stem}_1.mp4",
         step=args.step,
         source=source,
         clip_dir=clip_dir,
@@ -287,7 +289,7 @@ def run(args: argparse.Namespace) -> int:
             log("")
             log(f"--- 裂变 {i}/{fission}（同一爆款视频，换 seed 重混）---")
             vopts = replace(opts, seed=base_seed + i * 10007,
-                            out_name=f"混剪_{source.stem}_{i}.mp4")
+                            out_name=f"{source.stem}_{i}.mp4")
             r = montage_pipeline.run_pipeline(vopts)
             if STOP.flag:
                 log(f"[中断] 裂变 {i}/{fission} 未完整完成，不再继续（退出码 130）")
