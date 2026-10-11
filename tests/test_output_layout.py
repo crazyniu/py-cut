@@ -61,15 +61,14 @@ def test_cover_publishes_copy_and_force_starts_from_source():
         assert dst.read_bytes() == b'covered'
 
 
-def test_montage_directory_order_and_local_date():
+def test_montage_uses_configured_directories_and_output():
     source = Path('/data/爆款/demo.mp4')
     selection = ([source], {str(source): 5})
-    with mock.patch.object(tui, '_pick_dir', side_effect=['/data/爆款', '/data/切片', '/data/画中画']) as pick, mock.patch.object(tui, 'list_videos_flat', return_value=[source]), mock.patch.object(tui, 'count_videos_recursive', return_value=3), mock.patch.object(tui, '_multi_select', return_value=selection), mock.patch.object(tui, '_confirm', return_value=True), mock.patch.object(output_paths, 'datetime') as clock:
-        clock.now.return_value.strftime.return_value = '1011'
+    with mock.patch.object(config, 'REFERENCE_DIR', Path('/data/爆款')), mock.patch.object(config, 'MONTAGE_CLIP_DIR', Path('/data/切片')), mock.patch.object(config, 'MONTAGE_DEDUP_DIR', Path('/data/画中画')), mock.patch.object(config, 'MONTAGE_OUT', Path('/data/混剪/1011')), mock.patch.object(tui, '_pick_dir') as pick, mock.patch.object(tui, 'list_videos_flat', return_value=[source]), mock.patch.object(tui, 'count_videos_recursive', return_value=3), mock.patch.object(tui, '_multi_select', return_value=selection), mock.patch.object(tui, '_confirm', return_value=True):
         jobs = tui._wizard_montage(None, 100)
     args = cli.build_parser().parse_args(jobs[0])
     assert args.clip_dir == '/data/切片'
     assert args.dedup_dir == '/data/画中画'
     assert args.out_dir == '/data/混剪/1011'
     assert args.fission == 5
-    assert [c.args[1] for c in pick.call_args_list] == ['混剪 · 1/5 爆款素材目录（非递归）', '混剪 · 2/5 切片目录（递归）', '混剪 · 3/5 画中画目录（递归）']
+    pick.assert_not_called()

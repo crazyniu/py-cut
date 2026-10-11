@@ -74,7 +74,7 @@ class NativeMosaicTests(unittest.TestCase):
             self.assertEqual(clip.read_bytes(),b'original')
 
     def test_tiny_positive_subtitle_is_not_marked_as_no_subtitle(self):
-        model=SimpleNamespace(ask_vision=lambda *a:{'has_subtitle':True,'box':[.2,.5,.7,.501]})
+        model=SimpleNamespace(ask_vision=lambda *a, **kw:{'has_subtitle':True,'box':[.2,.5,.7,.501]})
         values={'format=duration':'1','stream=width':'180','stream=height':'320'}
         with mock.patch.object(subtitle,'probe_scalar',side_effect=lambda p,k:values[k]), \
              mock.patch.object(subtitle,'_grab_frame',return_value=True), \

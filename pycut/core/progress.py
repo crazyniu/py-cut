@@ -18,9 +18,20 @@ def parse(line: str) -> dict | None:
         value = json.loads(line[len(PREFIX):])
         if (isinstance(value, dict) and isinstance(value.get('stage'), str)
                 and all(isinstance(value.get(key, 0), int) and value.get(key, 0) >= 0
-                        for key in ('completed', 'total', 'success', 'failed', 'skipped'))
+                        for key in ('completed', 'total', 'success', 'failed', 'skipped', 'review'))
                 and all(isinstance(value.get(key, ''), str) for key in ('detail', 'output'))):
             return value
     except ValueError:
         pass
     return None
+
+
+def completed_futures(tasks, on_wait):
+    """等待后台片段时仍发送进度；不让慢请求看起来像卡死。"""
+    from concurrent.futures import wait, FIRST_COMPLETED
+    pending = set(tasks)
+    while pending:
+        done, pending = wait(pending, timeout=1, return_when=FIRST_COMPLETED)
+        if not done:
+            on_wait()
+        yield from done

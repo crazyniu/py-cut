@@ -61,7 +61,7 @@ class LLMClient:
                 self.enabled = False
                 log(f"[LLM] 连续失败 {config.LLM_MAX_CONSEC_FAIL} 次，全局禁用 LLM（{why}）")
 
-    def _post(self, payload: dict) -> tuple[int, str]:
+    def _post(self, payload: dict, *, timeout: float | None = None) -> tuple[int, str]:
         body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             self.url,
@@ -72,11 +72,22 @@ class LLMClient:
             },
             method="POST",
         )
+        until = time.monotonic() + timeout if timeout is not None else None
         try:
-            with urllib.request.urlopen(req, timeout=config.HTTP_TIMEOUT) as resp:
-                return resp.status, resp.read().decode("utf-8", "replace")
+            with urllib.request.urlopen(req, timeout=timeout or config.HTTP_TIMEOUT) as resp:
+                if until is None:
+                    return resp.status, resp.read().decode("utf-8", "replace")
+                chunks = []
+                while not STOP.flag and time.monotonic() < until:
+                    chunk = resp.read1(65536)
+                    if not chunk:
+                        return resp.status, b"".join(chunks).decode("utf-8", "replace")
+                    chunks.append(chunk)
+                return -1, "识别请求超时或已中断"
         except urllib.error.HTTPError as e:
-            return e.code, e.read().decode("utf-8", "replace")
+            # Error bodies are unnecessary for retry decisions and can also stall.
+            e.close()
+            return e.code, ""
         except Exception as e:  # noqa: BLE001
             return -1, str(e)
 
@@ -115,11 +126,11 @@ class LLMClient:
             '{"face": true 或 false, "confidence": 0到1之间的小数, "reason": 简短中文理由}'
         ))
 
-    def ask_vision(self, frame, prompt: str) -> dict | None:
+    def ask_vision(self, frame, prompt: str, *, deadline: float | None = None) -> dict | None:
         """通用视觉问答：单帧 + 自定义 prompt，返回解析后的 JSON dict 或 None。"""
         # 已切到备用网关：后续调用都走备用（粘性切换，避免来回抖动）
         if self._delegate is not None:
-            return self._delegate.ask_vision(frame, prompt)
+            return self._delegate.ask_vision(frame, prompt, deadline=deadline)
         if not self.enabled:
             return None
 
@@ -145,11 +156,14 @@ class LLMClient:
         }
 
         for attempt in range(3):
-            if STOP.flag:
+            if STOP.flag or not self.enabled or (deadline is not None and time.monotonic() >= deadline):
                 return None
             with self._lock:
                 self._calls += 1
-            status, text = self._post(payload)
+            status, text = (self._post(payload) if deadline is None else
+                            self._post(payload, timeout=max(0.01, min(config.HTTP_TIMEOUT, 15.0, deadline - time.monotonic()))))
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
             if status == 200:
                 try:
                     obj = json.loads(text)
@@ -186,7 +200,11 @@ class LLMClient:
                 break
 
             if attempt < 2:
-                time.sleep(config.LLM_BACKOFF[attempt])
+                until = time.monotonic() + config.LLM_BACKOFF[attempt]
+                if deadline is not None:
+                    until = min(until, deadline)
+                while not STOP.flag and time.monotonic() < until:
+                    time.sleep(max(0, min(0.1, until - time.monotonic())))
             with self._lock:
                 self._failures += 1
                 self._consec_fail += 1
@@ -204,7 +222,7 @@ class LLMClient:
             self._delegate = fb
             self.switched_to = fb.label
             self.fallback = None
-            return fb.ask_vision(frame, prompt)
+            return fb.ask_vision(frame, prompt, deadline=deadline)
         return None
 
 

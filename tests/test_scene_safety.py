@@ -75,7 +75,7 @@ class SceneSafetyTests(unittest.TestCase):
         args = cli.build_parser().parse_args(["slice", "--no-sub"])
         result = SimpleNamespace(segs=1, face=1, noface=0, failed=0,
                                  bytes_out=1000, detect_s=0.0, enc_s=0.0,
-                                 sub_s=0.0, sub_covered=0, sub_fail=0,
+                                 sub_s=0.0, sub_covered=0, sub_fail=0, sub_review=0,
                                  skipped=False)
         info = lambda p: SimpleNamespace(path=p, stem=p.stem)
         llm = SimpleNamespace(calls=0, failures=0, switched_to=None)

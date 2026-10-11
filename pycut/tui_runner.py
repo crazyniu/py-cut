@@ -99,13 +99,16 @@ def _draw(stdscr, argv: list[str], index: int, total: int,
              else "good" if status == "success" else "bad")
     labels = {"running": "运行中", "stopping": "正在停止", "success": "处理完成",
               "error": "处理失败 · 请查看失败项", "cancelled": "已中断"}
-    tui._safe_add(stdscr, 5, 2, labels.get(status, status) + (f" · 已用时 {int(elapsed // 60)}分{int(elapsed % 60)}秒" if status == "running" else ""), w, color, curses.A_BOLD)
     states = dict(progress or {})
     if not progress:
         for line in history:
             event = parse(line)
             if event:
                 states[event["stage"]] = event
+    if status == "success" and any(e.get("review") for e in states.values()):
+        labels["success"] = "处理完成 · 有待复查项"
+        color = "warn"
+    tui._safe_add(stdscr, 5, 2, labels.get(status, status) + (f" · 已用时 {int(elapsed // 60)}分{int(elapsed % 60)}秒" if status == "running" else ""), w, color, curses.A_BOLD)
     y = 6
     for stage, event in list(states.items())[-max(1, min(2 if h < 20 else 5, h - 10)):]:
         done, count = event.get("completed", 0), event.get("total", 0)
@@ -114,9 +117,11 @@ def _draw(stdscr, argv: list[str], index: int, total: int,
         filled = min(bar_width, done * bar_width // count) if count else 0
         summary = f"{stage}  [{'█' * filled}{'░' * (bar_width - filled)}] {percent}  {done}/{count}"
         summary += f"  成功 {event.get('success', 0)} / 失败 {event.get('failed', 0)}"
+        if event.get("review"):
+            summary += f" / 待复查 {event['review']}"
         if event.get("skipped"):
             summary += f" / 跳过 {event['skipped']}"
-        tui._safe_add(stdscr, y, 2, summary, w, "bad" if event.get("failed") else "text")
+        tui._safe_add(stdscr, y, 2, summary, w, "bad" if event.get("failed") else "warn" if event.get("review") else "text")
         y += 1
     current = next(reversed(states.values()), {}) if states else {}
     if y < h - 4:
@@ -126,9 +131,9 @@ def _draw(stdscr, argv: list[str], index: int, total: int,
         tui._safe_add(stdscr, y, 2, "结果目录：" + tui._ellipsize(current["output"], w - 16, tail=True), w, "good")
         y += 1
     logs = [line for line in history if not parse(line)]
-    warnings = [line for line in logs if re.search(r"\[(?:[^\]]*(?:失败|错误|警告|残留)|已停止)\]", line)]
+    warnings = [line for line in logs if re.search(r"\[(?:[^\]]*(?:失败|错误|警告|残留|待复查)|已停止)\]", line)]
     if warnings and y < h - 4:
-        tui._safe_add(stdscr, y, 2, warnings[-1], w, "bad")
+        tui._safe_add(stdscr, y, 2, warnings[-1], w, "warn" if "[待复查]" in warnings[-1] else "bad")
         y += 1
     if y < h - 3:
         tui._safe_add(stdscr, y, 2, "详细日志 · L 展开/收起 · ↑↓ 滚动", w, "dim")
