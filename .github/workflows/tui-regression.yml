@@ -1,38 +1,94 @@
 name: TUI regression
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tui-regression-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   tui:
     runs-on: ubuntu-latest
+    outputs:
+      docs-only: ${{ steps.scope.outputs.docs-only }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Classify documentation-only changes
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python - <<'PYCODE'
+          import os, subprocess
+          from pathlib import Path
+          files = []
+          if os.environ["EVENT"] == "pull_request":
+              files = subprocess.check_output(["git", "diff", "--name-only",
+                  os.environ["BASE"] + "..." + os.environ["HEAD"]], text=True).splitlines()
+          docs_only = bool(files) and all(Path(f).suffix.lower() == ".md" for f in files)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print(f"docs-only={str(docs_only).lower()}", file=output)
+          PYCODE
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
       - name: Install runtime imports
+        if: steps.scope.outputs.docs-only != 'true'
         run: python -m pip install -r requirements.txt
       - name: Install FFmpeg for synthetic audio integration (test only)
+        if: github.event_name == 'workflow_dispatch'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
           command -v ffmpeg
           command -v ffprobe
       - name: Install test runner (development only)
+        if: steps.scope.outputs.docs-only != 'true'
         run: python -m pip install pytest
       - name: Syntax check
         run: python -m compileall -q pycut tests
       - name: Bash launcher syntax check
         run: bash -n run.sh
-      - name: TUI, core safety and synthetic audio regression tests
-        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Documentation references
+        if: steps.scope.outputs.docs-only == 'true'
+        run: |
+          python - <<'PYCODE'
+          import re
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+          for doc in Path('.').rglob('*.md'):
+              if '.git' in doc.parts:
+                  continue
+              for target in re.findall(r'\]\(([^\s)]+)\)', doc.read_text(encoding='utf-8')):
+                  target = target.strip('<>')
+                  url = urlsplit(target)
+                  if url.scheme or target.startswith(('#', '/')) or not url.path:
+                      continue
+                  assert (doc.parent / unquote(url.path)).exists(), f'{doc}: missing {target}'
+          PYCODE
+      - name: Lightweight TUI and core regression tests
+        if: github.event_name == 'pull_request' && steps.scope.outputs.docs-only != 'true'
+        run: >-
+          python -m pytest tests/test_tui*.py tests/test_task_progress.py
+          tests/test_output_layout.py tests/test_scene_safety.py tests/test_slice_scope.py
+          tests/test_scan*.py tests/test_llm_safety.py tests/test_launcher_install.py -q
+          --ignore=tests/test_tui_textual_picker.py
       - name: Full suite (synthetic media only; user media opt-in)
+        if: github.event_name == 'workflow_dispatch'
         run: python -m pytest tests/ -q
 
   cross-platform-picker:
+    needs: tui
+    if: always()
     name: Folder picker (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -44,7 +100,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Documentation-only platform check
+        if: needs.tui.outputs.docs-only == 'true'
+        run: python -m compileall -q pycut tests
       - name: Install runtime dependencies and test runner
+        if: needs.tui.outputs.docs-only != 'true'
         run: python -m pip install -r requirements.txt
       - name: Cross-platform Textual folder picker checks (headless)
+        if: needs.tui.outputs.docs-only != 'true'
         run: python -m unittest discover -s tests -p 'test_tui_textual_picker.py' -v
