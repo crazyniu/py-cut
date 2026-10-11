@@ -25,6 +25,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from .. import config
 from .utils import log
 
 # geq 表达式里 X/Y 的取值上界（滤镜链内统一按贴纸尺寸传入）
@@ -124,7 +125,7 @@ def build_sticker_cmd(video: Path, stickers: list[Path], out: Path,
     chain, label = part
     tmp = out.with_name(out.stem + f".stk_{os.getpid()}{out.suffix}")
     cmd = [
-        os.environ.get("PYCUT_FFMPEG", "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"),
+        config.FFMPEG,
         "-y", "-loglevel", "error", "-nostdin",
         "-i", str(video),        # 0 = 片段画面
         "-i", str(img),          # 1 = 贴纸（单帧输入，overlay 的 eof_action=repeat

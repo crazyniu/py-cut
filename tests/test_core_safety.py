@@ -373,7 +373,7 @@ class CoreSafetyTests(unittest.TestCase):
             ass_path.write_text("[Script Info]", encoding="utf-8")
             opts = montage_pipeline.MontageOptions(srt="fake.srt")
             with mock.patch.object(montage_subtitles, "parse_srt",
-                                   return_value=[object()]), \
+                                   return_value=[montage_subtitles.SubtitleCue(1, 0, 5, "test")]), \
                  mock.patch.object(montage_subtitles, "assign_cues_to_slots",
                                    return_value=[object()]), \
                  mock.patch.object(montage_subtitles, "build_ass",

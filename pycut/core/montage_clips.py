@@ -121,6 +121,7 @@ def _enc_args(out: Path, fps: int | None, crf: str) -> list[str]:
     """
     return [
         "-an",
+        "-map_metadata", "-1",
         "-c:v", "libx264",
         "-crf", str(crf),
         "-pix_fmt", "yuv420p",
@@ -535,7 +536,7 @@ def _write_concat_list(files: list[Path]) -> Path:
 def _seg_cmd(src: Path, offset: float, take: float, out: Path,
              canvas=None, fps=None, crf: str = CRF_DEFAULT,
              mirror: bool = False, speed: float = 1.0,
-             frames: int | None = None) -> list[str]:
+             frames: int | None = None, dedup_seed: int | None = None) -> list[str]:
     """单段截取：双 seek（输入侧粗 + 输出侧精）+ 适配画布 + 静音 + libx264。
 
     `mirror` / `speed` 是可选的画面扰动（由调用方按 seed 决定，保持参数默认值即
@@ -551,6 +552,10 @@ def _seg_cmd(src: Path, offset: float, take: float, out: Path,
     coarse = max(0.0, off - float(config.COARSE_BACKOFF))
     fine = off - coarse
     chain = fit_filter(canvas, fps)
+    if dedup_seed is not None:
+        from .dedup import montage_variation
+        _params, variation = montage_variation(*(canvas or config.MONTAGE_CANVAS), dedup_seed)
+        chain += "," + variation
     # 速度/镜像放在 scale 之前：镜像后缩放与先缩放后镜像等价，但先变速能少处理
     # 一些帧（setpts 改时间轴，越靠前生效越早丢帧）。
     pre = []
@@ -610,7 +615,8 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
                       max(ENC_TIMEOUT_MIN, int(src_take * ENC_TIMEOUT_PER_SEC)))
         rc, _o, err = run_cmd(
             _seg_cmd(it.path, d["offset"], src_take, seg, canvas, fps, crf,
-                     mirror=bool(d.get("mirror")), speed=speed, frames=frames),
+                     mirror=bool(d.get("mirror")), speed=speed, frames=frames,
+                     **({"dedup_seed": d["dedup_seed"]} if "dedup_seed" in d else {})),
             timeout=timeout)
         if rc != 0 or not seg.is_file() or seg.stat().st_size < 1024:
             msg = err.strip().splitlines()[-1] if err.strip() else "无输出"

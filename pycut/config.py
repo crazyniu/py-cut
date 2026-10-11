@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 from pathlib import Path
 
 
@@ -37,8 +39,15 @@ def _load_dotenv() -> None:
 # ---------------------------------------------------------------------------
 # 外部工具（ffmpeg-full 由 homebrew 安装，含 videotoolbox 硬件编码）
 # ---------------------------------------------------------------------------
-FFMPEG = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"
-FFPROBE = "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe"
+def _media_tool(name: str) -> str:
+    bundled = Path("/opt/homebrew/opt/ffmpeg-full/bin") / name
+    return os.environ.get(f"PYCUT_{name.upper()}") or (
+        str(bundled) if bundled.is_file() else shutil.which(name) or name)
+
+
+FFMPEG = _media_tool("ffmpeg")
+FFPROBE = _media_tool("ffprobe")
+SLICE_ENCODER = "h264_videotoolbox" if sys.platform == "darwin" else "libx264"
 
 # ---------------------------------------------------------------------------
 # 目录约定
@@ -48,7 +57,7 @@ FFPROBE = "/opt/homebrew/opt/ffmpeg-full/bin/ffprobe"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent          # pycut/.. => 项目根
 _load_dotenv()   # 在读取任何密钥前加载 .env（用户只需在 .env 配置 DEEPSEEK_API_KEY）
 
-SRC_DIR = Path("/Volumes/Lexar/DevStorage/剪辑/爆款素材/抖音")
+SRC_DIR = PROJECT_ROOT / "materials" / "source"
 DESKTOP = Path.home() / "Desktop"
 OUT_FACE = DESKTOP / "切片_有人脸"
 OUT_NOFACE = DESKTOP / "切片_无人脸"
@@ -59,7 +68,7 @@ OUT_MANIFEST = DESKTOP / "切片_清单"
 # ---------------------------------------------------------------------------
 SCENE_TH = 0.30          # 帧差阈值（ffmpeg select='gt(scene,TH)' 标定：0.25→26 / 0.30→16 / 0.40→16 切点）
 MIN_SEG = 2.0            # 最短段落：不足 2.0s 并入相邻段（保证每段 > 2s）
-MAX_SEG = 60.0           # 超长段落强制切分
+MAX_SEG = 15.0           # 按镜头切片；超长镜头均分到 2–15 秒
 DEDUP = 0.20             # 切点间距 < 0.2s 视为重复，合并
 FRAME_WIDTH = 480        # 抽帧宽度
 SAMPLE_RATIOS = (0.25, 0.50, 0.75)   # 段内采样位置
@@ -217,14 +226,14 @@ DEDUP_AUDIO_RATE = 44100
 #   步骤C：从「去重输出」取切片，以画中画叠在步骤B结果右上角、静音、时长同基准
 #   素材里混有横屏（1920x1080 / 3840x2160），一律排除——只吃竖屏 9:16
 # ---------------------------------------------------------------------------
-MONTAGE_SRC = Path("/Volumes/Lexar/DevStorage/剪辑/爆款素材/快手/1.mp4")  # 步骤A 基准
-MONTAGE_CLIP_DIR = Path("/Volumes/Lexar/DevStorage/剪辑/片段")           # 步骤B 片段库
+MONTAGE_SRC = PROJECT_ROOT / "materials" / "reference" / "1.mp4"
+MONTAGE_CLIP_DIR = PROJECT_ROOT / "materials" / "background"
 MONTAGE_DEDUP_DIR = DESKTOP / "去重_输出"                                # 步骤C 画中画素材
 MONTAGE_OUT = DESKTOP / "混剪_输出"
 MONTAGE_TMP = Path("/tmp/pycut_montage")   # 中间产物（步骤B 结果），不进桌面
 
-# 目标画布：以步骤A 基准视频的分辨率/帧率为准，保证最终成片与基准同规格
-MONTAGE_CANVAS = (720, 1276)        # 步骤A 实测 720x1276（注意不是 1280）
+# 目标画布固定为 720P 竖屏；仅时长、字幕和音轨来自步骤A 基准视频
+MONTAGE_CANVAS = (720, 1280)        # 固定 720P、9:16，与爆款素材尺寸无关
 MONTAGE_FPS = 30
 
 # 竖屏判定：宽高比在此区间才算 9:16，容差 ±12%（手机录制常见 720x1280 / 544x960）
@@ -253,8 +262,9 @@ MONTAGE_CLIP_MAX_DUR = 12.0         # 太长的片段截到上限
 MONTAGE_WORKERS = 2
 
 # 画中画（步骤C）
-MONTAGE_PIP_SCALE = 0.26            # 画中画宽度 = 基准宽 × 该比例（右上角）
-MONTAGE_PIP_MARGIN = 0.03# 距右/上边缘留白比例
+MONTAGE_PIP_SCALE = 0.30            # 截图布局：216×384 的固定竖屏小窗
+MONTAGE_PIP_MARGIN = 0.08           # 距右边留白比例
+MONTAGE_PIP_TOP_MARGIN = 0.075      # 距上边留白比例
 MONTAGE_PIP_CONTINUOUS = True       # 画中画首尾相接（不设空档，实测设空档会有 19% 时间没有）
 # 画中画四角融入（尺寸不变，只改边缘过渡）——用户反馈「现在是直接盖上去的」
 MONTAGE_PIP_FEATHER = 0.22          # 四角羽化带 = 画中画短边 × 该比例
@@ -278,7 +288,7 @@ MONTAGE_SUB_BORDER_STYLE = 3# 3=半透明底框；改 1 则切纯描边
 MONTAGE_SUB_MIN_READABLE = 0.8      # 字幕最短可读时长，槽比它短就不给字幕
 # 字幕默认策略：montage 的 --srt 默认 auto = 与基准视频同目录同名 .srt（1.mp4→1.srt）。
 # 此常量保留仅为向后兼容（老代码/文档引用），新逻辑见 montage_cmd._resolve_srt。
-MONTAGE_SUB_PATH = Path.home() / "Desktop/10月8日.srt"
+MONTAGE_SUB_PATH = MONTAGE_SRC.with_suffix(".srt")
 MONTAGE_SUB_X264_PRESET = "veryfast"
 
 MANIFEST_COLUMNS = [

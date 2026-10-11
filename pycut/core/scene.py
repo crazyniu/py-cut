@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import math
 
 from .. import config
 from .utils import run_cmd
@@ -52,6 +53,12 @@ def detect_scenes(path, scene_th: float) -> list[float]:
 def build_segments(cuts: list[float], duration: float,
                    min_seg: float, max_seg: float) -> list[tuple[float, float]]:
     """切点 -> 段落。去重 / 合并过短段 / 切分超长段。"""
+    if not (math.isfinite(duration) and duration > 0
+            and math.isfinite(min_seg) and math.isfinite(max_seg)
+            and 0 < min_seg <= max_seg and max_seg >= 2 * min_seg):
+        raise ValueError("时长须为正数，分段范围须满足 0 < min_seg 且 max_seg >= 2 * min_seg")
+    if duration < min_seg:
+        return []
     # 1) 去重：间距 < DEDUP 的切点合并
     deduped: list[float] = []
     for c in sorted(cuts):
@@ -95,4 +102,11 @@ def build_segments(cuts: list[float], duration: float,
         prev_start, _prev_end = segs.pop()
         segs.append((prev_start, tail_end))
 
-    return [(round(s, 3), round(e, 3)) for s, e in segs if e - s > 0.01]
+    # 合并短尾段可能再次超过上限（例如 15s + 1s），最后均分修正。
+    bounded = []
+    for start, end in segs:
+        count = max(1, math.ceil((end - start) / max_seg))
+        for i in range(count):
+            bounded.append((round(start + (end - start) * i / count, 3),
+                            round(start + (end - start) * (i + 1) / count, 3)))
+    return bounded

@@ -33,6 +33,7 @@ class MontageOptions:
     speed_range: tuple | None = None  # 片段随机加速区间，如 (1.2, 1.5)；None=不加速
     sticker_dir: str = ""          # 贴纸目录；空=自动探测 config.MONTAGE_STICKER_DIR
     sticker_chance: float = 0.0    # 每个片段叠贴纸的概率
+    online_stickers: bool = False  # CLI/TUI 默认在线下载；显式目录使用本地图片
     seam_fade: float = 0.0        # 可选片段间亮度淡化秒数；0=不启用
     srt: str = str(config.MONTAGE_SUB_PATH)   # 字幕文件；空串=不烧字幕
     crf: str = "20"
@@ -78,8 +79,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
     log(f"  基准: {prof.duration:.2f}s  {prof.width}x{prof.height}  "
         f"语音段 {len(prof.segments)} 个  有声 {prof.speech_total:.1f}s")
 
-    # 画布以基准视频实测为准（config的 MONTAGE_CANVAS 只是默认值）
-    canvas = (prof.width, prof.height)
+    canvas = config.MONTAGE_CANVAS
     # 基准视频总时长是硬约束；不能再沿用 0.98 的缩短预算。
     target = prof.duration
     # 有字幕时，**以字幕为节奏骨架**切槽——字幕条数（56）远多于语音段（7），
@@ -144,6 +144,15 @@ def run_pipeline(opts: MontageOptions) -> dict:
     # ---------------- 步骤B：随机混剪 ----------------
     log("--- 步骤B：随机混剪拼接 ---")
     stickers = _load_stickers(opts.sticker_dir)
+    if opts.online_stickers and opts.sticker_chance > 0:
+        from ..core.online_stickers import download_stickers
+        import tempfile
+        try:
+            stickers = download_stickers(Path(tempfile.mkdtemp(prefix="stickers_", dir=tmp)))
+        except (OSError, ValueError) as exc:
+            result["error"] = f"在线贴纸下载失败：{type(exc).__name__}"
+            log(f"  [失败] {result['error']}；未发布成片")
+            return result
     if opts.sticker_chance > 0 and not stickers:
         directory = opts.sticker_dir or str(config.MONTAGE_STICKER_DIR)
         result["error"] = f"启用了贴纸但目录没有可用图片：{directory}"
@@ -166,8 +175,12 @@ def run_pipeline(opts: MontageOptions) -> dict:
     picked = pick_clips(items, slots, seed=seed, min_dur=opts.min_clip,
                         max_dur=opts.max_clip)
     # 画面扰动：按 seed 逐段决定镜像 / 加速 / 贴纸（同一 seed 结果可复现）
-    _apply_variation(picked, seed, opts)
+    _apply_variation(picked, seed, opts, stickers)
     reused = sum(1 for p in picked if p.get("reused"))
+    if reused:
+        result["error"] = "唯一素材不足，拒绝重复使用片段；请增加背景素材"
+        log(f"  [失败] {result['error']}")
+        return result
     total = sum(p["take"] for p in picked)
     log(f"  选中 {len(picked)} 个片段（复用 {reused}）累计 {total:.2f}s")
     if picked and picked[0].get("shortfall", 0.0) > 1.0 / config.MONTAGE_FPS:
@@ -250,7 +263,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 try:
                     build_pip_cmd(base, timeline, working, canvas=canvas,
                                   scale=opts.pip_scale, fps=config.MONTAGE_FPS,
-                                  crf=opts.crf)
+                                  crf=opts.crf, variation_seed=seed)
                 except (RuntimeError, ValueError, OSError) as exc:
                     log(f"  [失败] 画中画叠加失败: {exc}")
                     result["error"] = "步骤C 失败"
@@ -292,6 +305,10 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 result["error"] = "步骤E 音轨贴回失败"
                 return result
         elif not prof.has_audio:
+            if opts.keep_audio:
+                result["error"] = "基准视频无音轨，无法保留原声；未发布成片"
+                log(f"  [失败] {result['error']}")
+                return result
             log("--- 步骤E：跳过（基准视频无音轨）---")
 
         duration = _duration(working)
@@ -310,6 +327,34 @@ def run_pipeline(opts: MontageOptions) -> dict:
             return result
         result["final"] = str(final)
         result["final_duration"] = duration
+        # 保存实际参数，不能把画面扰动或 pHash 当作暗水印已经去除的证据。
+        import json
+        from ..core.online_stickers import ATTRIBUTION, SOURCES
+        manifest = final.with_suffix(".json")
+        manifest_tmp = manifest.with_name(f"{manifest.name}.{os.getpid()}.tmp")
+        try:
+            manifest_tmp.write_text(json.dumps({
+                "seed": seed, "canvas": canvas, "fps": config.MONTAGE_FPS,
+                "source": str(opts.source), "duration": duration,
+                "reference_duration": target,
+                "audio": "reference" if result.get("audio") else "silent",
+                "subtitle_timing": "reference",
+                "background": [{k: p.get(k) for k in (
+                    "take", "offset", "dedup_seed", "dedup_params", "mirror",
+                    "speed", "sticker", "sticker_applied")} for p in picked],
+                "pip_variation_seed": seed if opts.use_pip else None,
+                "transition_seconds": opts.seam_fade,
+                "sticker_sources": list(SOURCES) if opts.online_stickers else [],
+                "sticker_attribution": ATTRIBUTION if opts.online_stickers else None,
+                "dark_watermark": "not_verified",
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(manifest_tmp, manifest)
+            result["report"] = str(manifest)
+        except OSError as exc:
+            result["report_error"] = str(exc)
+            log(f"  [报告失败] 成片已生成，但参数报告无法保存：{exc}")
+        finally:
+            _unlink(manifest_tmp)
         log(f"  成片: {final.name}  {_size(final)}  {duration:.2f}s")
 
         return result
@@ -319,9 +364,8 @@ def run_pipeline(opts: MontageOptions) -> dict:
 
 def _burn_subtitles(video: Path, slots: list[tuple[float, float]],
                     canvas: tuple[int, int], opts: MontageOptions) -> bool:
-    """把字幕按槽序烧录进成片（字幕在底部，与右上角画中画不冲突）。"""
-    from ..core.montage_subtitles import (assign_cues_to_slots,  # noqa: PLC0415
-                                          build_ass, build_subtitle_cmd,
+    """按爆款字幕原时间轴烧录（字幕在底部，与右上角画中画不冲突）。"""
+    from ..core.montage_subtitles import (build_ass, build_subtitle_cmd,
                                           parse_srt, subtitle_tmp_path)
     import os  # noqa: PLC0415
 
@@ -329,12 +373,15 @@ def _burn_subtitles(video: Path, slots: list[tuple[float, float]],
     if not cues:
         log("  [失败] 字幕解析为空")
         return False
-    subs = assign_cues_to_slots(cues, slots, _duration(video))
+    # 成片保留爆款原声、总时长不变，字幕必须保留原时间戳。
+    duration = _duration(video)
+    from ..core.montage_subtitles import SubtitleCue
+    subs = [SubtitleCue(c.index, max(0.0, c.start), min(duration, c.end), c.text)
+            for c in cues if c.end > 0 and c.start < duration]
     if not subs:
         log("  [失败] 没有可用的字幕-槽位对应")
         return False
-    log(f"  字幕 {len(cues)} 条 -> 匹配 {len(subs)} 条"
-        f"（槽 {len(slots)} 个，{len(slots) - len(subs)} 个过短未配）")
+    log(f"  字幕 {len(subs)}/{len(cues)} 条，保留爆款原声时间轴")
 
     ass_path, style = build_ass(subs, canvas=canvas)
     log(f"  样式: {style.get('font_name', '?')} {style.get('font_size', 0):.0f}px "
@@ -415,7 +462,8 @@ def _attach_audio(video: Path, audio_src: Path, crf: str = "20") -> bool:
     return True
 
 
-def _apply_variation(items: list[dict], seed: int, opts: MontageOptions) -> None:
+def _apply_variation(items: list[dict], seed: int, opts: MontageOptions,
+                     stickers: list[Path] | None = None) -> None:
     """按 seed 给每个片段打上镜像 / 加速 / 贴纸标记（原地修改 items）。
 
     加速的副作用由`_normalize_segments` 处理：它会把 `take` 乘以 speed，
@@ -426,11 +474,16 @@ def _apply_variation(items: list[dict], seed: int, opts: MontageOptions) -> None
     rng = random.Random(seed ^ 0x5EED)     # 与选片用不同流，避免耦合
     lo, hi = (opts.speed_range or (1.0, 1.0))
     n_mirror = n_speed = n_sticker = 0
-    stickers = _load_stickers(opts.sticker_dir)
+    if stickers is None:
+        stickers = _load_stickers(opts.sticker_dir)
     first_usable = next((it for it in items if it.get("item") is not None), None)
-    for it in items:
+    from ..core.dedup import montage_variation
+    from ..core.dedup_presets import derive_seed
+    for index, it in enumerate(items):
         if it.get("item") is None:
             continue
+        it["dedup_seed"] = derive_seed(seed, "background", index)
+        it["dedup_params"], _chain = montage_variation(*config.MONTAGE_CANVAS, it["dedup_seed"])
         if opts.mirror_chance > 0 and rng.random() < opts.mirror_chance:
             it["mirror"] = True
             n_mirror += 1
@@ -617,8 +670,5 @@ def _size(p: Path) -> str:
 
 
 def _duration(p: Path) -> float:
-    from ..core.ffmpeg import probe_scalar  # noqa: PLC0415
-    try:
-        return float(probe_scalar(Path(p), "format=duration"))
-    except (TypeError, ValueError):
-        return 0.0
+    from ..core.dedup import _video_duration
+    return _video_duration(Path(p))

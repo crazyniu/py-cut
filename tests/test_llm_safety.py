@@ -11,6 +11,25 @@ from pycut.core import llm
 
 
 class LLMRetrySafetyTests(unittest.TestCase):
+    def test_explicitly_disabled_fallback_stays_on_main(self):
+        client = llm.make_llm('main', use_fallback=False)
+        self.assertIsNone(client.fallback)
+
+    def test_empty_length_response_retries_then_accepts_subtitle_box(self):
+        client = llm.LLMClient('https://primary.invalid/v1', 'test-key', 'model')
+        empty = json.dumps({'choices': [{'message': {'content': ''},
+                                        'finish_reason': 'length'}]})
+        box = {'has_subtitle': True, 'box': [0.1, 0.7, 0.9, 0.9]}
+        good = json.dumps({'choices': [{'message': {
+            'content': '```json\n' + json.dumps(box) + '\n```'},
+            'finish_reason': 'stop'}]})
+        with mock.patch.object(client, '_post', side_effect=[(200, empty), (200, good)]) as post:
+            self.assertEqual(client.ask_vision(object(), 'subtitle?'), box)
+        self.assertEqual(post.call_args_list[1].args[0]['max_tokens'],
+                         config.LLM_MAX_TOKENS_RETRY)
+        self.assertEqual(client.failures, 1)
+        self.assertIsNone(client.switched_to)
+
     def setUp(self):
         self.image = mock.patch.object(
             llm.cv2, "imencode",

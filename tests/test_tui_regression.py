@@ -106,11 +106,13 @@ class TUIRegression(unittest.TestCase):
              mock.patch.object(scan, "list_videos_recursive", return_value=files), \
              mock.patch.object(tui, "_confirm", side_effect=confirm):
             commands = tui._wizard_slice(Screen(), 100)
-        self.assertEqual(commands, [
-            ["slice", "--src-dir", "/tmp", "--max-depth", "3", "--no-sub"],
-            ["dedup", "--all"],
-        ])
-        self.assertEqual(cli.build_parser().parse_args(commands[0]).max_depth, 3)
+        slice_args = cli.build_parser().parse_args(commands[0])
+        dedup_args = cli.build_parser().parse_args(commands[1])
+        self.assertEqual(slice_args.max_depth, 3)
+        self.assertTrue(slice_args.no_sub)
+        self.assertTrue(slice_args.out_dir)
+        self.assertEqual(dedup_args.src_dir, slice_args.out_dir)
+        self.assertFalse(dedup_args.all)
 
     def test_scan_max_depth_ignores_deep_and_hidden_files(self):
         with tempfile.TemporaryDirectory() as tmp:

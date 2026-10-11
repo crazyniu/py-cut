@@ -13,8 +13,7 @@
                     多选爆款视频 + 每个裂变数量 → 确认执行
 
 关键机制：
-  - **目录选择器**：macOS 使用系统原生文件夹选择对话框；其他桌面使用开源 Tk 原生目录选择。
-    操作系统负责浏览、快捷位置和挂载盘，不再自行维护目录树。
+  - **目录选择器**：使用 Textual 的开源纯终端目录组件。
   - **递归扫描**：选定目录后用 `core/scan` 递归统计视频数并展示（最多下探 3 层）。
   - **多选**（混剪爆款视频）：空格勾选/取消，数字输入裂变数量。
   - 最终生成 argv 交给 `cli.main` 执行（与命令行完全同源，无漂移）。
@@ -27,6 +26,7 @@ import curses
 import curses.textpad  # noqa: F401  必须显式导入：不会随 import curses 自动加载
 import os
 import sys
+import time
 from pathlib import Path
 
 from . import __version__, cli, config
@@ -143,7 +143,7 @@ def _attr(name: str) -> int:
 FEATURES = [
     ("slice", "切片",    "把长视频切成多段，可选擦除字幕、去重"),
     ("cover", "字幕擦除", "擦除画面中的字幕"),
-    ("dedup", "去重",    "去除重复、相似的视频"),
+    ("dedup", "去重",    "调整视频画面，降低相似度"),
     ("montage", "混剪",  "组合片段生成新视频（可批量裂变）"),
 ]
 
@@ -299,7 +299,7 @@ def _prompt_int(stdscr, y, x, w, title, default, lo, hi) -> int | None:
             if buf.isdigit() and lo <= int(buf) <= hi:
                 return int(buf)
             error = f"请输入 {lo}～{hi} 之间的整数"
-        elif k == 27:
+        elif k in (27, ord("q"), ord("Q")):
             return None
         elif k in (curses.KEY_BACKSPACE, 127, 8):
             buf = buf[:-1]
@@ -744,7 +744,8 @@ def _wizard_slice(stdscr, w: int) -> list[list[str]] | None:
             ("去重", "切片后对产出切片过平台查重", settings[1]),
         ]
         values: list[bool] = []
-        ok = _confirm(stdscr, [("源目录", d), ("视频数量", f"{n} 个")],
+        ok = _confirm(stdscr, [("切片规则", "镜头检测 · 2–15 秒 · 不分析语义"),
+                              ("源目录", d), ("视频数量", f"{n} 个")],
                       toggles, values)
         if len(values) == len(settings):
             settings = values
@@ -757,7 +758,10 @@ def _wizard_slice(stdscr, w: int) -> list[list[str]] | None:
             argv.append("--no-sub")
         argv_list = [argv]
         if settings[1]:
-            argv_list.append(["dedup", "--all"])
+            # 本次任务独立目录，后继去重不碰桌面历史切片。
+            output = str(config.DESKTOP / "切片_任务" / str(time.time_ns()))
+            argv.extend(["--out-dir", output])
+            argv_list.append(["dedup", "--src-dir", output])
         return argv_list
 
 
@@ -822,9 +826,6 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     clip_count = 0
     pip_count = 0
     selection: tuple[list[Path], dict[str, int]] | None = None
-    sticker_dir = Path(config.MONTAGE_STICKER_DIR)
-    sticker_count = 0
-    sticker_prompted = False
     step = 0
 
     while True:
@@ -877,21 +878,6 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
 
         assert selection is not None
         assert all(d is not None for d in directories)
-        # Keep the existing reversible five-step navigation; the optional
-        # sticker directory is prompted at final review only when needed.
-        if not sticker_prompted:
-            sticker_count = _count_sticker_images(sticker_dir)
-            if sticker_count == 0:
-                chosen_dir = _pick_dir(
-                    stdscr, "混剪 · 选择贴纸目录（Esc 不叠贴纸）", None)
-                if chosen_dir is not None:
-                    candidate = Path(chosen_dir)
-                    sticker_count = _count_sticker_images(candidate)
-                    if sticker_count == 0:
-                        _flash(stdscr, f"目录没有 PNG/JPG/WEBP 贴纸：{candidate}", "bad")
-                        continue
-                    sticker_dir = candidate
-            sticker_prompted = True
         clip, pip, src_dir = directories
         chosen, fission = selection
         total_out = sum(fission[str(f)] for f in chosen)
@@ -899,8 +885,9 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
         lines = [
             ("片段库", f"{clip}（{clip_count} 个）"),
             ("画中画", f"{pip}（{pip_count} 个）"),
-            ("贴纸", f"{sticker_dir}（{sticker_count} 张）"
-             if sticker_count else "未配置（不叠贴纸）"),
+            ("规格", "720×1280 · 9:16 · 固定右上角画中画"),
+            ("切换效果", "段间转场 · 背景与画中画标准档扰动"),
+            ("贴纸", "生成时在线下载 · 半透明叠加"),
             ("爆款视频", f"{len(chosen)} 支 × 裂变 = {total_out} 支成片"),
             ("输出目录", out_dir),
         ]
@@ -917,10 +904,6 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
                 "montage", "--source", str(src), "--clip-dir", clip,
                 "--dedup-dir", pip, "--out-dir", out_dir,
             ]
-            if sticker_count:
-                argv.extend(["--sticker-dir", str(sticker_dir)])
-            else:
-                argv.append("--no-sticker")
             argv.extend(["--fission", str(fission[str(src)])])
             argv_list.append(argv)
         return argv_list

@@ -142,6 +142,11 @@ def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
             continue
         items.append(PipItem(path=path, duration=dur))
 
+    from .montage_clips import _drop_duplicates
+    items, duplicate_count = _drop_duplicates(items)
+    if duplicate_count:
+        log(f"  [画中画去重] 排除 {duplicate_count} 条相同内容")
+
     log(f"  [画中画素材] {base}  可用 {len(items)} 条 / 跳过(短于 {lo:g}s) {skipped} 条")
     return items
 
@@ -185,18 +190,25 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
     reached_end = False
 
     while True:
+        rest = total - t
         # 找一条还没用、且够长的素材
         picked = None
         for idx, it in enumerate(order):
             if idx in used or it.duration < PIP_MIN_SHOT:
                 continue
-            dur = min(slot_len, it.duration)
+            required = slot_len
+            if continuous:
+                # 尾部保留的总素材容量不足时延长当前镜头，而非有素材仍留空。
+                remaining_capacity = sum(candidate.duration for j, candidate in enumerate(order)
+                                         if j not in used and j != idx
+                                         and candidate.duration >= PIP_MIN_SHOT)
+                required = max(required, rest - remaining_capacity)
+            dur = min(required, it.duration)
             if dur < PIP_MIN_SHOT:
                 continue
             picked = (idx, it, dur)
             break
 
-        rest = total - t
         if picked is None:
             # 素材用完了 —— 这才是「素材不够填满」，标reached_end
             reached_end = True
@@ -320,7 +332,7 @@ def _encode_cmd(base: Path, tmp: Path, fcomplex: str,
 
 def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
                   canvas=None, scale=None, margin=None, fps=None,
-                  crf: str = PIP_CRF_DEFAULT) -> list[str]:
+                  crf: str = PIP_CRF_DEFAULT, variation_seed: int | None = None) -> list[str]:
     """把画中画叠到 base 上，输出最终成片，返回**实际执行的** ffmpeg argv。
 
     `canvas`   —— 目标画布，默认取 base 自身的宽高（必须与 base 一致）
@@ -353,7 +365,9 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     pip_w = _even(W * scale_r)
     pip_w = min(pip_w, _even(W))
     margin_x = _even(W * margin_r, lo=0)
-    margin_y = _even(H * margin_r, lo=0)
+    margin_y = _even(H * (float(margin) if margin is not None
+                          else config.MONTAGE_PIP_TOP_MARGIN), lo=0)
+    pip_h = _even(pip_w * 16 / 9)
 
     entries = _clamp_entries(timeline)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -420,8 +434,15 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
         # PiP 本体：四角羽化的 alpha（尺寸不变，只改边缘透明度）。
         # setpts=PTS-STARTPTS+起点**必须保留**：overlay 靠主流时间戳去次流队列
         # 配对，不平移时间轴的话，等 enable 打开时次流早已播完 -> 黑屏/错位。
+        variation = ""
+        if variation_seed is not None:
+            from .dedup import montage_variation
+            from .dedup_presets import derive_seed
+            _params, chain = montage_variation(pip_w, pip_h, derive_seed(variation_seed, "pip", i))
+            variation = chain + ","
         parts.append(
-            f"[{i + 1}:v]fps={fps},scale={pip_w}:-2,setsar=1,format=rgba,"
+            f"[{i + 1}:v]fps={fps},scale={pip_w}:{pip_h}:force_original_aspect_ratio=increase,"
+            f"crop={pip_w}:{pip_h},setsar=1,{variation}format=rgba,"
             f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
             f"a='alpha(X,Y)*{fw}',"
             f"setpts=PTS-STARTPTS+{_ms(start)}/TB[pp{i}]"
@@ -453,7 +474,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     parts.append(f"[{cur}]null[vout]")
     fcomplex = ";".join(parts)
 
-    log(f"  [画中画] {len(entries)} 段/ 画中画 {pip_w}x-2"
+    log(f"  [画中画] {len(entries)} 段/ 画中画 {pip_w}x{pip_h}"
         f" / 右上角留白 x={margin_x} y={margin_y}")
 
     cmd += [

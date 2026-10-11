@@ -170,7 +170,7 @@ def cut_clip(info: VideoInfo, start: float, end: float, out_path: Path) -> tuple
     if info.has_audio:
         args += ["-map", "0:a:0"]
     args += [
-        "-c:v", "h264_videotoolbox",
+        "-c:v", config.SLICE_ENCODER,
         "-b:v", info.bitrate,
         "-profile:v", "high",
         "-pix_fmt", "yuv420p",
@@ -222,7 +222,8 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
     res.detect_s = time.time() - t0
     res.segs = len(segs)
     if not segs:
-        log(f"[无段落] {info.stem}")
+        res.failed = 1
+        log(f"[无段落] {info.stem}：无法生成 {opts.min_seg:g}–{config.MAX_SEG:g}s 切片")
         return res
 
     # 试跑必须打印切点，即使已存在产物也不能被“续跑”逻辑吞掉。

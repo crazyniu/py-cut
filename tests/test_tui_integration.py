@@ -138,7 +138,7 @@ class TUIIntegrationTests(unittest.TestCase):
             self.assertEqual(args.dedup_dir, "/tmp/pip")
             self.assertEqual(args.fission, count)
 
-    def test_montage_exposes_existing_custom_sticker_directory(self):
+    def test_montage_defaults_to_online_stickers_without_extra_picker(self):
         with tempfile.TemporaryDirectory() as temp:
             sticker_root = Path(temp) / "stickers"
             sticker_root.mkdir()
@@ -146,7 +146,7 @@ class TUIIntegrationTests(unittest.TestCase):
             video = Path("/tmp/video/one.mp4")
             selection = ([video], {str(video): 1})
             with mock.patch.object(tui, "_pick_dir", side_effect=[
-                     "/tmp/clips", "/tmp/pip", "/tmp/video", str(sticker_root)]), \
+                     "/tmp/clips", "/tmp/pip", "/tmp/video"]) as picker, \
                  mock.patch.object(tui, "count_videos_recursive", return_value=2), \
                  mock.patch.object(tui, "_count_sticker_images",
                                    side_effect=[0, 1]), \
@@ -156,8 +156,9 @@ class TUIIntegrationTests(unittest.TestCase):
                 commands = tui._wizard_montage(FakeScreen(), 100)
         self.assertEqual(len(commands), 1)
         args = cli.build_parser().parse_args(commands[0])
-        self.assertEqual(args.sticker_dir, str(sticker_root))
+        self.assertEqual(args.sticker_dir, "")
         self.assertFalse(args.no_sticker)
+        self.assertEqual(picker.call_count, 3)
 
     def test_montage_cancel_before_confirm_never_builds_jobs(self):
         with mock.patch.object(tui, "_pick_dir", side_effect=["/tmp/clips", None, None]), \
