@@ -57,8 +57,19 @@ class NavigationTests(unittest.TestCase):
         with mock.patch.object(tui.curses, "curs_set"):
             self.assertEqual(tui._loop(screen), ("quit", None))
         drawn = "\n".join(s for _, _, s in screen.printed)
-        self.assertIn("PYCUT", drawn)
+        self.assertIn("████", drawn)
         self.assertIn(f"v{__version__}", drawn)
+
+    def test_home_instructions_are_only_at_bottom_and_never_repeated(self):
+        for size in ((14, 60), (24, 80), (32, 100)):
+            screen = Screen([ord("q")], size=size)
+            with mock.patch.object(tui.curses, "curs_set"):
+                self.assertEqual(tui._loop(screen), ("quit", None))
+            hints = [(y, text) for y, _, text in screen.printed if "↑↓" in text]
+            self.assertEqual(len(hints), 1)
+            self.assertEqual(hints[0][0], size[0] - 2)
+            self.assertFalse(any("选择现有处理流程" in text or "本地视频工具" in text
+                                 for _, _, text in screen.printed))
 
     def test_home_back_keys_do_not_exit_or_run_jobs(self):
         screen = Screen([27, curses.KEY_LEFT, curses.KEY_BACKSPACE, ord("2")])
@@ -135,7 +146,7 @@ class NavigationTests(unittest.TestCase):
         video = Path("/tmp/sources/婚礼.mp4")
         selection = ([video], {str(video): 12})
         with mock.patch.object(tui, "_pick_dir",
-                               side_effect=["/tmp/clips", "/tmp/pip", "/tmp/sources"]), \
+                               side_effect=["/tmp/sources", "/tmp/clips", "/tmp/pip"]), \
              mock.patch.object(tui, "count_videos_recursive", return_value=2), \
              mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
              mock.patch.object(tui, "_multi_select",

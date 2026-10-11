@@ -14,6 +14,7 @@ import threading
 import time
 from concurrent import futures
 from dataclasses import dataclass
+import re
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,8 @@ from .faces import FaceStat, analyze_segment, decide_face
 from .ffmpeg import FFMPEG, VideoInfo
 from .runtime import STOP
 from .scene import build_segments, detect_scenes
-from .subtitle import process_clip
+from .subtitle import process_clip, verified_clip
+from .progress import progress
 from .utils import fmt_bytes, fmt_dur, log, run_cmd
 
 
@@ -96,7 +98,7 @@ class VideoResult:
 
 
 def out_dirs_for(stem: str) -> tuple[Path, Path]:
-    return config.OUT_FACE / stem, config.OUT_NOFACE / stem
+    return config.OUT_FACE, config.OUT_NOFACE
 
 
 def video_done(stem: str, segments: int, *, require_sub: bool = False) -> bool:
@@ -111,8 +113,9 @@ def video_done(stem: str, segments: int, *, require_sub: bool = False) -> bool:
     clips = []
     for directory in out_dirs_for(stem):
         if directory.is_dir():
-            clips.extend(directory.glob("*.mp4"))
-    expected = {f"{idx:03d}.mp4" for idx in range(1, segments + 1)}
+            clips.extend(p for p in directory.glob("*.mp4")
+                         if re.fullmatch(re.escape(stem) + r"_[1-9][0-9]*\.mp4", p.name))
+    expected = {f"{stem}_{idx}.mp4" for idx in range(1, segments + 1)}
     if len(clips) != segments or {p.name for p in clips} != expected:
         return False
     for clip in clips:
@@ -121,7 +124,7 @@ def video_done(stem: str, segments: int, *, require_sub: bool = False) -> bool:
                 return False
         except OSError:
             return False
-        if require_sub and not clip.with_name(clip.name + ".covered.json").is_file():
+        if require_sub and not verified_clip(clip):
             return False
     return True
 
@@ -217,7 +220,9 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
     res = VideoResult(stem=info.stem)
 
     t0 = time.time()
+    progress("镜头检测", 0, 1, detail="扫描视频镜头；此阶段尚无切片总数")
     cuts = detect_scenes(info.path, opts.scene_th)
+    progress("镜头检测", 1, 1, success=1, detail="镜头检测完成")
     segs = build_segments(cuts, info.duration, opts.min_seg, config.MAX_SEG)
     res.detect_s = time.time() - t0
     res.segs = len(segs)
@@ -232,6 +237,9 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
         require_sub=bool(not opts.no_sub and llm.enabled),
     ):
         res.skipped = True
+        progress("切片编码", len(segs), len(segs), skipped=len(segs), detail="完整切片已存在，本次未重切", output=str(config.OUT_FACE.parent))
+        if not opts.no_sub:
+            progress("字幕擦除", len(segs), len(segs), skipped=len(segs), detail="已有新版字幕检查标记，跳过重复处理", output=str(config.OUT_FACE.parent))
         log(f"[跳过] {info.stem}（{len(segs)} 个切片完整，已处理）")
         return res
 
@@ -244,6 +252,7 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
             log(f"    {i:03d}  {s:7.2f} -> {e:7.2f}  ({e - s:.2f}s)")
         return res
 
+    progress("人脸分流", 0, len(segs), detail="抽帧分析人脸；不识别语义")
     face_dir, noface_dir = out_dirs_for(info.stem)
     face_dir.mkdir(parents=True, exist_ok=True)
     noface_dir.mkdir(parents=True, exist_ok=True)
@@ -259,9 +268,12 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
             st = analyze_segment(info.path, seg, tmpdir)
             stats.append(st)
             verdicts.append(decide_face(st))
+            progress("人脸分流", len(stats), len(segs), success=len(stats), detail="人脸分析完成的镜头数量")
 
     # --- ambiguous 段送 LLM 兜底（as_completed + 显式索引配对，避免错位）---
     amb_idx = [i for i, v in enumerate(verdicts) if v == "ambiguous"]
+    if amb_idx and llm.enabled and not opts.no_llm:
+        progress("人脸复核", 0, len(amb_idx), detail="LLM 复核不确定的人脸判断")
     llm_results: dict[int, dict] = {}
     if amb_idx and llm.enabled and not opts.no_llm:
         def _ask(i: int):
@@ -280,6 +292,11 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
                     continue
                 if r is not None:
                     llm_results[i] = r
+                progress("人脸复核", len(llm_results), len(amb_idx), success=len(llm_results), detail="复核不确定片段；失败会采用 Haar 结果")
+
+    if amb_idx and llm.enabled and not opts.no_llm:
+        progress("人脸复核", len(amb_idx), len(amb_idx), success=len(llm_results),
+                 failed=len(amb_idx) - len(llm_results), detail=("复核失败的片段已回退到 Haar 判断" if len(llm_results) < len(amb_idx) else "人脸复核完成"))
 
     # --- 逐段落盘任务 ---
     enc_tasks = []  # (idx, s, e, out_path, verdict, row)
@@ -317,7 +334,7 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
                               else "LLM 不可用/失败，按 loose 兜底")
 
         out_dir = face_dir if v == "face" else noface_dir
-        out_path = out_dir / f"{i + 1:03d}.mp4"
+        out_path = out_dir / f"{info.stem}_{i + 1}.mp4"
 
         row = {
             "video": info.stem,
@@ -348,9 +365,11 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
         row["out_bytes"] = size if ok else 0
         return ok, row
 
+    progress("切片编码", 0, len(enc_tasks), detail="按镜头生成 2–15 秒切片")
     done_clips: list[Path] = []
     with futures.ThreadPoolExecutor(max_workers=opts.workers_enc) as ex:
-        for ok, row in ex.map(_do, enc_tasks):
+        for future in futures.as_completed([ex.submit(_do, task) for task in enc_tasks]):
+            ok, row = future.result()
             if ok:
                 if row["verdict"] == "face":
                     res.face += 1
@@ -361,6 +380,16 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
             else:
                 res.failed += 1
             manifest.add(row)
+            progress("切片编码", len(done_clips) + res.failed, len(enc_tasks), success=len(done_clips), failed=res.failed, detail="切片已编码；字幕擦除在下一阶段执行")
+
+    # Only remove stale segments of this source after the replacement set succeeds.
+    if not res.failed and not STOP.flag:
+        current = set(done_clips)
+        for directory in (face_dir, noface_dir):
+            for old in directory.glob("*.mp4"):
+                if re.fullmatch(re.escape(info.stem) + r"_[1-9][0-9]*\.mp4", old.name) and old not in current:
+                    old.unlink()
+                    old.with_name(old.name + ".covered.json").unlink(missing_ok=True)
 
     # --- 流水线第三步：字幕擦除（--no-sub 跳过）---
     if not opts.no_sub and llm.enabled and done_clips and not STOP.flag:
@@ -377,9 +406,12 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
                 return "fail"
 
         sub_stat: dict[str, int] = {"covered": 0, "nosub": 0, "skip": 0, "fail": 0}
+        progress("字幕擦除", 0, len(done_clips), detail="检测 → 像素修复 → 成品复检")
         with futures.ThreadPoolExecutor(max_workers=opts.workers_llm) as ex2:
-            for s in ex2.map(_cov, done_clips):
+            for future in futures.as_completed([ex2.submit(_cov, p) for p in done_clips]):
+                s = future.result()
                 sub_stat[s] = sub_stat.get(s, 0) + 1
+                progress("字幕擦除", sum(sub_stat.values()), len(done_clips), success=sub_stat['covered'] + sub_stat['nosub'], failed=sub_stat['fail'], skipped=sub_stat['skip'], detail=f"复检通过 {sub_stat['covered']} · 未检出字幕 {sub_stat['nosub']} · 已处理跳过 {sub_stat['skip']}", output=str(face_dir.parent))
         res.sub_s = time.time() - t_sub
         res.sub_covered = sub_stat["covered"]
         res.sub_fail = sub_stat["fail"]

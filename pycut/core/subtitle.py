@@ -17,7 +17,6 @@ from .utils import log
 
 SAMPLES = 5             # 每片段抽帧检测数（越多越能覆盖所有文字行）
 DETECT_WIDTH = 480      # 送检帧宽（足够 LLM 定位，省 token）
-MAX_H_RATIO = 0.55      # 遮盖带最大高度占比（仅防误检把大半屏盖掉，正常不触发）
 PAD_Y = 0.12  # 按字幕高度增加上下余量
 WORKERS = 4             # 并发片段数（每片段 = N 次 LLM + 1 次逐帧修复）
 
@@ -33,12 +32,6 @@ DETECT_PROMPT = (
     "只返回 JSON: "
     '{"has_subtitle": true 或 false, "box": [x1,y1,x2,y2] 或 null, "text": "字幕原文"}'
 )
-
-
-def _median(vals: list[float]) -> float:
-    s = sorted(vals)
-    n = len(s)
-    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2.0
 
 
 def _grab_frame(clip: Path, t: float, jp: Path, width: int = DETECT_WIDTH) -> bool:
@@ -120,17 +113,9 @@ def detect_region(llm: LLMClient, clip: Path,
             f"无法定位的字幕答复 {uncertain_positive}；未标记已处理"
         )
 
-    # 中位数聚合：抗单帧位置漂移 / 个别帧把警示条框得偏上或偏下
-    x1, y1 = _median([b[0] for b in boxes]), _median([b[1] for b in boxes])
-    x2, y2 = _median([b[2] for b in boxes]), _median([b[3] for b in boxes])
-
-    # 安全限高：仅当误检把带高撑得过大时才收缩，正常字幕很小不会触发
-    if (y2 - y1) > MAX_H_RATIO:
-        cy = (y1 + y2) / 2.0
-        half = MAX_H_RATIO / 2.0
-        y1 = max(0.0, cy - half)
-        y2 = min(1.0, cy + half)
-    y2 = min(y2, 0.995)
+    # Moving/two-line subtitles must fit every sampled bounding box.
+    x1, y1 = min(b[0] for b in boxes), min(b[1] for b in boxes)
+    x2, y2 = max(b[2] for b in boxes), max(b[3] for b in boxes)
 
     # 高度跟随字幕边界，宽度固定覆盖整个视频。
     pad = PAD_Y * (y2 - y1)
@@ -224,11 +209,21 @@ def _marker(clip: Path) -> Path:
     return clip.with_name(clip.name + ".covered.json")
 
 
+def verified_clip(clip: Path) -> bool:
+    """Legacy markers only prove encoding, not subtitle removal."""
+    try:
+        record = json.loads(_marker(clip).read_text(encoding="utf-8"))
+        return (isinstance(record, dict) and record.get("version") == 2
+                and (record.get("subtitle") is False or record.get("verified") is True))
+    except (OSError, ValueError):
+        return False
+
+
 def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
                  dry_run: bool = False, samples: int = SAMPLES) -> str:
     """处理单个切片，返回状态: covered / nosub / skip / fail / dryrun。"""
     mk = _marker(clip)
-    if mk.exists() and not force:
+    if verified_clip(clip) and not force:
         return "skip"
 
     try:
@@ -242,7 +237,7 @@ def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
         if dry_run:
             log(f"  [无字幕] {clip.name}")
             return "nosub"
-        mk.write_text(json.dumps({"subtitle": False,
+        mk.write_text(json.dumps({"version": 2, "subtitle": False,
                                   "checked_at": datetime.now().isoformat()},
                                  ensure_ascii=False), encoding="utf-8")
         return "nosub"
@@ -254,11 +249,20 @@ def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
         return "dryrun"
     if not cover_clip(clip, (X, Y, BW, BH)):
         return "fail"
-    mk.write_text(json.dumps({"subtitle": True, "region": [X, Y, BW, BH],
+    mk.unlink(missing_ok=True)
+    try:
+        residual = detect_region(llm, clip, min(samples, 3))
+    except (RuntimeError, ValueError, OSError) as exc:
+        log(f"  [字幕复检失败] {clip.name}: {exc}；未标记完成")
+        return "fail"
+    if residual is not None:
+        log(f"  [字幕残留] {clip.name}: 擦除后仍检测到字幕；未标记完成，请重试或检查画面")
+        return "fail"
+    mk.write_text(json.dumps({"version": 2, "subtitle": True, "verified": True, "verified_samples": min(samples, 3), "region": [X, Y, BW, BH],
                               "texts": texts,
                               "covered_at": datetime.now().isoformat()},
                              ensure_ascii=False), encoding="utf-8")
-    log(f"  [已遮盖] {clip.name}: 区域({X},{Y},{BW}x{BH}) "
+    log(f"  [擦除复检通过] {clip.name}: 区域({X},{Y},{BW}x{BH}) "
         f"{' / '.join(dict.fromkeys(texts))[:50]}")
     return "covered"
 
@@ -278,6 +282,7 @@ def collect_clips(paths: list[Path] | None = None) -> list[Path]:
     for bucket in (config.OUT_FACE, config.OUT_NOFACE):
         if not bucket.is_dir():
             continue
+        out += sorted(bucket.glob("*.mp4"))
         for vd in sorted(bucket.iterdir()):
             if vd.is_dir():
                 out += sorted(vd.glob("*.mp4"))

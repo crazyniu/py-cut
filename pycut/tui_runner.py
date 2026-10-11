@@ -17,6 +17,7 @@ import threading
 import time
 
 from . import tui
+from .core.progress import parse
 
 _ROOT = Path(__file__).resolve().parent.parent
 _CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -84,34 +85,66 @@ def _display_command(argv: list[str]) -> str:
 
 
 def _draw(stdscr, argv: list[str], index: int, total: int,
-          history: deque[str], offset: int, status: str) -> None:
+          history: deque[str], offset: int, status: str, progress: dict | None = None, elapsed: float = 0, show_details: bool = False) -> None:
     import curses  # noqa: PLC0415
 
     h, w = stdscr.getmaxyx()
     if tui._small_screen(stdscr):
         return
     stdscr.erase()
-    tui._frame(stdscr, "正在处理" if status == "running" else "处理结果",
-               f"任务 {index}/{total} · {_display_command(argv)}")
+    names = {"slice": "切片", "cover": "字幕擦除", "dedup": "去重", "montage": "混剪"}
+    tui._frame(stdscr, "任务进度" if status in ("running", "stopping") else "处理结果",
+               f"{names.get(argv[0], '视频处理')} · 流程 {index}/{total}")
     color = ("info" if status == "running" else "warn" if status == "stopping"
              else "good" if status == "success" else "bad")
-    status_label = {"running": "● 运行中", "stopping": "■ 正在中断（等待清理）",
-                    "success": "✓ 已完成", "error": "× 执行失败",
-                    "cancelled": "■ 已中断"}.get(status, status)
-    tui._safe_add(stdscr, 5, 2, status_label, w, color, curses.A_BOLD)
-    tui._safe_add(stdscr, 6, 2, "最近日志  /  ↑↓、PgUp、PgDn 滚动", w, "dim")
-    rows = max(1, h - 10)
-    log = list(history)
-    start = max(0, len(log) - rows - offset)
-    for i, line in enumerate(log[start:start + rows]):
-        tui._safe_add(stdscr, 7 + i, 2, line, w, "dim" if line.startswith("  ") else "text")
-    footer = ("X 中止处理 · ↑↓ 滚动 · Ctrl+C 中断"
+    labels = {"running": "运行中", "stopping": "正在停止", "success": "处理完成",
+              "error": "处理失败 · 请查看失败项", "cancelled": "已中断"}
+    tui._safe_add(stdscr, 5, 2, labels.get(status, status) + (f" · 已用时 {int(elapsed // 60)}分{int(elapsed % 60)}秒" if status == "running" else ""), w, color, curses.A_BOLD)
+    states = dict(progress or {})
+    if not progress:
+        for line in history:
+            event = parse(line)
+            if event:
+                states[event["stage"]] = event
+    y = 6
+    for stage, event in list(states.items())[-max(1, min(2 if h < 20 else 5, h - 10)):]:
+        done, count = event.get("completed", 0), event.get("total", 0)
+        percent = f"{done * 100 // count}%" if count else "处理中"
+        bar_width = 8 if w < 80 else 12
+        filled = min(bar_width, done * bar_width // count) if count else 0
+        summary = f"{stage}  [{'█' * filled}{'░' * (bar_width - filled)}] {percent}  {done}/{count}"
+        summary += f"  成功 {event.get('success', 0)} / 失败 {event.get('failed', 0)}"
+        if event.get("skipped"):
+            summary += f" / 跳过 {event['skipped']}"
+        tui._safe_add(stdscr, y, 2, summary, w, "bad" if event.get("failed") else "text")
+        y += 1
+    current = next(reversed(states.values()), {}) if states else {}
+    if y < h - 4:
+        tui._safe_add(stdscr, y, 2, current.get("detail", "正在准备，请稍候…" if status == "running" else "处理已结束，详见结果或错误信息"), w, "info")
+        y += 1
+    if current.get("output") and y < h - 4:
+        tui._safe_add(stdscr, y, 2, "结果目录：" + tui._ellipsize(current["output"], w - 16, tail=True), w, "good")
+        y += 1
+    logs = [line for line in history if not parse(line)]
+    warnings = [line for line in logs if re.search(r"\[(?:[^\]]*(?:失败|错误|警告|残留)|已停止)\]", line)]
+    if warnings and y < h - 4:
+        tui._safe_add(stdscr, y, 2, warnings[-1], w, "bad")
+        y += 1
+    if y < h - 3:
+        tui._safe_add(stdscr, y, 2, "详细日志 · L 展开/收起 · ↑↓ 滚动", w, "dim")
+        rows = max(0, h - y - 4)
+        if not show_details:
+            rows = min(3, rows)
+        start = max(0, len(logs) - rows - offset)
+        for i, line in enumerate(logs[start:start + rows]):
+            tui._safe_add(stdscr, y + 1 + i, 2, line, w, "dim")
+    footer = ("L 详细日志 · X 中止 · Ctrl+C 中断"
               if status == "running" else
               "正在等待子进程安全停止…" if status == "stopping" else
-              "Enter/Esc 返回主菜单 · Q 退出 · ↑↓ 滚动")
-    compact = ("X中断  ↑↓滚动  Ctrl+C取消" if status == "running" else
+              "Enter/Esc 返回主菜单 · L 详细日志 · Q 退出")
+    compact = ("L日志  X中断  Ctrl+C取消" if status == "running" else
                "等待任务停止…" if status == "stopping" else
-               "Enter主菜单  Esc返回  Q退出  ↑↓滚动")
+               "Enter主菜单  L日志  Q退出")
     tui._footer(stdscr, footer, compact)
     stdscr.refresh()
 
@@ -152,6 +185,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8",
             errors="replace", bufsize=1, start_new_session=(os.name != "nt"),
+            env={**os.environ, "PYCUT_PROGRESS": "1"},
         )
     except OSError as e:
         history.append(_safe_log_line(f"[无法启动] {type(e).__name__}: {e}", argv))
@@ -178,7 +212,10 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
 
     reader = threading.Thread(target=_reader, daemon=True)
     reader.start()
+    started_at = time.monotonic()
+    progress = {event["stage"]: event for line in history if (event := parse(line))}
     offset = 0
+    show_details = False
     interrupted_at: float | None = None
     last_error = 0
     stdscr.timeout(120)
@@ -186,7 +223,13 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
         while True:
             while True:
                 try:
-                    history.append(events.get_nowait())
+                    line = events.get_nowait()
+                    event = parse(line)
+                    if event:
+                        progress.pop(event["stage"], None)
+                        progress[event["stage"]] = event
+                    else:
+                        history.append(line)
                 except queue.Empty:
                     break
             rc = proc.poll()
@@ -196,7 +239,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
                     history.append(message)
                 break
             _draw(stdscr, argv, index, total, history, offset,
-                  "stopping" if interrupted_at is not None else "running")
+                  "stopping" if interrupted_at is not None else "running", progress, time.monotonic() - started_at, show_details)
             try:
                 k = stdscr.getch()
             except KeyboardInterrupt:
@@ -205,6 +248,8 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
                 interrupted_at = time.monotonic()
                 history.append("[用户中断] 正在请求当前任务停止…")
                 _interrupt(proc)
+            elif k in (ord("l"), ord("L")):
+                show_details = not show_details
             elif k in (ord("k"), 259):
                 offset = min(max(0, len(history) - 1), offset + 1)
             elif k in (ord("j"), 258):
@@ -222,7 +267,13 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
         reader.join(timeout=0.3)
         while True:
             try:
-                history.append(events.get_nowait())
+                line = events.get_nowait()
+                event = parse(line)
+                if event:
+                    progress.pop(event["stage"], None)
+                    progress[event["stage"]] = event
+                else:
+                    history.append(line)
             except queue.Empty:
                 break
     finally:
@@ -230,6 +281,10 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
         if proc.poll() is None:
             _terminate(proc, force=True)
             proc.wait(timeout=5)
+    from .core.progress import PREFIX
+    import json
+    for event in progress.values():
+        history.append(PREFIX + json.dumps(event, ensure_ascii=False))
     if interrupted_at is not None:
         return 130, True
     return last_error, False
@@ -247,7 +302,7 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
     for i, argv in enumerate(argv_list, 1):
         last_argv = argv
         executed = i
-        history.append(f"━━ 任务 {i}/{len(argv_list)}：{_display_command(argv)} ━━")
+        history.append(f"━━ 任务 {i}/{len(argv_list)}：{argv[0]} ━━")
         code, cancelled = _run_one(stdscr, argv, i, len(argv_list), history)
         if cancelled and not code:
             code = 130
@@ -263,9 +318,10 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
         f"跳过 {len(argv_list) - executed} 项 · 退出码 {code}"
     )
     offset = 0
+    show_details = False
     stdscr.timeout(-1)
     while True:
-        _draw(stdscr, last_argv, executed, len(argv_list), history, offset, status)
+        _draw(stdscr, last_argv, executed, len(argv_list), history, offset, status, show_details=show_details)
         try:
             k = stdscr.getch()
         except KeyboardInterrupt:
@@ -274,6 +330,8 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
             return code, False
         if k in (ord("q"), ord("Q")):
             return code, True
+        if k in (ord("l"), ord("L")):
+            show_details = not show_details
         if k in (ord("k"), 259, 339):
             offset = min(max(0, len(history) - 1), offset + (12 if k == 339 else 1))
         if k in (ord("j"), 258, 338):

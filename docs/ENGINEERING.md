@@ -1,7 +1,7 @@
-# 工程限制与验证记录
+# 工程边界与验证规范
 
 > 本文件只记录长期有效的技术限制、产品设计参数与可复现经验，**不管理 Bug、Todo 或开发进度**。
-> 未完成工作、负责人及交付状态统一查看 [GitHub Issues](https://github.com/natefox2017/py-cut/issues)；TUI 专项见 [#1](https://github.com/natefox2017/py-cut/issues/1)，扩展能力见 [#19](https://github.com/natefox2017/py-cut/issues/19)。
+> 未完成工作、负责人及交付状态统一查看 [Linear 项目](https://linear.app/gengyun/project/py-cut-development-963524cf0d78)；历史 GitHub Issues 仅作溯源，不证明功能实现。
 > 长期需求见 [DEDUP.md](DEDUP.md)、[MONTAGE.md](MONTAGE.md)、[ROADMAP.md](ROADMAP.md)；当前功能以最新 main 代码为准。
 
 ---
@@ -12,12 +12,12 @@
 
 去重涉及容器、几何、像素、时间、结构、音频、水印、文本八类能力。
 这些是 [DEDUP.md §3](DEDUP.md) 的设计需求，**不能把功能地图当作已实现列表**。
-源代码以 pycut/core/dedup.py、dedup_presets.py 与 fingerprint.py 为准；未完成的独立能力均在 [#19](https://github.com/natefox2017/py-cut/issues/19) 下跟踪。
+源代码以 pycut/core/dedup.py、dedup_presets.py 与 fingerprint.py 为准；实现与验收按真实代码和 Linear 核对。
 梯形透视变形目前禁用，不得未经画面验证自行恢复。
 ### 1.2 去重：self-check 指标的固有局限
 
 - **pHash 测不出 M3 像素层和 M7 暗水印破坏的效果**。pHash 只取 DCT 8×8 低频 64 bit，
-  而 `noise` / `unsharp` 作用在高频与频域水印系数上。实测单加噪 `alls=4` 的 pHash 距离
+  而 `noise` / `unsharp` 改变高频像素，但是否影响具体水印必须由提取器独立验证。实测单加噪 `alls=4` 的 pHash 距离
   仅 0.4~0.6，与"仅重编码"（0.33）几乎相同。
   → **不要因为 pHash 没动就认为参数无效**，两者目标函数不同。
 - **PSNR 不是画质指标**。几何改动必然让逐像素对齐崩溃，PSNR 掉到 12~25dB 属正常，
@@ -50,9 +50,7 @@
 
 ### 1.7 混剪：素材库横屏混入了
 
-`/Volumes/Lexar/DevStorage/剪辑/片段` 递归 509 个文件里**只有 182 条竖屏**，
-其余 228 条是 1920×1080 / 3840×2160。已按侧边比（`MONTAGE_MAX_SIDE_RATIO=1.40`）默认排除。
-另实测库里有**54 组逐字节相同的重复文件**（160 个冗余），已做内容级去重。
+素材库可能混入横屏与重复文件；默认按侧边比 `MONTAGE_MAX_SIDE_RATIO=1.40` 排除横屏，内容指纹去重降低重复取用。实际容量必须探测，不从历史素材数量推断。
 
 ### 1.8 TUI 为引导式向导，部分高级参数仅命令行可用
 
@@ -66,8 +64,8 @@ TUI 走「读取 Web/.env 配置 → 报视频数 → 选开关 → 确认执行
 
 | # | 事项 | 现状 | 选项 |
 |---|---|---|---|
-1 | 字幕贴纸素材 | 鼠类开源图 | 换成产品图（放 `~/Desktop/混剪_贴纸/`） |
-2 | 贴纸密度 | `--sticker-chance` 默认 0.65（48 段命中约 28 段） | 嫌稀疏调到 0.9 |
+1 | 在线贴纸素材 | 默认当次下载 Twemoji，记录 CC BY 4.0 来源 | `--sticker-dir` 指定本地 PNG |
+2 | 贴纸密度 | `--sticker-chance` 默认 0.65 | 嫌稀疏调到 0.9 |
 3 | 画中画覆盖率 | 连续模式要求覆盖完整成片，素材不足拒绝发布 | `--pip-gap` 可显式改为留空档 |
 4 | 去重 pHash 门槛 | 分档 light 1.0 / standard 1.4 / aggressive 1.6 | 换素材若频繁误判可再放宽 |
 5 | 混剪是否保留音轨 | 默认保留基准原声 | `--no-audio` 可产出静音片 |
@@ -100,7 +98,7 @@ TUI 走「读取 Web/.env 配置 → 报视频数 → 选开关 → 确认执行
   改为两阶段：每段双 seek 精确截取 → 统一规格 → 再 concat。
 - **setpts 加速会让段长不足**，成片总时长被拉短。要从源素材按 `take × speed` 取更久再压缩。
 - **加速前先算好取用时长**；加速与镜像的开关传默认值时不改变原行为（向后兼容）。
-- `geq` 里做羽化，两个方向要**平均**不是连乘（连乘会把主体压到近乎全透明，见 1.x 记忆）。
+- `geq` 里做羽化，两个方向要**平均**不是连乘（连乘会把主体压到近乎全透明）。
 - `drawbox` 不认 `W`/`H` 常量，只有 `iw`/`ih`。
 
 ### 自检（fingerprint）
@@ -112,6 +110,6 @@ TUI 走「读取 Web/.env 配置 → 报视频数 → 选开关 → 确认执行
 ## 四、资料维护边界
 
 - 算法约束、授权素材复现实验、环境差异与长期设计决策可写在技术文档中。
-- 功能的实际实施状态、Bug、Todo、测试任务、负责人、PR 与验收一律在 GitHub Issues 记录，不能在 Markdown 复制第二份清单。
+- 功能的实际实施状态、Bug、Todo、测试任务、负责人、PR 与验收一律在 Linear 记录，不能在 Markdown 复制第二份清单。
 - 未保留可重复运行的测试素材、命令和版本信息的历史数字仅供研究参考，不能直接作为新门槛。
-- 需求索引见 [#19](https://github.com/natefox2017/py-cut/issues/19)，迁移工作关联 [#11](https://github.com/natefox2017/py-cut/issues/11)。
+- 产品设计见 ROADMAP.md 与 DEDUP.md；实际能力须从命令帮助、源码和对应验收证据核对。

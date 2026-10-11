@@ -1,11 +1,12 @@
 """slice 命令：短视频智能切片 + 人脸分流 + 字幕擦除。
 
 这是当前已落地的主要功能。其它功能（混剪/转场/查重）作为独立命令挂载，
-但都复用本模块产出的切片桶（桌面 切片_有人脸 / 切片_无人脸）。
+但都复用本模块产出的切片桶（源目录同级 切片/有人脸 / 切片/无人脸）。
 """
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 import unicodedata
@@ -18,6 +19,7 @@ from ..core.llm import make_llm
 from ..core.runtime import install_signal_handlers, reset_stop
 from ..core.slice_pipeline import (Manifest, SliceOptions, list_videos,
                                     process_video)
+from ..core.progress import progress
 from ..core.utils import fmt_bytes, fmt_dur, log
 
 
@@ -46,11 +48,11 @@ def register(subparsers) -> None:
     p.add_argument("--llm-url", default=None, help="LLM 网关地址（覆盖预设）")
     p.add_argument("--llm-key", default=None, help="LLM API Key（覆盖预设）")
     p.add_argument("--llm-model", default=None, help="LLM 模型名（覆盖预设）")
-    g = p.add_argument_group("目录（可选，覆盖默认桌面切片桶）")
+    g = p.add_argument_group("目录（可选，覆盖默认同级切片目录）")
     g.add_argument("--src-dir", default="",
                    help="源视频目录（默认 config.SRC_DIR，递归扫描子目录 mp4）")
     g.add_argument("--out-dir", default="",
-                   help="切片输出根目录（下建 有人脸/无人脸 子目录，默认桌面）")
+                   help="切片输出根目录（下建 有人脸/无人脸 子目录，默认源目录同级的切片）")
     p.set_defaults(func=run)
 
 
@@ -106,14 +108,17 @@ def run(args: argparse.Namespace) -> int:
     install_signal_handlers()
     reset_stop()
 
-    # 运行时覆盖目录常量（不传参时保持默认桌面切片桶，不影响其它用法）
+    # 输出到源目录同级；显式 --out-dir 优先。
     if args.src_dir:
         config.SRC_DIR = Path(args.src_dir).expanduser()
-    if args.out_dir:
-        od = Path(args.out_dir).expanduser()
-        config.OUT_FACE = od / "有人脸"
-        config.OUT_NOFACE = od / "无人脸"
-        config.OUT_MANIFEST = od / "清单"
+    from ..core.output_paths import sibling
+    source_dir = (Path(args.file).expanduser().parent
+                  if args.file and _is_explicit_file(args.file) else config.SRC_DIR)
+    od = (Path(args.out_dir).expanduser() if args.out_dir else
+          config.CLIP_DIR if os.environ.get("PYCUT_CLIP_DIR") else sibling(source_dir, "切片"))
+    config.OUT_FACE = od / "有人脸"
+    config.OUT_NOFACE = od / "无人脸"
+    config.OUT_MANIFEST = od / "清单"
 
     t_all = time.time()
     # 直接指定单文件时不要求默认 SRC_DIR 存在；其他 ffmpeg/cv2/磁盘自检照常执行。
@@ -143,6 +148,10 @@ def run(args: argparse.Namespace) -> int:
     if args.no_llm:
         log("[LLM] 已通过 --no-llm 禁用")
 
+    if not args.no_sub and not args.dry_run and not llm.enabled:
+        log("[错误] 已选择字幕擦除，但 LLM 未启用或未配置；请配置网关，或明确关闭字幕擦除")
+        return 2
+
     opts = SliceOptions(
         force=args.force, dry_run=args.dry_run, no_llm=args.no_llm,
         no_sub=args.no_sub, scene_th=args.scene_th, min_seg=args.min_seg,
@@ -158,6 +167,7 @@ def run(args: argparse.Namespace) -> int:
             if _stopped():
                 log("[中断] 停止处理后续视频")
                 break
+            progress("源视频", idx - 1, len(files), detail="检测镜头并处理当前视频")
             log(f"--- [{idx}/{len(files)}] {f.name}")
             info: VideoInfo | None = probe_video(f)
             if info is None:
@@ -173,6 +183,7 @@ def run(args: argparse.Namespace) -> int:
             t_detect += r.detect_s
             t_enc += r.enc_s
             results.append(r)
+            progress("源视频", idx, len(files), success=sum(not (r.failed or r.sub_fail) for r in results), failed=sum(bool(r.failed or r.sub_fail) for r in results), detail=("字幕擦除失败，此批切片尚未完成" if r.sub_fail else "切片流程已处理的源视频"), output=str(config.OUT_FACE.parent))
     finally:
         manifest.close()
 

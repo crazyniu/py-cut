@@ -113,6 +113,7 @@ class TUIRegression(unittest.TestCase):
         self.assertTrue(slice_args.out_dir)
         self.assertEqual(dedup_args.src_dir, slice_args.out_dir)
         self.assertFalse(dedup_args.all)
+        self.assertTrue(dedup_args.force)
 
     def test_scan_max_depth_ignores_deep_and_hidden_files(self):
         with tempfile.TemporaryDirectory() as tmp:

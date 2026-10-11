@@ -1,6 +1,6 @@
 # dedup —— 视频去重需求与技术方案
 
-> 本文仅记录长期需求、架构与已知技术边界，实时任务/问题/验收由 [GitHub Issues #19](https://github.com/natefox2017/py-cut/issues/19) 跟踪，不在此记录开发状态。
+> 本文仅记录长期需求、架构与已知技术边界，实时任务/问题/验收由 [Linear 项目](https://linear.app/gengyun/project/py-cut-development-963524cf0d78) 跟踪，不在此记录开发状态。
 > 定位：一个**独立子命令**，对已有视频/切片做技术层扰动，降低被抖音、视频号等平台
 > 判为「重复内容」而被限流/降权的概率。
 > 本文是所有去重相关技术方案的**唯一汇总处**，开发时按本文落地。
@@ -11,7 +11,7 @@
 
 | 项 | 说明 |
 |---|---|
-| 输入 | 单个视频 / 一个切片 / 整个切片桶目录（`切片_有人脸`、`切片_无人脸`） |
+| 输入 | 单个视频 / 一个切片 / 整个切片桶目录（`切片/有人脸`、`切片/无人脸`） |
 | 输出 | 去重后的视频（原地或新目录）+ **处理报告 JSON**（每条用了哪些参数、自检结果） |
 | 不改 | 文案语义（去重只做画面/音频/容器技术层，不重写口播内容） |
 | 不承诺 | **任何方案都不能保证 100% 过审**。平台模型持续升级，本文方案是「降低相似度」，不是「绕过」 |
@@ -87,7 +87,7 @@
 | RGB 通道微偏 | `colorchannelmixer` 对角 0.99~1.01 | 破颜色直方图 |
 | 色度偏移 | `chromashift` 1~2px | 轻微彩边，别过头 |
 | 曲线微调 | `curves` 轻 S 曲线 | 优于单纯亮度 |
-| 加微噪 | `noise=alls=3~6:allf=t` | **同时对暗水印的频域系数有破坏作用** |
+| 加微噪 | `noise=alls=3~6:allf=t` | 改变高频像素，暗水印效果须独立验证 |
 | 微锐化 / 极轻模糊 | `unsharp` 或 `gblur=sigma=0.3`（二选一，别叠加） | 改变高频特征 |
 | 全局像素微扰 | `blend` / `geq` / `maskfun` 做 ±1~2 的数值偏移 | 低成本，配合其它项 |
 
@@ -234,7 +234,7 @@ PSNR 掉到 13~25dB 属正常，画面观感没问题（已抽帧人工确认）
 
 > ⚠️ **noise 对 pHash 几乎无贡献**（实测单独加噪只带来 0.4~0.6 距离），
 > 因为 pHash 只看 DCT 低频 8×8 的 64 bit，感知哈希对高频像素噪声不敏感。
-> 但加噪对**破坏暗水印的频域系数**仍有价值，所以 M3 里保留，只是别指望它提升 pHash。
+> 加噪保留为像素扰动，但未验证任何具体暗水印提取失败；不要把它当作移除证明。
 
 ### ⚠️ 已停用：梯形微变形（perspective）
 
@@ -252,7 +252,7 @@ PSNR 掉到 13~25dB 属正常，画面观感没问题（已抽帧人工确认）
 
 ```bash
 # 对单个切片去重（标准档）
-./run.sh dedup --file "切片_有人脸/xxx/001.mp4" --preset standard
+./run.sh dedup --file "切片/有人脸/xxx_1.mp4" --preset standard
 
 # 对整个桶去重 + 出报告
 ./run.sh dedup --all --preset aggressive
@@ -268,7 +268,7 @@ PSNR 掉到 13~25dB 属正常，画面观感没问题（已抽帧人工确认）
 
 TUI 中（引导式向导）：选目录 → 报视频数 → 确认执行；处理范围、档位、
 出报告、只自检等选项通过向导确认页的开关切换。
-- 与现有命令的关系：`slice` 出切片 →（未来 `montage` 混剪，结构性改动）→
+- 与现有命令的关系：`slice` 出切片 →（`montage` 混剪，结构性改动）→
   `dedup` 技术层扰动 → 发布。`dedup` 直接消费切片桶，不重新切片。
 
 ---
@@ -281,7 +281,7 @@ pycut/
 │   ├── dedup.py            # 编排：读档位 → 生成参数 → 构造滤镜链 → 编码 → 报告
 │   ├── dedup_presets.py    # 档位定义 + 按 seed 随机化参数
 │   ├── fingerprint.py      # pHash / PSNR 自检（与 dedup 解耦，也可独立用）
-│   └── watermark.py        # 可见水印(delogo/removelogo/掩膜) + 暗水印破坏
+│   └── dedup_audio.py      # 可选授权音轨编辑
 ├── commands/dedup_cmd.py   # 命令实现（register/run）
 └── config.py               # 新增 DEDUP_* 常量（档位阈值、门禁阈值、并发）
 ```
@@ -294,18 +294,18 @@ pycut/
 ## 9. 能力设计边界和需求引用
 
 第 3 节的八大模块是产品目标，不代表已实现或已验收。命令行为必须以代码为准；
-具体交付计划、负责人、Todo、PR 和测试状态只在 [GitHub Issues](https://github.com/natefox2017/py-cut/issues) 中维护。
+具体交付计划、负责人、Todo、PR 和测试状态只在 [Linear 项目](https://linear.app/gengyun/project/py-cut-development-963524cf0d78) 中维护。
 
 ### 技术契约
 
-- **M1 容器**：新增码率变化必须保留原有 CRF 默认；按 seed 可复现，不应降低成片完整性。实现需求 [#21](https://github.com/natefox2017/py-cut/issues/21)。
-- **M2 几何**：动态 Ken Burns 应保持正确画幅，透视变形仍禁用；需求 [#22](https://github.com/natefox2017/py-cut/issues/22)。
-- **M4 时间**：抽帧、重排、倒放需处理时间戳、时长、音轨同步；需求 [#23](https://github.com/natefox2017/py-cut/issues/23)。
-- **M5 结构**：xfade/分屏/片头片尾需对输入段、时长、失败回滚有明确规则；需求 [#24](https://github.com/natefox2017/py-cut/issues/24)。
-- **M6 音频**：新 BGM、环境音与用户配音须按明确的输入授权和流映射规则工作；需求 [#25](https://github.com/natefox2017/py-cut/issues/25)。
-- **M7 水印**：可见 mask 修复需验证滤镜与素材授权 [#26](https://github.com/natefox2017/py-cut/issues/26)；暗水印先做可重复、可检测的研究 [#27](https://github.com/natefox2017/py-cut/issues/27)，不得直接保证效果。
-- **M8 文本**：OCR/ASR 的改写候选必须带来源和人工审核，需求 [#30](https://github.com/natefox2017/py-cut/issues/30)。
-- **自检/配置**：可选 VMAF 质量门禁与合法值标定 [#31](https://github.com/natefox2017/py-cut/issues/31)；多账号本地配置的优先级与安全边界 [#32](https://github.com/natefox2017/py-cut/issues/32)。
+- **M1 容器**：新增码率变化必须保留原有 CRF 默认；按 seed 可复现，不应降低成片完整性。参数入口 `--vary-bitrate`。
+- **M2 几何**：动态 Ken Burns 应保持正确画幅，透视变形仍禁用；参数入口 `--ken-burns`。
+- **M4 时间**：抽帧、重排、倒放需处理时间戳、时长、音轨同步；属于设计范围，不据此假定当前命令已有重排/倒放开关。
+- **M5 结构**：xfade/分屏/片头片尾需对输入段、时长、失败回滚有明确规则；混剪现有转场见 MONTAGE.md。
+- **M6 音频**：新 BGM、环境音与用户配音须按明确的输入授权和流映射规则工作；现有音轨编辑接口见 [DEDUP_AUDIO.md](DEDUP_AUDIO.md)。
+- **M7 水印**：当前可见区域仅显式 `--delogo` 矩形；不存在通用外部 mask 模块，暗水印处理必须有可重复的嵌入/提取 oracle，不保证移除。
+- **M8 文本**：OCR/ASR 改写候选的设计要求是来源与人工审核；当前没有通用 content_review 命令，不把设计当实现。
+- **自检/配置**：`core/quality_vmaf.py` 为显式可选自检，不能把低分自动回退当作已有默认行为；本地账号 JSON 优先级与安全边界见 [DEDUP_PROFILES.md](DEDUP_PROFILES.md)。
 
 现有滤镜实现的接口与相互依赖需通过 `pycut/core/dedup.py`、
 `pycut/core/dedup_presets.py`、`pycut/core/fingerprint.py` 与真实 ffmpeg 探测核对，

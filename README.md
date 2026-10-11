@@ -7,7 +7,7 @@
 | 命令 | 做什么 | 产物位置 |
 |---|---|---|
 `slice` | 把长视频切成多段，分流有人脸/无人脸，擦除字幕 | `.env` 的背景切片目录（按人脸分桶） |
-`cover` | 只重跑字幕擦除 | 同上（幂等，靠 `.covered.json` 标记） |
+`cover` | 只重跑字幕擦除 | 源目录同级 `字幕查重/`，保留源文件 |
 `dedup` | 调整视频画面，降低相似度 | 成片输出目录下 `去重/` |
 `montage` | 组合片段生成新视频，可批量裂变 | 成片输出目录下 `混剪/` |
 
@@ -17,7 +17,7 @@
 pycut/
 ├── pycut.py                # 统一入口（命令行 + TUI）
 ├── run.sh                  # 一键脚本：选解释器 → 装依赖 → 读 .env → 运行
-├── requirements.txt        # 依赖（仅 numpy + opencv-python）
+├── requirements.txt        # 依赖（numpy/OpenCV、Textual 目录组件、Windows curses）
 ├── pyproject.toml          # 包元数据
 ├── .env / .env.example     # 目录、密钥与网关配置（.env 已 gitignore）
 ├── .gitignore
@@ -25,9 +25,9 @@ pycut/
 ├── README.md               # 本文件
 ├── docs/
 │   ├── ROADMAP.md          # 产品能力与演进设计（不跟踪开发状态）
-│   ├── MONTAGE.md          # 混剪需求 + 素材实测 + 方案
+│   ├── MONTAGE.md          # 混剪需求 + 处理契约 + 方案
 │   ├── DEDUP.md            # 去重需求 + 8 大模块 + 实测标定
-│   └── ISSUES.md           # 工程限制与验证记录（不管理 Bug/Todo）
+│   └── ENGINEERING.md      # 工程限制与验证记录（不管理 Bug/Todo）
 ├── pycut/                  # 主包
 │   ├── cli.py              # 命令注册表 + 路由
 │   ├── tui.py              # 终端 TUI（导航 / 引导式处理向导）
@@ -79,7 +79,7 @@ pycut/
 
 Windows 在 CMD 中使用 `run.cmd`（无参数进入 TUI），例如 `run.cmd slice --file example.mp4`。脚本检查 Python、OpenCV、终端组件及 ffmpeg/ffprobe；缺少 Python 或 FFmpeg 时通过 winget 安装，Python 依赖按 `requirements.txt` 安装，包含 `windows-curses`。安装后刷新 PATH 并复检，失败停止启动；缺少 winget 时需先安装 Microsoft App Installer。脚本不会显示密钥，CLI 退出码原样返回。Windows 脚本需在真实 Windows 环境验收，Linux 上的静态检查不能替代运行验证。
 
-启动安装脚本目前仅支持 Linux 和 macOS，Windows 暂不处理。启动时检查 ffmpeg/ffprobe 能否运行，缺少时自动用系统包管理器安装 FFmpeg，并在安装后重新检查。macOS 使用 Homebrew；Linux 支持 apt、dnf、yum、pacman、zypper 和 apk，普通用户安装系统包时会使用 sudo。Python 缺失时也尝试安装。系统 Python 限制全局 pip 安装时，自动使用项目 `.venv`；依赖齐全时直接启动。安装失败或无可用安装器会明确报错并停止。`PYCUT_FFMPEG` / `PYCUT_FFPROBE` 自定义路径必须有效。
+`run.sh` 负责 Linux 和 macOS，Windows 使用上述 `run.cmd`。启动时检查 ffmpeg/ffprobe 能否运行，缺少时自动用系统包管理器安装 FFmpeg，并在安装后重新检查。macOS 使用 Homebrew；Linux 支持 apt、dnf、yum、pacman、zypper 和 apk，普通用户安装系统包时会使用 sudo。Python 缺失时也尝试安装。系统 Python 限制全局 pip 安装时，自动使用项目 `.venv`；依赖齐全时直接启动。安装失败或无可用安装器会明确报错并停止。`PYCUT_FFMPEG` / `PYCUT_FFPROBE` 自定义路径必须有效。
 
 ### 各功能常用命令
 
@@ -214,18 +214,22 @@ cp .env.example .env
 1. **场景分段**：ffmpeg `scene` 分数检测切点，过短段合并（≥2s），超长段切分。
 2. **人脸分流**：Haar 快速分筛，仅 ambiguous 段送 LLM 兜底；按「有人脸 / 无人脸」
    分目录落盘（`有人脸/`、`无人脸/`）。
-3. **字幕遮盖**：LLM 定位字幕上下边界 → 按字幕高度增加少量余量 → 由 FFmpeg 直接覆盖视频全宽的矩形马赛克，避免整帧传回 Python；区域外像素不参与马赛克，音轨直接保留。幂等，标记 `<切片>.covered.json`。旧版已处理视频仍跳过；需要改为矩形马赛克时请对原始素材重做或显式 `--force`。
+3. **字幕遮盖**：LLM 定位字幕上下边界 → 按字幕高度增加少量余量 → 由 FFmpeg 直接覆盖视频全宽的矩形马赛克，避免整帧传回 Python；区域外像素不参与马赛克，音轨直接保留。幂等，标记 `<切片>.covered.json`。遮盖后抽帧复检，仅认可 version=2 的完成标记；旧标记须重做。
 
 清单：成片输出目录下 `切片_清单/切片清单_<时间戳>.csv`（utf-8-sig）+ `.json`。
 
 ## 扩展能力与需求文档
 
-长期产品需求见 [docs/ROADMAP.md](docs/ROADMAP.md)：段间转场、去重增强、AI 级字幕修复及 ASR 语义选片；具体任务统一引用 [GitHub Issues #19](https://github.com/natefox2017/py-cut/issues/19)，不在 Markdown 跟踪 Todo、负责人或进度。工程技术限制与复现记录见 [docs/ISSUES.md](docs/ISSUES.md)。
+长期产品需求见 [docs/ROADMAP.md](docs/ROADMAP.md)：段间转场、去重增强、AI 级字幕修复及 ASR 语义选片；任务、Bug、测试、负责人和验收统一使用 [Linear 项目](https://linear.app/gengyun/project/py-cut-development-963524cf0d78)，不在 Markdown 跟踪 Todo、负责人或进度。工程技术限制与复现记录见 [docs/ENGINEERING.md](docs/ENGINEERING.md)。
 已实现的三大功能（切片 / 去重 / 混剪）详见各文档：
 去重需求与实测标定见 [docs/DEDUP.md](docs/DEDUP.md)，
 混剪五步流程见 [docs/MONTAGE.md](docs/MONTAGE.md)。
 
 ## 给协作者
+
+任务从 [Linear 项目](https://linear.app/gengyun/project/py-cut-development-963524cf0d78) 查找和领取，先读 [AGENTS.md](AGENTS.md)。GitHub 只管理代码、PR、Review、CI 和合并；历史 Issues 不再用于领取，不启用 Issues Sync。Markdown 仅记录长期知识。
+
+普通 PR 使用必要轻量 CI；完整合成媒体回归手动运行 Actions 的 `TUI regression`（`workflow_dispatch` 即完整合成媒体模式）。发布、重要接口/架构或安全变更，以及明确要求全量测试时，执行对应完整验证；不得绕过必需检查。
 
 使用启动器输出的 Python 解释器运行 `-m pytest tests/ -q`。普通回归不访问真实 LLM；`tests/test_llm_safety.py` 使用模拟响应检查解析、重试和主网关模式。真实媒体检查需设置 `PYCUT_TEST_MEDIA=1`，并在 `materials/source` 放置测试 MP4；模拟通过不能代替真实模型识别准确率验证。
 
@@ -240,3 +244,30 @@ python3 tools/verify.py --video example.mp4 --source-dir materials/source \
 
 改代码前先读 **AGENTS.md**。新增功能 = 在 `pycut/commands/` 加一个命令模块并在
 `cli.py` 的 `COMMANDS` 注册表登记；复用 `pycut/core/` 的成熟能力，不要在命令层重复造轮子。
+
+### 输入与输出目录约定
+
+混剪向导依次选择 **爆款素材目录、切片目录、画中画目录**，再选择爆款视频及各自生成数量。输出无需另选目录；日期按运行机器本地时间生成。
+
+```text
+工作目录/
+├── 源视频/
+├── 切片/
+│   ├── 有人脸/原文件名_1.mp4
+│   ├── 无人脸/原文件名_2.mp4
+│   └── 清单/
+├── 字幕查重/有人脸/原文件名_1.mp4
+├── 去重/有人脸/原文件名_1.mp4
+├── 爆款素材/爆款文件名.mp4
+└── 混剪/MMDD/爆款文件名_1.mp4
+```
+
+切片不再按视频名称建子目录。字幕擦除和去重保留输入中的有人脸／无人脸分组及已有 `_n` 编号；未分组的输入平铺到输出根目录，未编号的文件追加 `_1`。同名输出冲突会在处理前报错。`--out-dir` 仍可覆盖默认位置，去重只有显式 `--in-place` 才覆盖源文件。
+
+主页面使用单一醒目的 PYCUT 字标；顶部只显示标识和版本，功能说明留在菜单，当前流程及键盘用法集中在底部，不重复显示。小窗口自动使用紧凑字标，至少支持 60×14 终端。
+
+### 视频任务进度与结果
+
+处理页优先显示当前流程、阶段进度、通过/失败/跳过数量、耗时和结果目录，详细文件日志默认仅显示最近三行，按 L 展开/收起。切片先编码，再检测、修复及抽帧复检字幕；未完成字幕阶段的切片不是最终处理结果。选择后继去重时，字幕处理失败会阻断去重；切片向导的后继去重会刷新本次源视频的成品，避免修复字幕后继续复用旧文件。去重结果位于同级 `去重/`，界面显示实际 pHash/PSNR 自检与是否跳过，不把旧产物当作本次新处理。
+
+字幕区域按采样帧并集合并，避免漏掉位置变化的文字。修复成品仍检出字幕或复检失败时返回失败，不写新版完成标记；旧版未复检标记会重新处理。复检是抽帧检测，不代表逐帧 OCR；艺术字等经典修复算法的限制仍见技术文档。

@@ -20,6 +20,7 @@ from pathlib import Path
 from .. import config
 from ..core.ffmpeg import self_check
 from ..core.runtime import STOP, install_signal_handlers, reset_stop
+from ..core.progress import progress
 from ..core.utils import fmt_dur, log
 
 
@@ -37,7 +38,7 @@ def register(subparsers) -> None:
     g.add_argument("--dedup-dir", default="",
                    help=f"步骤C 画中画素材目录（默认 {config.MONTAGE_DEDUP_DIR}）")
     g.add_argument("--out-dir", default="",
-                   help=f"最终成片输出目录（默认 {config.MONTAGE_OUT}；TUI 混剪默认桌面 out）")
+                   help=f"最终成片输出目录（默认 .env 输出目录；未配置时使用爆款目录同级混剪/MMDD）")
     g.add_argument("--intro-dir", default=None, help="前贴目录（默认读取 .env；空字符串禁用）")
     g.add_argument("--fission", type=int, default=1,
                    help="每支爆款视频裂变生成几支成片（每支随机选片/扰动不同、话术相同）")
@@ -211,7 +212,9 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     source = Path(args.source).expanduser() if args.source else config.MONTAGE_SRC
     clip_dir = Path(args.clip_dir).expanduser() if args.clip_dir else config.MONTAGE_CLIP_DIR
     dedup_dir = Path(args.dedup_dir).expanduser() if args.dedup_dir else config.MONTAGE_DEDUP_DIR
-    out_dir = Path(args.out_dir).expanduser() if args.out_dir else config.MONTAGE_OUT
+    from ..core.output_paths import montage_output
+    out_dir = (Path(args.out_dir).expanduser() if args.out_dir else
+               config.MONTAGE_OUT if os.environ.get("PYCUT_OUTPUT_DIR") else montage_output(source.parent))
 
     # --probe 只检查片段库，不需要基准视频、字幕或已有成片。
     if args.probe:
@@ -244,6 +247,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
 
     opts = montage_pipeline.MontageOptions(
         prepared=prepared,
+        out_name=f"{source.stem}_1.mp4",
         step=args.step,
         intro_dir=(Path(args.intro_dir).expanduser() if args.intro_dir else
                    config.INTRO_DIR if args.intro_dir is None and os.environ.get("PYCUT_INTRO_DIR") else None),
@@ -281,6 +285,9 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     if STOP.flag:
         log("[中断] 已取消混剪，未启动处理（退出码 130）")
         return 130
+    progress_stage = "基准分析" if args.step == "a" else "裂变生成"
+    progress_total = 1 if args.step == "a" else args.fission
+    progress(progress_stage, 0, progress_total, detail="分析参考素材" if args.step == "a" else "每条成片独立选片与扰动")
     result = montage_pipeline.run_pipeline(opts)
     if STOP.flag:
         log("[中断] 混剪任务已取消，不执行后续裂变（退出码 130）")
@@ -289,8 +296,11 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     # run_pipeline 负责实际产物完整性检查；这里防止异常结果字典漏报 error。
     if result.get("error") or (args.step != "a" and not result.get("final")):
         reason = result.get("error") or "处理结果缺少成片路径"
+        progress(progress_stage, 1, progress_total, failed=1, detail="当前任务失败，停止后续处理")
         log(f"[失败] 混剪未完成：{reason}")
         return 2
+
+    progress(progress_stage, 1, progress_total, success=1, detail="基准分析完成" if args.step == "a" else "首条成片已生成", output="" if args.step == "a" else str(out_dir))
 
     # ---------------- 批量裂变 ----------------
     # --fission N 表示「每支爆款视频出 N 支不同成片」。首支已由上面那次跑出
@@ -308,7 +318,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
             log("")
             log(f"--- 裂变 {i}/{fission}（同一爆款视频，换 seed 重混）---")
             vopts = replace(opts, seed=base_seed + i * 10007,
-                            out_name=f"混剪_{source.stem}_{i}.mp4")
+                            out_name=f"{source.stem}_{i}.mp4")
             r = montage_pipeline.run_pipeline(vopts)
             if STOP.flag:
                 log(f"[中断] 裂变 {i}/{fission} 未完整完成，不再继续（退出码 130）")
@@ -318,6 +328,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
                 log(f"  [失败] 裂变 {i}/{fission}: {r.get('error') or '无产物'}")
             else:
                 log(f"  裂变 {i} 产出: {r['final']}")
+            progress("裂变生成", i, fission, success=i - failed_fissions, failed=failed_fissions, detail="独立成片已生成并检查", output=str(out_dir))
 
     if STOP.flag:
         log("[中断] 混剪已取消（退出码 130）")

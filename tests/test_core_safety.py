@@ -26,21 +26,21 @@ class CoreSafetyTests(unittest.TestCase):
                 face, noface = slice_pipeline.out_dirs_for("video")
                 face.mkdir(parents=True)
                 noface.mkdir(parents=True)
-                a = face / "001.mp4"
+                a = face / "video_1.mp4"
                 a.write_bytes(b"x" * 2048)
                 self.assertFalse(slice_pipeline.video_done("video", 2))
-                b = noface / "002.mp4"
+                b = noface / "video_2.mp4"
                 b.write_bytes(b"y" * 2048)
                 self.assertTrue(slice_pipeline.video_done("video", 2))
                 self.assertFalse(slice_pipeline.video_done("video", 3))
                 self.assertFalse(slice_pipeline.video_done("video", 2, require_sub=True))
                 for clip in (a, b):
-                    clip.with_name(clip.name + ".covered.json").write_text("{}", encoding="utf-8")
+                    clip.with_name(clip.name + ".covered.json").write_text('{"version":2,"subtitle":false}', encoding="utf-8")
                 self.assertTrue(slice_pipeline.video_done("video", 2, require_sub=True))
                 b.write_bytes(b"")
                 self.assertFalse(slice_pipeline.video_done("video", 2))
                 b.write_bytes(b"y" * 2048)
-                (face / "003.mp4").write_bytes(b"z" * 2048)
+                (face / "video_3.mp4").write_bytes(b"z" * 2048)
                 self.assertFalse(slice_pipeline.video_done("video", 2))
 
     def test_slice_dry_run_never_skips_scenes(self):
@@ -158,7 +158,7 @@ class CoreSafetyTests(unittest.TestCase):
             source.write_bytes(b"original")
             out = root / "output"
             out.mkdir()
-            (out / "混剪_video.mp4").write_bytes(b"stale" * 500)
+            (out / "video_1.mp4").write_bytes(b"stale" * 500)
             prof = SimpleNamespace(
                 duration=10.0, width=720, height=1280,
                 segments=[], speech_total=10.0, has_audio=False)
@@ -229,7 +229,7 @@ class CoreSafetyTests(unittest.TestCase):
             source.parent.mkdir()
             source.write_bytes(b"src")
             out_dir = root / "output"
-            target = out_dir / "a" / "input_去重.mp4"
+            target = out_dir / "input_1.mp4"
             target.parent.mkdir(parents=True)
             target.write_bytes(b"generated")
             args = cli.build_parser().parse_args(
@@ -338,7 +338,7 @@ class CoreSafetyTests(unittest.TestCase):
             self.assertEqual(dst.read_bytes(), b"new" * 700)
             self.assertFalse(marker.exists())
 
-            marker.write_text("{}", encoding="utf-8")
+            marker.write_text('{"version":2,"subtitle":false}', encoding="utf-8")
             with mock.patch.object(slice_pipeline, "run_cmd",
                                    return_value=(1, "", "encoder failed")), \
                  mock.patch.object(slice_pipeline, "log"):

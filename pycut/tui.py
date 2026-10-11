@@ -232,15 +232,25 @@ def _footer(stdscr, full: str, compact: str) -> None:
 
 
 def _home_brand(stdscr) -> None:
-    """One compact identity mark; the menu remains the dominant control."""
-    _h, w = stdscr.getmaxyx()
-    _safe_add(stdscr, 5, 3, "╭─────╮", w, "muted")
-    _safe_add(stdscr, 6, 3, "│  ▶  │", w, "accent", curses.A_BOLD)
-    _safe_add(stdscr, 7, 3, "╰─────╯", w, "muted")
-    _safe_add(stdscr, 5, 14, "PYCUT", w, "accent", curses.A_BOLD)
-    _safe_add(stdscr, 6, 14, f"v{__version__}  ·  本地视频工具", w, "text")
-    _safe_add(stdscr, 7, 14, "选择现有处理流程", w, "dim")
-    _safe_add(stdscr, 9, 2, "─" * max(0, w - 4), w, "muted")
+    """A single prominent wordmark; instructions belong in the footer."""
+    h, w = stdscr.getmaxyx()
+    if h >= 20:
+        logo = (
+            "████   █   █   ████  █   █  █████",
+            "█   █   █ █   █      █   █    █",
+            "████     █    █      █   █    █",
+            "█        █    █      █   █    █",
+            "█        █     ████   ███     █",
+        )
+        for y, line in enumerate(logo, 1):
+            _safe_add(stdscr, y, 3, line, w, "accent", curses.A_BOLD)
+        divider_y = 7
+    else:
+        _safe_add(stdscr, 1, 3, "PYCUT", w, "accent", curses.A_BOLD)
+        divider_y = 3
+    version = f"v{__version__}"
+    _safe_add(stdscr, 1, w - _disp_width(version) - 3, version, w, "dim")
+    _safe_add(stdscr, divider_y, 2, "─" * max(0, w - 4), w, "muted")
 
 
 # ---------------------------------------------------------------------------
@@ -628,11 +638,9 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
             continue
 
         stdscr.erase()
-        _frame(stdscr, "选择功能", "↑↓ 移动  ·  → / Enter 进入")
+        _home_brand(stdscr)
         spacious = h >= 20
-        if spacious:
-            _home_brand(stdscr)
-        menu_y = 11 if spacious else 5
+        menu_y = 9 if spacious else 5
         row_step = 2 if h >= 29 else 1
 
         for i, (key, name, desc) in enumerate(FEATURES):
@@ -648,8 +656,8 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
                       "text" if active else "dim")
 
         key, name, _desc = FEATURES[feat_sel]
-        summary_y = menu_y + len(FEATURES) * row_step + 1
-        if summary_y < h - 3:
+        summary_y = h - 4
+        if summary_y > menu_y + (len(FEATURES) - 1) * row_step:
             _safe_add(stdscr, summary_y, 3,
                       f"当前：{name}  ·  {FEATURE_HINTS[key]}", w, "dim")
         _footer(stdscr,
@@ -736,7 +744,8 @@ def _wizard_slice(stdscr, w: int) -> list[list[str]] | None:
         argv.append("--no-sub")
     jobs = [argv]
     if values[1]:
-        jobs.append(["dedup", "--src-dir", str(output)])
+        jobs.append(["dedup", "--src-dir", str(output), "--force", "--source-stems",
+                     *[p.stem for p in list_videos_recursive(d) if p.suffix.lower() == ".mp4"]])
     return jobs
 
 
@@ -779,13 +788,13 @@ def _count_sticker_images(folder: Path) -> int:
 def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     """Five existing steps with reversible navigation and preserved selection.
 
-    0: clip directory  1: PiP directory  2: source directory
+    0: source directory  1: clip directory  2: PiP directory
     3: source selection / fission  4: confirmation
     """
-    directories = [str(config.MONTAGE_CLIP_DIR), str(config.MONTAGE_DEDUP_DIR),
-                   str(config.REFERENCE_DIR)]
-    clip_count = count_videos_recursive(directories[0])
-    pip_count = count_videos_recursive(directories[1])
+    directories = [str(config.REFERENCE_DIR), str(config.MONTAGE_CLIP_DIR),
+                   str(config.MONTAGE_DEDUP_DIR)]
+    clip_count = count_videos_recursive(directories[1])
+    pip_count = count_videos_recursive(directories[2])
     if not clip_count or not pip_count:
         _flash(stdscr, "背景或画中画素材为空，请在 Web 配置页检查目录", "bad")
         return None
@@ -793,10 +802,10 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     step = 3
     while True:
         if step == 3:
-            assert directories[2] is not None
-            files = list_videos_flat(directories[2])
+            assert directories[0] is not None
+            files = list_videos_flat(directories[0])
             if not files:
-                _flash(stdscr, f"该目录下没有视频：{directories[2]}", "bad")
+                _flash(stdscr, f"该目录下没有视频：{directories[0]}", "bad")
                 return None
             result = _multi_select(stdscr, "混剪 · 1/2 选择爆款视频及裂变数量",
                                    files, initial=selection)
@@ -808,7 +817,7 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
 
         assert selection is not None
         assert all(d is not None for d in directories)
-        clip, pip, src_dir = directories
+        src_dir, clip, pip = directories
         chosen, fission = selection
         total_out = sum(fission[str(f)] for f in chosen)
         out_dir = str(config.MONTAGE_OUT)

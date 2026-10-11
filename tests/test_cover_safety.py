@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
+import sys
 import unittest
 from unittest import mock
 
@@ -183,7 +184,7 @@ class CoverSafetyTests(unittest.TestCase):
                 enabled=True, ask_vision=mock.Mock(side_effect=[
                     {"has_subtitle": True, "box": [0.2, 0.6, 0.8, 0.72],
                      "text": "标题"},
-                    None, None, None, None]))
+                    None, None, None, None] + [{"has_subtitle": False}] * 3))
             with mock.patch.object(subtitle, "probe_scalar",
                                    side_effect=lambda p, entry: info[entry]), \
                  mock.patch.object(subtitle, "_grab_frame", return_value=True), \
