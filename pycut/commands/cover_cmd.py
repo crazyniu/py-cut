@@ -16,7 +16,8 @@ from .. import config
 from ..core.ffmpeg import self_check
 from ..core.llm import make_llm
 from ..core.runtime import install_signal_handlers, reset_stop, STOP
-from ..core.subtitle import SAMPLES, WORKERS, collect_clips, process_clip
+from ..core.subtitle import SAMPLES, WORKERS, collect_clips, process_clip, verified_clip
+from ..core.progress import progress
 from ..core.utils import log
 
 
@@ -113,7 +114,7 @@ def run(args: argparse.Namespace) -> int:
                 return process_clip(llm, c, force=args.force, dry_run=True, samples=args.samples)
             dst = destination(c)
             marker = dst.with_name(dst.name + ".covered.json")
-            if dst.is_file() and marker.is_file() and not args.force:
+            if dst.is_file() and verified_clip(dst) and not args.force:
                 return "skip"
             dst.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix=".cover-", dir=dst.parent) as tmp:
@@ -121,7 +122,7 @@ def run(args: argparse.Namespace) -> int:
                 shutil.copy2(c, staged)
                 original_marker = c.with_name(c.name + ".covered.json")
                 staged_marker = staged.with_name(staged.name + ".covered.json")
-                if original_marker.is_file() and not args.force:
+                if verified_clip(c) and not args.force:
                     shutil.copy2(original_marker, staged_marker)
                 status = process_clip(llm, staged, force=args.force, samples=args.samples)
                 if status in ("covered", "nosub", "skip") and not STOP.flag:
@@ -134,9 +135,12 @@ def run(args: argparse.Namespace) -> int:
             log(f"  [异常] {c.name}: {type(e).__name__} {e}")
             return "fail"
 
+    progress("字幕擦除", 0, len(clips), detail="检测 → 像素修复 → 成品复检")
     with futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
-        for s in ex.map(_do, clips):
+        for future in futures.as_completed([ex.submit(_do, c) for c in clips]):
+            s = future.result()
             stat[s] = stat.get(s, 0) + 1
+            progress("字幕擦除", sum(stat.values()), len(clips), success=stat['covered'] + stat['nosub'], failed=stat['fail'], skipped=stat['skip'], detail=f"复检通过 {stat['covered']} · 未检出字幕 {stat['nosub']}", output=str(destination(clips[0]).parent))
 
     log("")
     log("=" * 56)

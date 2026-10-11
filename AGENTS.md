@@ -97,7 +97,7 @@ Markdown 只保留长期需求、架构、技术约定与可复现限制，不�
 三步，顺序不可乱：
 1. **场景分段**（默认 2–15 秒，不识别语义，合并短尾段后仍检查上限）→ `core/scene.py`：`detect_scenes`（ffmpeg `select='gt(scene,TH)'`）+ `build_segments`（去重/合并过短/切分超长）。
 2. **人脸分流** → `core/faces.py`：Haar 严格/宽松两档 → 三态 `face/noface/ambiguous`；仅 ambiguous 送 LLM 兜底。产出按「有人脸/无人脸」分目录。
-3. **字幕擦除** → `core/subtitle.py`：`detect_region`（LLM 并集框 + 中位数聚合，高度跟随真实字幕）+ `cover_clip`（逐帧文字掩膜 + TELEA 修复 + 颗粒补偿）。
+3. **字幕擦除** → `core/subtitle.py`：`detect_region`（LLM 跨帧并集框，覆盖位置变化的字幕）+ `cover_clip`（逐帧文字掩膜 + TELEA 修复 + 颗粒补偿），使用平台编码器；修复后抽帧复检，残留/网关失败不能写完成标记。
 
 入口编排：`core/slice_pipeline.py` 的 `process_video`。
 
@@ -108,7 +108,7 @@ Markdown 只保留长期需求、架构、技术约定与可复现限制，不�
 - **LLM 推理模型** `max_tokens` 必须 ≥500，否则 `content` 被 reasoning 吃光返回空；`finish_reason=length` 时换 1200 重试（`core/llm.py` 已处理）。
 - **并发结果配对**：用 `as_completed` + 显式回传索引，绝不用 `ex.map` 的解包顺序（顺序会错位导致判定张冠李戴）。
 - **字幕擦除**不要用毛玻璃/中值净底：动态背景下中值会出块状伪影；掩膜法只动文字像素。大号艺术标题字形内部偏平滑是经典算法极限，要无痕需 AI 修复（ProPainter/LaMa，慢百倍），列为可选 `--quality high`（未实现）。
-- **幂等**：字幕已处理写 `<切片>.covered.json`；重跑须先按清单切割点从源视频还原原片，否则会把填补区当"模糊文字"误判。
+- **幂等**：字幕检查完成写 version=2 的 `<切片>.covered.json`；旧版未复检标记不能直接续跑跳过；重跑须先按清单切割点从源视频还原原片，否则会把填补区当"模糊文字"误判。
 - `ffprobe avg_frame_rate` 用**不带 `-select_streams`** 的通用封装（`core/ffmpeg.py: probe_scalar`）时，会同时返回视频流与音频流两行，音频流那行是 `0/0` → 只能取首行（`subtitle.py:166` 已这么处理）。实测桌面切片 20 个抽样中 18 个如此，**别用 `-select_streams v:0` 的命令去验证这条**（那样看不到 `0/0`）。`dedup.py:_video_duration` 用了 `-select_streams v:0`，不受此影响。
 - **注释与报告里的「实测」数字必须是自己跑出来的，且能被独立复现**。转述他人数据即使方向对也不可查证；凭单次观察下结论（尤其喂了截断/异常样本却不自知）会让后来人无法复核。实测数字要能让人照着重跑一遍得到同样的结果。
 - **要验证别人的代码，直接调用项目里的真实实现，别自己拼一条"等价"的命令**。简化版往往缺少关键前提（我曾用 `ffprobe ... | head -1` 去验证 `probe_scalar`，`head -1` 恰好把 `0/0` 过滤掉，得出"从未出现"的错误结论还写进了注释）。自己拼的命令验证不了被测函数的真实行为。

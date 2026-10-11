@@ -27,7 +27,6 @@ from .utils import log
 
 SAMPLES = 5             # 每片段抽帧检测数（越多越能覆盖所有文字行）
 DETECT_WIDTH = 480      # 送检帧宽（足够 LLM 定位，省 token）
-MAX_H_RATIO = 0.55      # 遮盖带最大高度占比（仅防误检把大半屏盖掉，正常不触发）
 PAD_X, PAD_Y = 0.12, 0.12   # 检测框外扩比例（掩膜法只动文字像素，外扩只是兜底防漏）
 CONTRAST_TH = 20        # 文字掩膜：与局部背景估计的灰度差阈值
 SAT_TH = 150            # 文字掩膜：饱和度阈值（捕捉红/黄/蓝色块标题）
@@ -48,12 +47,6 @@ DETECT_PROMPT = (
     "只返回 JSON: "
     '{"has_subtitle": true 或 false, "box": [x1,y1,x2,y2] 或 null, "text": "字幕原文"}'
 )
-
-
-def _median(vals: list[float]) -> float:
-    s = sorted(vals)
-    n = len(s)
-    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2.0
 
 
 def _grab_frame(clip: Path, t: float, jp: Path, width: int = DETECT_WIDTH) -> bool:
@@ -135,17 +128,9 @@ def detect_region(llm: LLMClient, clip: Path,
             f"无法定位的字幕答复 {uncertain_positive}；未标记已处理"
         )
 
-    # 中位数聚合：抗单帧位置漂移 / 个别帧把警示条框得偏上或偏下
-    x1, y1 = _median([b[0] for b in boxes]), _median([b[1] for b in boxes])
-    x2, y2 = _median([b[2] for b in boxes]), _median([b[3] for b in boxes])
-
-    # 安全限高：仅当误检把带高撑得过大时才收缩，正常字幕很小不会触发
-    if (y2 - y1) > MAX_H_RATIO:
-        cy = (y1 + y2) / 2.0
-        half = MAX_H_RATIO / 2.0
-        y1 = max(0.0, cy - half)
-        y2 = min(1.0, cy + half)
-    y2 = min(y2, 0.995)
+    # Moving/two-line subtitles must fit every sampled bounding box.
+    x1, y1 = min(b[0] for b in boxes), min(b[1] for b in boxes)
+    x2, y2 = max(b[2] for b in boxes), max(b[3] for b in boxes)
 
     # 紧贴字幕外扩（少量余量确保盖全字形，但不做成固定大色块）
     x1 = max(0.0, x1 - PAD_X * (x2 - x1))
@@ -171,7 +156,7 @@ def detect_region(llm: LLMClient, clip: Path,
     BW = min(BW, W - X)
     BH = min(BH, H - Y)
     if BW < 8 or BH < 8:
-        return None
+        raise RuntimeError("字幕框过小，无法可靠擦除")
     return X, Y, BW, BH, texts
 
 
@@ -185,6 +170,21 @@ def _adaptive_kernel(bh: int, bw: int) -> int:
         if k % 2 == 0:
             k -= 1
     return max(k, 3)
+
+
+def _caption_background_mask(gray: np.ndarray, text_mask: np.ndarray) -> np.ndarray:
+    """Include dark rectangular caption backgrounds containing detected strokes."""
+    result = text_mask.copy()
+    _, _, stats, _ = cv2.connectedComponentsWithStats((gray < 25).astype(np.uint8))
+    for x, y, width, height, area in stats[1:]:
+        rectangle = width * height
+        if (width < 3 * height or rectangle > gray.size / 2
+                or area < rectangle * 0.6):
+            continue
+        strokes = text_mask[y:y + height, x:x + width]
+        if np.count_nonzero(strokes) > rectangle * 0.02:
+            result[y:y + height, x:x + width] = 255
+    return result
 
 
 def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
@@ -214,7 +214,7 @@ def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
          # 旧代码仅有 stdin 这一路（无音轨），-c:a copy 并不能凭空保留声音。
          "-i", str(clip),
          "-map", "0:v:0", "-map", "1:a:0?",
-         "-c:v", "h264_videotoolbox", "-b:v", "8M", "-pix_fmt", "yuv420p",
+         "-c:v", config.SLICE_ENCODER, "-b:v", "8M", "-pix_fmt", "yuv420p",
          "-c:a", "copy", "-movflags", "+faststart", str(tmp)],
         stdin=subprocess.PIPE, bufsize=10 ** 8)
     try:
@@ -235,7 +235,8 @@ def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
                 cv2.absdiff(gray, bg), CONTRAST_TH, 255, cv2.THRESH_BINARY)
             hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
             _, m2 = cv2.threshold(hsv[..., 1], SAT_TH, 255, cv2.THRESH_BINARY)
-            mask = cv2.dilate(cv2.bitwise_or(m1, m2), kernel, iterations=2)
+            mask = _caption_background_mask(gray, cv2.bitwise_or(m1, m2))
+            mask = cv2.dilate(mask, kernel, iterations=2)
 
             # --- 修复：TELEA 只填补文字像素 ---
             res = cv2.inpaint(roi, mask, INPAINT_R, cv2.INPAINT_TELEA)
@@ -269,7 +270,10 @@ def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
             except BrokenPipeError:
                 broken_pipe = True
                 break
-        enc.stdin.close()
+        try:
+            enc.stdin.close()
+        except BrokenPipeError:
+            broken_pipe = True
         enc.wait(timeout=300)
         dec.wait(timeout=60)
         if (broken_pipe or written == 0 or dec.returncode != 0
@@ -299,11 +303,21 @@ def _marker(clip: Path) -> Path:
     return clip.with_name(clip.name + ".covered.json")
 
 
+def verified_clip(clip: Path) -> bool:
+    """Legacy markers only prove encoding, not subtitle removal."""
+    try:
+        record = json.loads(_marker(clip).read_text(encoding="utf-8"))
+        return (isinstance(record, dict) and record.get("version") == 2
+                and (record.get("subtitle") is False or record.get("verified") is True))
+    except (OSError, ValueError):
+        return False
+
+
 def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
                  dry_run: bool = False, samples: int = SAMPLES) -> str:
     """处理单个切片，返回状态: covered / nosub / skip / fail / dryrun。"""
     mk = _marker(clip)
-    if mk.exists() and not force:
+    if verified_clip(clip) and not force:
         return "skip"
 
     try:
@@ -317,7 +331,7 @@ def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
         if dry_run:
             log(f"  [无字幕] {clip.name}")
             return "nosub"
-        mk.write_text(json.dumps({"subtitle": False,
+        mk.write_text(json.dumps({"version": 2, "subtitle": False,
                                   "checked_at": datetime.now().isoformat()},
                                  ensure_ascii=False), encoding="utf-8")
         return "nosub"
@@ -329,11 +343,20 @@ def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
         return "dryrun"
     if not cover_clip(clip, (X, Y, BW, BH)):
         return "fail"
-    mk.write_text(json.dumps({"subtitle": True, "region": [X, Y, BW, BH],
+    mk.unlink(missing_ok=True)
+    try:
+        residual = detect_region(llm, clip, min(samples, 3))
+    except (RuntimeError, ValueError, OSError) as exc:
+        log(f"  [字幕复检失败] {clip.name}: {exc}；未标记完成")
+        return "fail"
+    if residual is not None:
+        log(f"  [字幕残留] {clip.name}: 擦除后仍检测到字幕；未标记完成，请重试或检查画面")
+        return "fail"
+    mk.write_text(json.dumps({"version": 2, "subtitle": True, "verified": True, "verified_samples": min(samples, 3), "region": [X, Y, BW, BH],
                               "texts": texts,
                               "covered_at": datetime.now().isoformat()},
                              ensure_ascii=False), encoding="utf-8")
-    log(f"  [已遮盖] {clip.name}: 区域({X},{Y},{BW}x{BH}) "
+    log(f"  [擦除复检通过] {clip.name}: 区域({X},{Y},{BW}x{BH}) "
         f"{' / '.join(dict.fromkeys(texts))[:50]}")
     return "covered"
 

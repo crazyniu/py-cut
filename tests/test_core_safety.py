@@ -35,7 +35,7 @@ class CoreSafetyTests(unittest.TestCase):
                 self.assertFalse(slice_pipeline.video_done("video", 3))
                 self.assertFalse(slice_pipeline.video_done("video", 2, require_sub=True))
                 for clip in (a, b):
-                    clip.with_name(clip.name + ".covered.json").write_text("{}", encoding="utf-8")
+                    clip.with_name(clip.name + ".covered.json").write_text('{"version":2,"subtitle":false}', encoding="utf-8")
                 self.assertTrue(slice_pipeline.video_done("video", 2, require_sub=True))
                 b.write_bytes(b"")
                 self.assertFalse(slice_pipeline.video_done("video", 2))
@@ -338,7 +338,7 @@ class CoreSafetyTests(unittest.TestCase):
             self.assertEqual(dst.read_bytes(), b"new" * 700)
             self.assertFalse(marker.exists())
 
-            marker.write_text("{}", encoding="utf-8")
+            marker.write_text('{"version":2,"subtitle":false}', encoding="utf-8")
             with mock.patch.object(slice_pipeline, "run_cmd",
                                    return_value=(1, "", "encoder failed")), \
                  mock.patch.object(slice_pipeline, "log"):
