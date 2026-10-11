@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from pycut import cli, tui, tui_runner
+from pycut import cli, config, tui, tui_runner
 
 
 class FakeScreen:
@@ -94,7 +94,7 @@ class TUIIntegrationTests(unittest.TestCase):
         for wizard, command in ((tui._wizard_cover, "cover"),
                                 (tui._wizard_dedup, "dedup")):
             with self.subTest(command=command), \
-                 mock.patch.object(tui, "_pick_dir", return_value="/tmp/videos"), \
+                 mock.patch.object(config, "CLIP_DIR", Path("/tmp/videos")), \
                  mock.patch.object(tui, "count_videos_recursive", return_value=3), \
                  mock.patch("pycut.core.scan.list_videos_recursive",
                             return_value=[Path("/tmp/videos/clip.mp4"),
@@ -121,8 +121,8 @@ class TUIIntegrationTests(unittest.TestCase):
         first = Path("/tmp/video/第一支.mp4")
         second = Path("/tmp/video/second.mp4")
         selection = ([first, second], {str(first): 12, str(second): 2})
-        with mock.patch.object(tui, "_pick_dir",
-                               side_effect=["/tmp/clips", "/tmp/pip", "/tmp/video"]), \
+        with mock.patch.object(config, "MONTAGE_CLIP_DIR", Path("/tmp/clips")), \
+             mock.patch.object(config, "MONTAGE_DEDUP_DIR", Path("/tmp/pip")), \
              mock.patch.object(tui, "count_videos_recursive", side_effect=[4, 3]), \
              mock.patch.object(tui, "_count_sticker_images", return_value=1), \
              mock.patch.object(tui, "list_videos_flat", return_value=[first, second]), \
@@ -158,7 +158,7 @@ class TUIIntegrationTests(unittest.TestCase):
         args = cli.build_parser().parse_args(commands[0])
         self.assertEqual(args.sticker_dir, "")
         self.assertFalse(args.no_sticker)
-        self.assertEqual(picker.call_count, 3)
+        picker.assert_not_called()
 
     def test_montage_cancel_before_confirm_never_builds_jobs(self):
         with mock.patch.object(tui, "_pick_dir", side_effect=["/tmp/clips", None, None]), \

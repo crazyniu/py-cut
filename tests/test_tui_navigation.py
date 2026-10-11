@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from pycut import __version__, tui, tui_runner
+from pycut import __version__, config, tui, tui_runner
 
 
 class Screen:
@@ -105,20 +105,12 @@ class NavigationTests(unittest.TestCase):
                 Screen([]), "目录", start=Path("/")
             ))
 
-    def test_review_esc_goes_back_to_selected_folder_not_main(self):
-        paths = ["/tmp/one", "/tmp/two"]
-        files = [Path("/tmp/example.mp4")]
-        with mock.patch.object(tui, "_pick_dir", side_effect=paths) as picker, \
-             mock.patch("pycut.core.scan.list_videos_recursive",
-                        return_value=files), \
-             mock.patch.object(tui, "_confirm", side_effect=[False, True]):
-            self.assertEqual(
-                tui._wizard_cover(Screen([]), 100),
-                [["cover", "--src-dir", "/tmp/two"]],
-            )
-        self.assertEqual(picker.call_count, 2)
-        self.assertEqual(picker.call_args_list[1].kwargs["start"],
-                         Path("/tmp/one"))
+    def test_review_escape_returns_to_main_without_directory_picker(self):
+        with mock.patch.object(tui, "_pick_dir") as picker, \
+             mock.patch("pycut.core.scan.list_videos_recursive", return_value=[Path("/tmp/video.mp4")]), \
+             mock.patch.object(tui, "_confirm", return_value=False):
+            self.assertIsNone(tui._wizard_cover(Screen([]), 100))
+        picker.assert_not_called()
 
     def test_review_esc_then_picker_esc_goes_to_main(self):
         with mock.patch.object(tui, "_pick_dir",
@@ -129,16 +121,15 @@ class NavigationTests(unittest.TestCase):
             self.assertIsNone(tui._wizard_cover(Screen([]), 100))
             confirm.assert_called_once()
 
-    def test_invalid_directory_returns_to_picker_instead_of_losing_workflow(self):
-        with mock.patch.object(tui, "_pick_dir",
-                               side_effect=["/tmp/empty", "/tmp/valid"]), \
-             mock.patch.object(tui, "count_videos_recursive",
-                               side_effect=[0, 2]), \
+    def test_empty_configured_directory_does_not_start_processing(self):
+        with mock.patch.object(tui, "_pick_dir") as picker, \
+             mock.patch.object(tui, "count_videos_recursive", return_value=0), \
              mock.patch.object(tui, "_flash") as flash, \
-             mock.patch.object(tui, "_confirm", return_value=True):
-            self.assertEqual(tui._wizard_dedup(Screen([]), 100),
-                             [["dedup", "--src-dir", "/tmp/valid"]])
-            flash.assert_called_once()
+             mock.patch.object(tui, "_confirm") as confirm:
+            self.assertIsNone(tui._wizard_dedup(Screen([]), 100))
+        picker.assert_not_called()
+        flash.assert_called_once()
+        confirm.assert_not_called()
 
     def test_montage_back_from_final_review_preserves_fission(self):
         video = Path("/tmp/sources/婚礼.mp4")
@@ -159,22 +150,20 @@ class NavigationTests(unittest.TestCase):
         self.assertEqual(multiselect.call_args_list[1].kwargs["initial"],
                          selection)
 
-    def test_montage_back_from_second_folder_revisits_first(self):
+    def test_montage_reads_configured_folders_without_picker(self):
         video = Path("/tmp/source/test.mp4")
-        selection = ([video], {str(video): 3})
-        with mock.patch.object(tui, "_pick_dir", side_effect=[
-                "/tmp/old-clips", None, "/tmp/new-clips",
-                "/tmp/pip", "/tmp/source",
-             ]) as picker, \
+        with mock.patch.object(config, "MONTAGE_CLIP_DIR", Path("/tmp/clips")), \
+             mock.patch.object(config, "MONTAGE_DEDUP_DIR", Path("/tmp/pip")), \
+             mock.patch.object(tui, "_pick_dir") as picker, \
              mock.patch.object(tui, "count_videos_recursive", return_value=1), \
              mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
-             mock.patch.object(tui, "_multi_select", return_value=selection), \
-             mock.patch.object(tui, "_count_sticker_images", return_value=1), \
+             mock.patch.object(tui, "_multi_select", return_value=([video], {str(video):3})), \
              mock.patch.object(tui, "_confirm", return_value=True):
             commands = tui._wizard_montage(Screen([]), 100)
-        self.assertEqual(picker.call_count, 5)
-        self.assertIn("/tmp/new-clips", commands[0])
-        self.assertNotIn("/tmp/old-clips", commands[0])
+        picker.assert_not_called()
+        self.assertIn("/tmp/clips", commands[0])
+        self.assertIn("/tmp/pip", commands[0])
+        self.assertIn("--intro-dir", commands[0])
 
     def test_multi_select_preserves_existing_selection_when_backtracking(self):
         first = Path("/tmp/a.mp4")

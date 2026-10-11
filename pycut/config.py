@@ -16,24 +16,26 @@ from pathlib import Path
 #   用户只需在 .env 里配置 DEEPSEEK_API_KEY 即可；.env 已被 git 忽略。
 #   真实 shell 环境变量优先于 .env；.env 只补充未设置的变量。
 # ---------------------------------------------------------------------------
+_dotenv_values: dict[str, str] = globals().get("_dotenv_values", {})
+
+
 def _load_dotenv() -> None:
-    env_path = PROJECT_ROOT / ".env"
-    if not env_path.is_file():
-        return
-    try:
-        with open(env_path, "r", encoding="utf-8") as fh:
-            for raw in fh:
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                k, v = k.strip(), v.strip()
-                if not k:
-                    continue
-                v = v.strip("\"'")            # 去掉可能的引号包裹
-                os.environ.setdefault(k, v)   # 不覆盖已存在的真实环境变量
-    except OSError:
-        pass
+    from .settings import read_env
+    # 清除上次由 .env 注入的值，保留真正的外部环境变量。
+    for key, value in _dotenv_values.items():
+        if os.environ.get(key) == value:
+            os.environ.pop(key, None)
+    _dotenv_values.clear()
+    for key, value in read_env().items():
+        if key not in os.environ:
+            os.environ[key] = value
+            _dotenv_values[key] = value
+
+
+def _path(key: str, fallback: Path) -> Path:
+    value = os.environ.get(key, '').strip()
+    path = Path(value).expanduser() if value else fallback
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 # ---------------------------------------------------------------------------
@@ -57,11 +59,15 @@ SLICE_ENCODER = "h264_videotoolbox" if sys.platform == "darwin" else "libx264"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent          # pycut/.. => 项目根
 _load_dotenv()   # 在读取任何密钥前加载 .env（用户只需在 .env 配置 DEEPSEEK_API_KEY）
 
-SRC_DIR = PROJECT_ROOT / "materials" / "source"
+SRC_DIR = _path("PYCUT_SOURCE_DIR", PROJECT_ROOT / "materials" / "source")
+CLIP_DIR = _path("PYCUT_CLIP_DIR", PROJECT_ROOT / "materials" / "background")
+REFERENCE_DIR = _path("PYCUT_REFERENCE_DIR", PROJECT_ROOT / "materials" / "reference")
+INTRO_DIR = _path("PYCUT_INTRO_DIR", PROJECT_ROOT / "materials" / "intro")
+OUTPUT_DIR = _path("PYCUT_OUTPUT_DIR", PROJECT_ROOT / "output")
 DESKTOP = Path.home() / "Desktop"
-OUT_FACE = DESKTOP / "切片_有人脸"
-OUT_NOFACE = DESKTOP / "切片_无人脸"
-OUT_MANIFEST = DESKTOP / "切片_清单"
+OUT_FACE = CLIP_DIR / "有人脸"
+OUT_NOFACE = CLIP_DIR / "无人脸"
+OUT_MANIFEST = OUTPUT_DIR / "切片_清单"
 
 # ---------------------------------------------------------------------------
 # 场景检测 / 分段
@@ -149,8 +155,8 @@ MIN_FREE_BYTES = 2 * 1024 ** 3   # 输出盘最小剩余空间
 #   平台是 5 层指纹比对（文件哈希/元数据/视觉 pHash+CNN+光流/音频/文本），
 #   本模块按「容器→几何→像素→时间→结构→音频」分层扰动，并用 pHash 距离 + PSNR 自检。
 # ---------------------------------------------------------------------------
-DEDUP_OUT = DESKTOP / "去重_输出"      # 默认输出（保留切片桶的子目录结构）
-DEDUP_REPORT = DESKTOP / "去重_报告"   # JSON 报告目录
+DEDUP_OUT = OUTPUT_DIR / "去重"      # 默认输出（保留切片桶的子目录结构）
+DEDUP_REPORT = OUTPUT_DIR / "去重_报告"   # JSON 报告目录
 DEDUP_PRESETS = ("light", "standard", "aggressive")
 DEDUP_DEFAULT_PRESET = "standard"
 DEDUP_WORKERS = 2                   # 并行处理数（libx264 软件编码，别开太高）
@@ -226,10 +232,10 @@ DEDUP_AUDIO_RATE = 44100
 #   步骤C：从「去重输出」取切片，以画中画叠在步骤B结果右上角、静音、时长同基准
 #   素材里混有横屏（1920x1080 / 3840x2160），一律排除——只吃竖屏 9:16
 # ---------------------------------------------------------------------------
-MONTAGE_SRC = PROJECT_ROOT / "materials" / "reference" / "1.mp4"
-MONTAGE_CLIP_DIR = PROJECT_ROOT / "materials" / "background"
-MONTAGE_DEDUP_DIR = DESKTOP / "去重_输出"                                # 步骤C 画中画素材
-MONTAGE_OUT = DESKTOP / "混剪_输出"
+MONTAGE_SRC = REFERENCE_DIR / "1.mp4"
+MONTAGE_CLIP_DIR = CLIP_DIR
+MONTAGE_DEDUP_DIR = _path("PYCUT_PIP_DIR", OUTPUT_DIR / "去重")                                # 步骤C 画中画素材
+MONTAGE_OUT = OUTPUT_DIR / "混剪"
 MONTAGE_TMP = Path("/tmp/pycut_montage")   # 中间产物（步骤B 结果），不进桌面
 
 # 目标画布固定为 720P 竖屏；仅时长、字幕和音轨来自步骤A 基准视频
@@ -270,7 +276,7 @@ MONTAGE_PIP_CONTINUOUS = True       # 画中画首尾相接（不设空档，实
 MONTAGE_PIP_FEATHER = 0.22          # 四角羽化带 = 画中画短边 × 该比例
 MONTAGE_PIP_SHADOW = 0.035# 投影扩散 = 画中画短边 × 该比例
 MONTAGE_PIP_SHADOW_ALPHA = 0.45      # 投影浓度（0=无投影）
-MONTAGE_STICKER_DIR = DESKTOP / "混剪_贴纸"   # 贴纸素材目录（png/jpg/webp）
+MONTAGE_STICKER_DIR = _path("PYCUT_STICKER_DIR", DESKTOP / "混剪_贴纸")   # 贴纸素材目录（png/jpg/webp）
 # 贴纸叠加（用户要求：背面半透明 + 四角透明，让贴纸融进主画面而不是硬贴上去）
 MONTAGE_STICKER_CHANCE = 0.65      # 每个片段叠贴纸的概率（用户要求「给主画面增加贴纸」，
                                    # 实测 0.35 时 48 段只命中 14 段，主画面偏稀疏）
@@ -351,3 +357,9 @@ def gateway_summary(name: str | None = None) -> str:
     n = name if name in GATEWAYS else DEFAULT_GATEWAY
     g = resolve_gateway(n)
     return f"{n} @ {g['url']} model={g['model']} key={_state(g['key'])}"
+
+
+def refresh() -> None:
+    """让运行中的 TUI 读取网页或手工修改的 .env。"""
+    import importlib
+    importlib.reload(sys.modules[__name__])

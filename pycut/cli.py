@@ -29,6 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--version", action="version", version=f"pycut {__version__}")
     sub = p.add_subparsers(dest="command", metavar="<command>")
+    sub.add_parser("config", aliases=["gui"], help="打开本地 Web 配置页，编辑项目 .env")
     for name, mod in COMMANDS.items():
         mod.register(sub)
     return p
@@ -41,6 +42,10 @@ def list_commands() -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+
+    if argv in (["config"], ["gui"]):
+        from . import web_config
+        return web_config.run()
 
     # TUI 启动器：显式 `tui` 子命令，或无子命令且为交互终端时进入
     if argv and argv[0] == "tui":
@@ -56,6 +61,18 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "command", None):
         parser.print_help()
         return 0
+
+    # 显式输入仍兼容脚本；省略输入时统一从项目配置读取。
+    explicit_input = any(getattr(args, key, None) for key in ("file", "src_dir", "source", "clip_dir"))
+    if not explicit_input and not getattr(args, "all", False):
+        from . import config, settings
+        errors = settings.problems(settings.effective())
+        if errors:
+            log("[配置未完成] " + "；".join(errors))
+            log("请运行 ./run.sh config 打开网页，或编辑项目根目录 .env")
+            return 2
+        if args.command in ("cover", "dedup"):
+            args.src_dir = str(config.CLIP_DIR)
 
     func = getattr(args, "func", None)
     if func is None:

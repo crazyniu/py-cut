@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import replace
 import sys
 import time
@@ -37,6 +38,7 @@ def register(subparsers) -> None:
                    help=f"步骤C 画中画素材目录（默认 {config.MONTAGE_DEDUP_DIR}）")
     g.add_argument("--out-dir", default="",
                    help=f"最终成片输出目录（默认 {config.MONTAGE_OUT}；TUI 混剪默认桌面 out）")
+    g.add_argument("--intro-dir", default=None, help="前贴目录（默认读取 .env；空字符串禁用）")
     g.add_argument("--fission", type=int, default=1,
                    help="每支爆款视频裂变生成几支成片（每支随机选片/扰动不同、话术相同）")
 
@@ -195,6 +197,8 @@ def run(args: argparse.Namespace) -> int:
     reset_stop()
     self_check(require_src=False)
 
+    if not args.sticker_dir and os.environ.get("PYCUT_STICKER_DIR"):
+        args.sticker_dir = str(config.MONTAGE_STICKER_DIR)
     source = Path(args.source).expanduser() if args.source else config.MONTAGE_SRC
     clip_dir = Path(args.clip_dir).expanduser() if args.clip_dir else config.MONTAGE_CLIP_DIR
     dedup_dir = Path(args.dedup_dir).expanduser() if args.dedup_dir else config.MONTAGE_DEDUP_DIR
@@ -231,6 +235,8 @@ def run(args: argparse.Namespace) -> int:
 
     opts = montage_pipeline.MontageOptions(
         step=args.step,
+        intro_dir=(Path(args.intro_dir).expanduser() if args.intro_dir else
+                   config.INTRO_DIR if args.intro_dir is None and os.environ.get("PYCUT_INTRO_DIR") else None),
         source=source,
         clip_dir=clip_dir,
         dedup_dir=dedup_dir,

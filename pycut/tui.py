@@ -1,25 +1,4 @@
-"""pycut 交互式终端界面（curses TUI）—— 引导式向导。
-
-风格取向：Claude Code 观感——深色底、琥珀色强调、顶部 logo+版本号、底部状态栏、
-❯ 选中标记、语法高亮。
-
-交互模型（引导式向导，替代旧的「参数表单」）：
-    主菜单列出 4 个视频处理功能，选中后进入**分步向导**，每步只问一个决定：
-
-      切片        → 选源目录 → 报视频数 → 选「擦除字幕/去重」开关 → 确认执行
-      字幕擦除    → 选目录 → 报视频数 → 确认执行（只有擦除，无去重）
-      去重        → 选目录 → 报视频数 → 确认执行（只有去重）
-      混剪        → 选片段目录 → 选画中画目录 → 选爆款视频目录 →
-                    多选爆款视频 + 每个裂变数量 → 确认执行
-
-关键机制：
-  - **目录选择器**：使用 Textual 的开源纯终端目录组件。
-  - **递归扫描**：选定目录后用 `core/scan` 递归统计视频数并展示（最多下探 3 层）。
-  - **多选**（混剪爆款视频）：空格勾选/取消，数字输入裂变数量。
-  - 最终生成 argv 交给 `cli.main` 执行（与命令行完全同源，无漂移）。
-
-健壮性：非交互环境（管道/无 tty）回退 CLI 帮助；任何异常回退到提示，绝不卡死。
-"""
+"""四个视频处理向导：Web/.env 配置目录，终端预览素材、确认任务、显示日志。"""
 from __future__ import annotations
 
 import curses
@@ -149,9 +128,9 @@ FEATURES = [
 
 FEATURE_HINTS = {
     "slice": "场景分段 → 人脸分流 → 可选字幕擦除 / 去重",
-    "cover": "选择视频目录 → 自动检测并擦除字幕",
-    "dedup": "选择素材目录 → 运行画面处理及相似度自检",
-    "montage": "选素材库 → 选画中画 → 选择多支基准视频",
+    "cover": "读取切片配置 → 全宽矩形马赛克",
+    "dedup": "读取切片配置 → 画面处理及相似度自检",
+    "montage": "读取目录配置 → 选择爆款视频 → 自动加前贴",
 }
 
 
@@ -674,13 +653,17 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
             _safe_add(stdscr, summary_y, 3,
                       f"当前：{name}  ·  {FEATURE_HINTS[key]}", w, "dim")
         _footer(stdscr,
-                f"↑↓ 移动 · →/Enter 进入 · 1-{len(FEATURES)} 快捷键 · Q 退出",
-                f"↑↓移动  →进入  1-{len(FEATURES)}快捷  Q退出")
+                f"↑↓ 移动 · →/Enter 进入 · 1-{len(FEATURES)} 快捷键 · W 配置网页 · Q 退出",
+                f"↑↓移动  →进入  W配置  Q退出")
         stdscr.refresh()
 
         k = stdscr.getch()
         if k in (ord("q"), ord("Q")):
             return ("quit", None)
+        if k in (ord("w"), ord("W")):
+            from . import web_config
+            _flash(stdscr, "配置网页：" + web_config.start(), "text")
+            continue
         if k in (curses.KEY_UP, ord("k")):
             feat_sel = max(0, feat_sel - 1)
         elif k in (curses.KEY_DOWN, ord("j")):
@@ -707,8 +690,18 @@ def _run_feature_wizard(stdscr, key: str, w: int) -> list[list[str]] | str | Non
 
     返回特殊值 "__BACK__" 表示回到主菜单；None 表示取消。
     """
+    from . import settings, web_config
+    config.refresh()
+    errors = settings.problems(settings.effective())
+    if errors:
+        url = web_config.start()
+        _flash(stdscr, "请先在网页配置：" + url + " · " + "；".join(errors), "bad")
+        return None
     if key == "slice":
         return _wizard_slice(stdscr, w)
+    if key == "cover" and not config.key_ready():
+        _flash(stdscr, "字幕定位需要配置 LLM 主网关密钥，按 W 打开配置网页", "bad")
+        return None
     if key == "cover":
         return _wizard_cover(stdscr, w)
     if key == "dedup":
@@ -722,82 +715,54 @@ def _run_feature_wizard(stdscr, key: str, w: int) -> list[list[str]] | str | Non
 # 各功能向导
 # ---------------------------------------------------------------------------
 def _wizard_slice(stdscr, w: int) -> list[list[str]] | None:
-    """Choose a folder, review existing options, and go back one step on Esc."""
-    from .core.scan import list_videos_recursive  # noqa: PLC0415
-
-    d: str | None = None
-    settings = [True, False]
-    while True:
-        selected = _pick_dir(stdscr, "切片 · 1/2 选择源视频目录",
-                             start=Path(d) if d else None)
-        if selected is None:
-            return None
-        d = selected
-        # Keep the TUI preview in sync with the CLI's explicit depth limit.
-        n = sum(p.suffix.lower() == ".mp4" for p in list_videos_recursive(d))
-        if n == 0:
-            _flash(stdscr, f"目录 3 层内没有可处理的 MP4：{d}", "bad")
-            continue
-
-        toggles = [
-            ("擦除字幕", "切片时顺带擦除画面字幕", settings[0]),
-            ("去重", "切片后对产出切片过平台查重", settings[1]),
-        ]
-        values: list[bool] = []
-        ok = _confirm(stdscr, [("切片规则", "镜头检测 · 2–15 秒 · 不分析语义"),
-                              ("源目录", d), ("视频数量", f"{n} 个")],
-                      toggles, values)
-        if len(values) == len(settings):
-            settings = values
-        if not ok:
-            # The next iteration revisits the selected directory, not main.
-            continue
-
-        argv = ["slice", "--src-dir", d, "--max-depth", "3"]
-        if not settings[0]:
-            argv.append("--no-sub")
-        argv_list = [argv]
-        if settings[1]:
-            # 本次任务独立目录，后继去重不碰桌面历史切片。
-            output = str(config.DESKTOP / "切片_任务" / str(time.time_ns()))
-            argv.extend(["--out-dir", output])
-            argv_list.append(["dedup", "--src-dir", output])
-        return argv_list
+    from .core.scan import list_videos_recursive
+    d = str(config.SRC_DIR)
+    n = sum(p.suffix.lower() == ".mp4" for p in list_videos_recursive(d))
+    if not n:
+        _flash(stdscr, f"源目录 3 层内没有 MP4：{d}", "bad")
+        return None
+    values = []
+    if not _confirm(stdscr, [("源目录", d), ("切片输出", str(config.CLIP_DIR)),
+                            ("视频数量", f"{n} 个")],
+                    [("擦除字幕", "全宽矩形马赛克", True),
+                     ("去重", "仅处理本次生成的切片", False)], values):
+        return None
+    if values[0] and not config.key_ready():
+        _flash(stdscr, "擦除字幕需要配置 LLM 主网关密钥，按 W 打开配置网页", "bad")
+        return None
+    output = config.CLIP_DIR / str(time.time_ns())
+    argv = ["slice", "--src-dir", d, "--max-depth", "3", "--out-dir", str(output)]
+    if not values[0]:
+        argv.append("--no-sub")
+    jobs = [argv]
+    if values[1]:
+        jobs.append(["dedup", "--src-dir", str(output)])
+    return jobs
 
 
 def _wizard_cover(stdscr, w: int) -> list[list[str]] | None:
-    from .core.scan import list_videos_recursive  # noqa: PLC0415
-
-    d: str | None = None
-    while True:
-        selected = _pick_dir(stdscr, "字幕擦除 · 1/2 选择视频目录",
-                             start=Path(d) if d else None)
-        if selected is None:
-            return None
-        d = selected
-        n = sum(p.suffix.lower() == ".mp4" for p in list_videos_recursive(d))
-        if n == 0:
-            _flash(stdscr, f"目录 3 层内没有可处理的 MP4：{d}", "bad")
-            continue
-        if _confirm(stdscr, [("源目录", d), ("MP4 数量", f"{n} 个")]):
-            return [["cover", "--src-dir", d]]
-        # Esc in the review opens the directory picker again.
+    from .core.scan import list_videos_recursive
+    d = str(config.CLIP_DIR)
+    n = sum(p.suffix.lower() == ".mp4" for p in list_videos_recursive(d))
+    if not n:
+        _flash(stdscr, f"切片目录 3 层内没有 MP4：{d}", "bad")
+        return None
+    if _confirm(stdscr, [("切片目录", d), ("字幕处理", "按字幕高度覆盖全宽矩形马赛克"),
+                        ("MP4 数量", f"{n} 个")]):
+        return [["cover", "--src-dir", d]]
+    return None
 
 
 def _wizard_dedup(stdscr, w: int) -> list[list[str]] | None:
-    d: str | None = None
-    while True:
-        selected = _pick_dir(stdscr, "去重 · 1/2 选择视频目录",
-                             start=Path(d) if d else None)
-        if selected is None:
-            return None
-        d = selected
-        n = count_videos_recursive(d)
-        if n == 0:
-            _flash(stdscr, f"该目录下没有视频：{d}", "bad")
-            continue
-        if _confirm(stdscr, [("源目录", d), ("视频数量", f"{n} 个")]):
-            return [["dedup", "--src-dir", d]]
+    d = str(config.CLIP_DIR)
+    n = count_videos_recursive(d)
+    if not n:
+        _flash(stdscr, f"切片目录没有视频：{d}", "bad")
+        return None
+    if _confirm(stdscr, [("切片目录", d), ("视频数量", str(n)),
+                        ("输出", str(config.DEDUP_OUT))]):
+        return [["dedup", "--src-dir", d]]
+    return None
 
 
 def _count_sticker_images(folder: Path) -> int:
@@ -817,61 +782,26 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     0: clip directory  1: PiP directory  2: source directory
     3: source selection / fission  4: confirmation
     """
-    titles = (
-        "混剪 · 1/5 混剪片段目录（递归）",
-        "混剪 · 2/5 画中画切片目录（递归）",
-        "混剪 · 3/5 爆款视频目录（非递归）",
-    )
-    directories: list[str | None] = [None, None, None]
-    clip_count = 0
-    pip_count = 0
-    selection: tuple[list[Path], dict[str, int]] | None = None
-    step = 0
-
+    directories = [str(config.MONTAGE_CLIP_DIR), str(config.MONTAGE_DEDUP_DIR),
+                   str(config.REFERENCE_DIR)]
+    clip_count = count_videos_recursive(directories[0])
+    pip_count = count_videos_recursive(directories[1])
+    if not clip_count or not pip_count:
+        _flash(stdscr, "背景或画中画素材为空，请在 Web 配置页检查目录", "bad")
+        return None
+    selection = None
+    step = 3
     while True:
-        if step < 3:
-            previous = directories[step]
-            if previous is None and step > 0:
-                previous = directories[step - 1]
-            selected = _pick_dir(stdscr, titles[step],
-                                 start=Path(previous) if previous else None)
-            if selected is None:
-                if step == 0:
-                    return None
-                step -= 1
-                continue
-
-            if step == 0:
-                clip_count = count_videos_recursive(selected)
-                if clip_count == 0:
-                    _flash(stdscr, f"片段库内没有视频：{selected}", "bad")
-                    continue
-            elif step == 1:
-                pip_count = count_videos_recursive(selected)
-                if pip_count == 0:
-                    _flash(stdscr, f"画中画目录没有视频：{selected}", "bad")
-                    continue
-            else:
-                files = list_videos_flat(selected)
-                if not files:
-                    _flash(stdscr, f"该目录下没有视频：{selected}", "bad")
-                    continue
-            directories[step] = selected
-            step += 1
-            continue
-
         if step == 3:
             assert directories[2] is not None
             files = list_videos_flat(directories[2])
             if not files:
                 _flash(stdscr, f"该目录下没有视频：{directories[2]}", "bad")
-                step = 2
-                continue
-            result = _multi_select(stdscr, "混剪 · 4/5 选择视频及裂变数量",
+                return None
+            result = _multi_select(stdscr, "混剪 · 1/2 选择爆款视频及裂变数量",
                                    files, initial=selection)
             if result is None:
-                step = 2
-                continue
+                return None
             selection = result
             step = 4
             continue
@@ -881,13 +811,14 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
         clip, pip, src_dir = directories
         chosen, fission = selection
         total_out = sum(fission[str(f)] for f in chosen)
-        out_dir = str(Path.home() / "Desktop/out")
+        out_dir = str(config.MONTAGE_OUT)
         lines = [
             ("片段库", f"{clip}（{clip_count} 个）"),
             ("画中画", f"{pip}（{pip_count} 个）"),
             ("规格", "720×1280 · 9:16 · 固定右上角画中画"),
             ("切换效果", "段间转场 · 背景与画中画标准档扰动"),
-            ("贴纸", "生成时在线下载 · 半透明叠加"),
+            ("贴纸", "本地优先，未配置则在线下载"),
+            ("前贴", f"{config.INTRO_DIR} · 自动去重、贴纸，保留字幕"),
             ("爆款视频", f"{len(chosen)} 支 × 裂变 = {total_out} 支成片"),
             ("输出目录", out_dir),
         ]
@@ -903,6 +834,7 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
             argv = [
                 "montage", "--source", str(src), "--clip-dir", clip,
                 "--dedup-dir", pip, "--out-dir", out_dir,
+                "--intro-dir", str(config.INTRO_DIR),
             ]
             argv.extend(["--fission", str(fission[str(src)])])
             argv_list.append(argv)
@@ -940,12 +872,17 @@ def run() -> int:
             if should_quit:
                 return final_code
 
+    from . import web_config
     try:
+        url = web_config.start()
+        print(f"[配置页面] {url}")
         return curses.wrapper(_app)
     except Exception as e:  # noqa: BLE001
         # curses.wrapper 负责在任何异常下恢复终端，错误必须有非零退出码。
         print(f"[TUI 运行失败] {type(e).__name__}: {e}", file=sys.stderr)
         return 2
+    finally:
+        web_config.stop()
 
 
 # _loop 的选中记忆（静态属性）

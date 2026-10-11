@@ -71,7 +71,7 @@ class SliceScopeTests(unittest.TestCase):
             out_vals[:] = [False, False]
             return True
 
-        with mock.patch.object(tui, "_pick_dir", return_value=str(self.root)), \
+        with mock.patch.object(config, "SRC_DIR", self.root), \
              mock.patch.object(tui, "_confirm", side_effect=confirm):
             cmds = tui._wizard_slice(mock.Mock(), 100)
         self.assertEqual(len(cmds), 1)

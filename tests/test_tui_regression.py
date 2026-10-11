@@ -102,7 +102,7 @@ class TUIRegression(unittest.TestCase):
             self.assertEqual(lines[-1][1], "2 个")
             output[:] = [False, True]
             return True
-        with mock.patch.object(tui, "_pick_dir", return_value="/tmp"), \
+        with mock.patch.object(config, "SRC_DIR", Path("/tmp")), \
              mock.patch.object(scan, "list_videos_recursive", return_value=files), \
              mock.patch.object(tui, "_confirm", side_effect=confirm):
             commands = tui._wizard_slice(Screen(), 100)

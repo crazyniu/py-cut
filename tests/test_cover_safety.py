@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from pycut import cli, tui
+from pycut import cli, config, tui
 from pycut.commands import cover_cmd
 from pycut.core import scan, subtitle
 
@@ -156,7 +156,7 @@ class CoverSafetyTests(unittest.TestCase):
         def confirm(screen, lines):
             self.assertEqual(lines[-1][1], "1 个")
             return True
-        with mock.patch.object(tui, "_pick_dir", return_value="/a"), \
+        with mock.patch.object(config, "CLIP_DIR", Path("/a")), \
              mock.patch.object(scan, "list_videos_recursive",
                                return_value=files), \
              mock.patch.object(tui, "_confirm", side_effect=confirm):

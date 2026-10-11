@@ -1,13 +1,4 @@
-"""切片字幕真实擦除（流水线第三步）。
-
-原理：
-  1. 每片段抽 N 帧送 LLM 视觉检测所有叠加文字（标题/对白/警示条/免责行）的并集边界框。
-  2. 取各帧边界框中位数（抗单帧跳动），紧贴字幕外扩 -> 像素区域（高度=字幕真实高度）。
-  3. 逐帧在区域内构建"文字像素掩膜"（局部对比 + 饱和度线索），只对文字像素做 TELEA 修复，
-     并按周边纹理强度补偿颗粒 + 轻度锐化 —— 字幕被"真实擦除"，区域外零改动。
-
-对比旧版毛玻璃：无白雾、无硬边、无大面积模糊。幂等：写 <.covered.json> 标记，重复运行跳过。
-"""
+"""检测字幕高度，在全视频宽度的矩形内覆盖马赛克，保留音轨并原子替换。"""
 from __future__ import annotations
 
 import json
@@ -28,12 +19,7 @@ from .utils import log
 SAMPLES = 5             # 每片段抽帧检测数（越多越能覆盖所有文字行）
 DETECT_WIDTH = 480      # 送检帧宽（足够 LLM 定位，省 token）
 MAX_H_RATIO = 0.55      # 遮盖带最大高度占比（仅防误检把大半屏盖掉，正常不触发）
-PAD_X, PAD_Y = 0.12, 0.12   # 检测框外扩比例（掩膜法只动文字像素，外扩只是兜底防漏）
-CONTRAST_TH = 20        # 文字掩膜：与局部背景估计的灰度差阈值
-SAT_TH = 150            # 文字掩膜：饱和度阈值（捕捉红/黄/蓝色块标题）
-DILATE_K = 9            # 掩膜膨胀核（盖住描边/光晕/抗锯齿边缘）
-INPAINT_R = 4           # TELEA 修复半径
-GRAIN_BOOST = 1.3       # 填补区颗粒增益（匹配周边纹理强度）
+PAD_Y = 0.12  # 按字幕高度增加上下余量
 WORKERS = 4             # 并发片段数（每片段 = N 次 LLM + 1 次逐帧修复）
 
 # 切片桶在运行时可能被 slice/dedup 的 --src-dir/--out-dir 覆盖，故 collect_clips
@@ -147,23 +133,14 @@ def detect_region(llm: LLMClient, clip: Path,
         y2 = min(1.0, cy + half)
     y2 = min(y2, 0.995)
 
-    # 紧贴字幕外扩（少量余量确保盖全字形，但不做成固定大色块）
-    x1 = max(0.0, x1 - PAD_X * (x2 - x1))
-    x2 = min(1.0, x2 + PAD_X * (x2 - x1))
-    y1 = max(0.0, y1 - PAD_Y * (y2 - y1))
-    y2 = min(1.0, y2 + PAD_Y * (y2 - y1))
-
-    # 边缘吸附：框贴近视图左右边缘时延伸到边缘 —— 大标题的装饰/发光常出血到画外，
-    # LLM 框往往从可见文字主体量起，漏掉贴边部分（实测左缘残留蓝色装饰）。
-    EDGE_GLUE = 0.10
-    if x1 <= EDGE_GLUE:
-        x1 = 0.0
-    if x2 >= 1.0 - EDGE_GLUE:
-        x2 = 1.0
+    # 高度跟随字幕边界，宽度固定覆盖整个视频。
+    pad = PAD_Y * (y2 - y1)
+    y1 = max(0.0, y1 - pad)
+    y2 = min(1.0, y2 + pad)
 
     # 像素化 + 偶数对齐（h264 要求偶数尺寸）
-    X, Y = int(x1 * W), int(y1 * H)
-    BW, BH = int((x2 - x1) * W), int((y2 - y1) * H)
+    X, Y = 0, int(y1 * H)
+    BW, BH = W, int((y2 - y1) * H)
     X -= X % 2
     Y -= Y % 2
     BW += BW % 2
@@ -175,20 +152,22 @@ def detect_region(llm: LLMClient, clip: Path,
     return X, Y, BW, BH, texts
 
 
-def _adaptive_kernel(bh: int, bw: int) -> int:
-    """文字掩膜局部背景估计的中值核：需大于笔画宽度，且小于区域短边。"""
-    k = min(81, max(31, min(bh, bw) // 3))
-    if k % 2 == 0:
-        k -= 1
-    if k >= min(bh, bw):
-        k = min(bh, bw) - 1
-        if k % 2 == 0:
-            k -= 1
-    return max(k, 3)
+def mosaic_region(frame: np.ndarray, y: int, height: int) -> None:
+    """修改一条全宽矩形带；带外像素保持不变。"""
+    h, w = frame.shape[:2]
+    top, bottom = max(0, y), min(h, y + height)
+    if bottom <= top:
+        raise ValueError("字幕区域高度无效")
+    roi = frame[top:bottom, :]
+    block = max(12, w // 30)
+    small = cv2.resize(roi, (max(1, w // block), max(1, (bottom - top) // block)),
+                       interpolation=cv2.INTER_AREA)
+    frame[top:bottom, :] = cv2.resize(small, (w, bottom - top),
+                                    interpolation=cv2.INTER_NEAREST)
 
 
 def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
-    """真实去字幕：逐帧文字掩膜 + TELEA 修复 + 颗粒补偿，区域外零改动，原子替换。"""
+    """全宽矩形马赛克，保留原声，编码成功才替换原文件。"""
     X, Y, BW, BH = region
     w_s = probe_scalar(clip, "stream=width")
     h_s = probe_scalar(clip, "stream=height")
@@ -197,10 +176,6 @@ def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
         log(f"  [遮盖失败] {clip.name}: probe 不到分辨率")
         return False
     W, H = int(w_s), int(h_s)
-    K = _adaptive_kernel(BH, BW)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (DILATE_K, DILATE_K))
-    rng = np.random.default_rng(7)
-
     dec = subprocess.Popen(
         [FFMPEG, "-loglevel", "error", "-i", str(clip),
          "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
@@ -214,7 +189,7 @@ def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
          # 旧代码仅有 stdin 这一路（无音轨），-c:a copy 并不能凭空保留声音。
          "-i", str(clip),
          "-map", "0:v:0", "-map", "1:a:0?",
-         "-c:v", "h264_videotoolbox", "-b:v", "8M", "-pix_fmt", "yuv420p",
+         "-c:v", config.SLICE_ENCODER, "-b:v", "8M", "-pix_fmt", "yuv420p",
          "-c:a", "copy", "-movflags", "+faststart", str(tmp)],
         stdin=subprocess.PIPE, bufsize=10 ** 8)
     try:
@@ -222,47 +197,14 @@ def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
         written = 0
         broken_pipe = False
         while True:
+            if STOP.flag:
+                broken_pipe = True
+                break
             raw = dec.stdout.read(frame_bytes)
             if len(raw) < frame_bytes:
                 break
             frame = np.frombuffer(raw, np.uint8).reshape(H, W, 3).copy()
-            roi = frame[Y:Y + BH, X:X + BW]
-            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-
-            # --- 文字掩膜：局部对比（细笔画/描边）+ 饱和度（彩色色块标题）---
-            bg = cv2.medianBlur(gray, K)
-            _, m1 = cv2.threshold(
-                cv2.absdiff(gray, bg), CONTRAST_TH, 255, cv2.THRESH_BINARY)
-            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-            _, m2 = cv2.threshold(hsv[..., 1], SAT_TH, 255, cv2.THRESH_BINARY)
-            mask = cv2.dilate(cv2.bitwise_or(m1, m2), kernel, iterations=2)
-
-            # --- 修复：TELEA 只填补文字像素 ---
-            res = cv2.inpaint(roi, mask, INPAINT_R, cv2.INPAINT_TELEA)
-
-            # --- 颗粒补偿：按周边纹理强度在填补区合成同强度噪声，避免平滑补丁感 ---
-            f32 = roi.astype(np.float32)
-            resid = f32 - cv2.GaussianBlur(f32, (0, 0), 3)
-            resid_sq = cv2.boxFilter(resid * resid, -1, (15, 15))
-            resid_sq[mask > 0] = 0.0
-            localvar = np.maximum(cv2.boxFilter(resid_sq, -1, (25, 25)), 1.0)
-            mm = mask > 0
-            if (~mm).any():
-                localvar[mm] = np.percentile(localvar[~mm], 75)
-            nl = cv2.GaussianBlur(rng.normal(0, 1, (BH, BW))
-                                  .astype(np.float32), (0, 0), 0.8)[..., None]
-            nc = rng.normal(0, 1, (BH, BW, 3)).astype(np.float32) * 0.35
-            out = res.astype(np.float32) + (nl + nc) * np.sqrt(localvar) * GRAIN_BOOST
-            res = np.clip(out, 0, 255).astype(np.uint8)
-
-            # --- 轻度锐化（仅填补区内），恢复局部对比 ---
-            sharp = cv2.addWeighted(res, 1.35, cv2.GaussianBlur(res, (0, 0), 3),
-                                    -0.35, 0)
-            soft = cv2.GaussianBlur(mask, (0, 0), 2).astype(np.float32) / 255.0
-            res = (sharp.astype(np.float32) * soft[..., None]
-                   + res.astype(np.float32) * (1 - soft[..., None])).astype(np.uint8)
-
-            frame[Y:Y + BH, X:X + BW] = res
+            mosaic_region(frame, Y, BH)
             try:
                 enc.stdin.write(frame.tobytes())
                 written += 1

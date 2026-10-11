@@ -23,6 +23,7 @@ class MontageOptions:
     clip_dir: Path = field(default_factory=lambda: config.MONTAGE_CLIP_DIR)
     dedup_dir: Path = field(default_factory=lambda: config.MONTAGE_DEDUP_DIR)
     out_dir: Path = field(default_factory=lambda: config.MONTAGE_OUT)
+    intro_dir: Path | None = None
     seed: int | None = None
     allow_landscape: bool = False
     pip_slot: float = 2.5
@@ -319,6 +320,19 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 "未覆盖原有成片")
             log(f"  [失败] {result['error']}")
             return result
+        intro_report = None
+        if opts.intro_dir is not None:
+            from ..core.montage_intro import prepend
+            log("--- 步骤F：前贴去重、贴纸与拼接（保留字幕） ---")
+            try:
+                intro_report = prepend(working, opts.intro_dir, seed=seed, canvas=canvas,
+                                       stickers=stickers, crf=opts.crf,
+                                       keep_audio=bool(result.get("audio")))
+                duration = _duration(working)
+            except (RuntimeError, ValueError, OSError) as exc:
+                result["error"] = f"前贴处理失败：{exc}"
+                log(f"  [失败] {result['error']}；未发布成片")
+                return result
         try:
             os.replace(str(working), str(final))
         except OSError as exc:
@@ -337,6 +351,8 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 "seed": seed, "canvas": canvas, "fps": config.MONTAGE_FPS,
                 "source": str(opts.source), "duration": duration,
                 "reference_duration": target,
+                "intro": intro_report,
+                "subtitle_offset": intro_report["duration"] if intro_report else 0.0,
                 "audio": "reference" if result.get("audio") else "silent",
                 "subtitle_timing": "reference",
                 "background": [{k: p.get(k) for k in (
