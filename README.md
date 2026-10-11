@@ -75,6 +75,8 @@ pycut/
 （已装则跳过，不重复联网）→ 校验 cv2 → 打印生效网关（**不打印密钥**）→ 运行入口。
 没有 `.env` 时自动由 `.env.example` 生成并提示填密钥。
 
+启动安装脚本目前仅支持 Linux 和 macOS，Windows 暂不处理。启动时检查 ffmpeg/ffprobe 能否运行，缺少时自动用系统包管理器安装 FFmpeg，并在安装后重新检查。macOS 使用 Homebrew；Linux 支持 apt、dnf、yum、pacman、zypper 和 apk，普通用户安装系统包时会使用 sudo。Python 缺失时也尝试安装。系统 Python 限制全局 pip 安装时，自动使用项目 `.venv`；依赖齐全时直接启动。安装失败或无可用安装器会明确报错并停止。`PYCUT_FFMPEG` / `PYCUT_FFPROBE` 自定义路径必须有效。
+
 ### 各功能常用命令
 
 ```bash

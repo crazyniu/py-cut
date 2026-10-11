@@ -25,6 +25,7 @@ Markdown 只保留长期需求、架构、技术约定与可复现限制，不�
 - **解释器**：macOS 优先使用自带 cv2/numpy 的托管解释器
   `/Users/apple/.workbuddy/binaries/python/versions/3.13.12/bin/python3`（存在时）。
   其他环境由 `./run.sh` 选择当前解释器并校验 OpenCV 4.x 的 Haar 支持，不要求 macOS 路径存在；禁止绕过启动器运行处理任务。
+  缺少依赖时启动器自动安装；系统 Python 标记 EXTERNALLY-MANAGED 时允许启动器创建项目 `.venv`，不得使用 `--break-system-packages`。缺少 FFmpeg 时通过当前系统包管理器安装并复检，失败停止。
 - **依赖**：视频核心仅 `numpy` + `opencv-python`，目录选择明确复用 MIT 开源的 `textual-fspicker==1.0.1`（传递依赖 `textual`），Windows 使用 `windows-curses`。其余 LLM、.env 和 CLI 仍优先标准库，除目录选择所需依赖外不得随意扩展。
 - **ffmpeg**：macOS 优先 Homebrew `ffmpeg-full` 与 VideoToolbox，其他环境使用 PATH 的 ffmpeg/ffprobe 与 libx264。
   `PYCUT_FFMPEG` / `PYCUT_FFPROBE` 环境变量可覆盖路径，集中定义在 `pycut/config.py`。

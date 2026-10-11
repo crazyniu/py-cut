@@ -12,13 +12,78 @@
 set -uo pipefail
 
 cd "$(dirname "$0")" || exit 1
+PLATFORM="$(uname -s)"
+case "$PLATFORM" in
+  Linux|Darwin) ;;
+  *) echo '[pycut] 当前启动安装脚本仅支持 Linux 和 macOS'; exit 1 ;;
+esac
+echo "[pycut] 系统: $PLATFORM"
+
+# 只在缺少工具时调用系统包管理器；不下载并执行远程安装脚本。
+install_system_package() {
+  local package="$1"
+  local admin=()
+  if [ "$PLATFORM" = Darwin ]; then
+    command -v brew >/dev/null 2>&1 || {
+      echo '[pycut] 错误: 缺少 Homebrew，请先安装 Homebrew 后重新启动'
+      return 1
+    }
+    [ "$package" != python3 ] || package=python@3.13
+    brew install "$package"
+    return $?
+  fi
+  if [ "$(id -u)" -ne 0 ]; then
+    command -v sudo >/dev/null 2>&1 || {
+      echo '[pycut] 错误: 安装系统依赖需要管理员权限，当前没有 sudo'
+      return 1
+    }
+    admin=(sudo)
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    "${admin[@]}" apt-get update || return 1
+    if [ "$package" = python3 ]; then
+      "${admin[@]}" apt-get install -y python3 python3-pip python3-venv
+    else
+      "${admin[@]}" apt-get install -y "$package"
+    fi
+  elif command -v dnf >/dev/null 2>&1; then
+    "${admin[@]}" dnf install -y "$package"
+  elif command -v yum >/dev/null 2>&1; then
+    "${admin[@]}" yum install -y "$package"
+  elif command -v pacman >/dev/null 2>&1; then
+    [ "$package" != python3 ] || package=python
+    "${admin[@]}" pacman -S --needed --noconfirm "$package"
+  elif command -v zypper >/dev/null 2>&1; then
+    "${admin[@]}" zypper --non-interactive install "$package"
+  elif command -v apk >/dev/null 2>&1; then
+    "${admin[@]}" apk add "$package"
+  else
+    echo "[pycut] 错误: 未找到支持的包管理器，请安装 $package 后重新启动"
+    return 1
+  fi
+}
 
 # ---------- 1. 选解释器：优先自带 cv2 的托管解释器 ----------
 MANAGED="/Users/apple/.workbuddy/binaries/python/versions/3.13.12/bin/python3"
-if [ -x "$MANAGED" ]; then
+if [ -x "$PWD/.venv/bin/python3" ]; then
+  PY="$PWD/.venv/bin/python3"
+elif [ -x "$MANAGED" ]; then
   PY="$MANAGED"
 else
-  PY="$(command -v python3 || echo python3)"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo '[pycut] 缺少 Python，自动安装 ...'
+    install_system_package python3 || exit 1
+    hash -r
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    PY="$(command -v python3)"
+  elif [ "$PLATFORM" = Darwin ]; then
+    PY="$(brew --prefix python@3.13)/bin/python3.13"
+    [ -x "$PY" ] || exit 1
+  else
+    echo '[pycut] 错误: Python 安装后仍不可用'
+    exit 1
+  fi
 fi
 echo "[pycut] 解释器: $PY"
 
@@ -38,19 +103,62 @@ IS_TUI=0
 if [ "$#" -eq 0 ] || [ "${1:-}" = "tui" ]; then
   IS_TUI=1
 fi
-REQUIRED_IMPORTS='import cv2, numpy; assert hasattr(cv2, "CascadeClassifier")'
+REQUIRED_IMPORTS='import cv2, numpy; assert cv2.__version__.split(".")[0] == "4"; assert hasattr(cv2, "CascadeClassifier")'
 if [ "$IS_TUI" -eq 1 ]; then
-  REQUIRED_IMPORTS='import cv2, numpy, textual, textual_fspicker; assert hasattr(cv2, "CascadeClassifier")'
+  REQUIRED_IMPORTS="$REQUIRED_IMPORTS; import curses, textual, textual_fspicker"
 fi
 if [ -f requirements.txt ]; then
   if "$PY" -c "$REQUIRED_IMPORTS" >/dev/null 2>&1; then
     echo '[pycut] 运行依赖已就绪'
   else
     echo '[pycut] 安装缺失依赖 requirements.txt ...'
-    "$PY" -m pip install -q --disable-pip-version-check -r requirements.txt || \
-      echo '[pycut] 警告: pip 安装失败，可能无网络或不可安装依赖'
+    if "$PY" -c 'import pathlib, sysconfig, sys; sys.exit(not (sys.prefix == sys.base_prefix and (pathlib.Path(sysconfig.get_path("stdlib")) / "EXTERNALLY-MANAGED").exists()))' >/dev/null 2>&1; then
+      echo '[pycut] 系统 Python 禁止全局 pip 安装，使用项目 .venv'
+      "$PY" -m venv .venv || exit 1
+      PY="$PWD/.venv/bin/python3"
+    fi
+    if ! "$PY" -m pip --version >/dev/null 2>&1; then
+      "$PY" -m ensurepip --upgrade || exit 1
+    fi
+    "$PY" -m pip install -q --disable-pip-version-check -r requirements.txt || {
+      echo '[pycut] 错误: 依赖安装失败，请检查网络及 Python 安装权限'
+      exit 1
+    }
   fi
 fi
+
+if ! "$PY" -c "$REQUIRED_IMPORTS" >/dev/null 2>&1; then
+  echo '[pycut] 错误: 安装后依赖仍未就绪，停止启动'
+  exit 1
+fi
+
+# ---------- FFmpeg：使用与处理代码一致的工具路径，安装后复检 ----------
+check_media_tools() {
+  "$PY" - <<'PY'
+import subprocess
+from pycut import config
+for name in ('ffmpeg', 'ffprobe'):
+    path = config._media_tool(name)
+    try:
+        result = subprocess.run([path, '-version'], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=15)
+        if result.returncode:
+            raise OSError('version check failed')
+    except (OSError, subprocess.TimeoutExpired):
+        print(f'[pycut] 缺失或不可用: {name} ({path})')
+        raise SystemExit(1)
+PY
+}
+if ! check_media_tools; then
+  echo '[pycut] 自动安装 FFmpeg（含 ffprobe）...'
+  install_system_package ffmpeg || exit 1
+  hash -r
+  if ! check_media_tools; then
+    echo '[pycut] 错误: 安装后 FFmpeg 仍不可用，请检查 PATH 或 PYCUT_FFMPEG/PYCUT_FFPROBE 配置'
+    exit 1
+  fi
+fi
+echo '[pycut] FFmpeg / ffprobe 已就绪'
 if [ "$IS_TUI" -eq 1 ] && ! "$PY" -c 'import textual, textual_fspicker' >/dev/null 2>&1; then
   echo '[pycut] 错误: 缺少纯终端目录选择组件 textual-fspicker'
   echo "        运行: $PY -m pip install -r requirements.txt"
