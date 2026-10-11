@@ -110,14 +110,3 @@ def stop() -> None:
         _SERVER.shutdown()
         _SERVER.server_close()
         _SERVER = None
-
-
-def run() -> int:
-    from .core.utils import log
-    log(f'[配置页面] {start()}（Ctrl+C 关闭）')
-    try:
-        threading.Event().wait()
-    except KeyboardInterrupt:
-        return 0
-    finally:
-        stop()
