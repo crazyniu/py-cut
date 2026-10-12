@@ -85,7 +85,7 @@ def _display_command(argv: list[str]) -> str:
 
 
 def _draw_results(stdscr, results: list[dict], total: int, status: str,
-                  history: deque[str], offset: int, show_details: bool) -> None:
+                  history: deque[str], offset: int, show_details: bool) -> int:
     import curses
     h, w = stdscr.getmaxyx()
     stdscr.erase()
@@ -126,15 +126,15 @@ def _draw_results(stdscr, results: list[dict], total: int, status: str,
     if h > 4:
         tui._safe_add(stdscr, h - 1, 1, "任务已经结束，等待你确认" + (" · ↓查看更多" if len(rows) > count else ""), w, "accent", curses.A_BOLD)
     stdscr.refresh()
+    return start
 
 
 def _draw(stdscr, argv: list[str], index: int, total: int,
-          history: deque[str], offset: int, status: str, progress: dict | None = None, elapsed: float = 0, show_details: bool = False, results: list[dict] | None = None) -> None:
+          history: deque[str], offset: int, status: str, progress: dict | None = None, elapsed: float = 0, show_details: bool = False, results: list[dict] | None = None) -> int | None:
     import curses  # noqa: PLC0415
 
     if results is not None:
-        _draw_results(stdscr, results, total, status, history, offset, show_details)
-        return
+        return _draw_results(stdscr, results, total, status, history, offset, show_details)
     h, w = stdscr.getmaxyx()
     if tui._small_screen(stdscr):
         return
@@ -386,7 +386,9 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
     show_details = False
     stdscr.timeout(-1)
     while True:
-        _draw(stdscr, last_argv, executed, len(argv_list), history, offset, status, show_details=show_details, results=results)
+        start = _draw(stdscr, last_argv, executed, len(argv_list), history, offset, status, show_details=show_details, results=results)
+        if start is not None:
+            offset = start
         try:
             k = stdscr.getch()
         except KeyboardInterrupt:

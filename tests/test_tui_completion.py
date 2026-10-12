@@ -66,3 +66,22 @@ def test_actual_child_no_output_does_not_inherit_old_stages(tmp_path):
     with mock.patch.object(tui_runner,'_ROOT',tmp_path),mock.patch.object(tui_runner,'_draw',side_effect=lambda *args:drawn.append(args)):
         assert tui_runner._run_one(screen,['slice'],1,1,history)==(0,False)
     assert all(not args[7] for args in drawn)
+
+
+def test_overscroll_at_bottom_one_up_immediately_moves():
+    screen=mock.Mock()
+    screen.getmaxyx.return_value=(10,60)
+    screen.getch.side_effect=[258]*30+[259,10]
+    seen=[]
+    original=tui_runner._draw_results
+    def draw(*args):
+        start=original(*args)
+        seen.append(start)
+        return start
+    def run(screen,argv,index,total,history):
+        for i in range(10):
+            history.append(PREFIX+json.dumps(dict(stage=f'阶段{i}',completed=1,total=1,success=1)))
+        return 0,False
+    with mock.patch.object(tui_runner,'_run_one',side_effect=run),mock.patch.object(tui_runner,'_draw_results',side_effect=draw),mock.patch.object(tui,'_safe_add'),mock.patch('curses.flushinp'):
+        assert tui_runner.run_jobs(screen,[['slice']])==(0,False)
+    assert seen[-1]==seen[-2]-1
