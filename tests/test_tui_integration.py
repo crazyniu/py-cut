@@ -127,6 +127,7 @@ class TUIIntegrationTests(unittest.TestCase):
              mock.patch.object(tui, "_count_sticker_images", return_value=1), \
              mock.patch.object(tui, "list_videos_flat", return_value=[first, second]), \
              mock.patch.object(tui, "_multi_select", return_value=selection), \
+             mock.patch.object(tui, "_set_fission_counts", return_value=True), \
              mock.patch.object(tui, "_confirm", return_value=True):
             commands = tui._wizard_montage(FakeScreen(), 100)
         self.assertEqual(len(commands), 2)
@@ -152,7 +153,8 @@ class TUIIntegrationTests(unittest.TestCase):
                                    side_effect=[0, 1]), \
                  mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
                  mock.patch.object(tui, "_multi_select", return_value=selection), \
-                 mock.patch.object(tui, "_confirm", return_value=True):
+                 mock.patch.object(tui, "_set_fission_counts", return_value=True), \
+             mock.patch.object(tui, "_confirm", return_value=True):
                 commands = tui._wizard_montage(FakeScreen(), 100)
         self.assertEqual(len(commands), 1)
         args = cli.build_parser().parse_args(commands[0])

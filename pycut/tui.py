@@ -538,7 +538,7 @@ def _multi_select(stdscr, title: str, files: list[Path],
                   ) -> tuple[list[Path], dict[str, int]] | None:
     """多选视频列表 + 每个的裂变数量。返回 (选中列表, {路径: 裂变数})；Esc 返回 None。
 
-    空格勾选/取消；选中项上按数字键 0-9 设置裂变数量（默认 1）；A 全选/取消全选。
+    空格勾选/取消；下一步逐视频输入数量；E或数字键可提前设置（默认1）；A 全选/取消全选。
     """
     if not files:
         return None
@@ -615,6 +615,25 @@ def _multi_select(stdscr, title: str, files: list[Path],
                 continue
             chosen = [files[i] for i in sorted(selected)]
             return chosen, {str(f): fission[str(f)] for f in chosen}
+
+
+
+def _set_fission_counts(stdscr, chosen: list[Path], counts: dict[str, int]) -> bool:
+    """每个已选视频都明确输入数量；取消时保留已填值，返回上一步。"""
+    for index, source in enumerate(chosen, 1):
+        h, w = stdscr.getmaxyx()
+        stdscr.erase()
+        _frame(stdscr, "混剪 · 2/3 设置裂变数量",
+               f"第 {index}/{len(chosen)} 个视频 · 每个视频可生成 1～99 条")
+        _safe_add(stdscr, 5, 2, _ellipsize(source.name, w - 4), w, "accent", curses.A_BOLD)
+        _safe_add(stdscr, 6, 2, "输入这支视频要生成的成片数量", w, "text")
+        _footer(stdscr, "Enter 保存数量并继续 · Esc 返回视频选择", "Enter 继续 · Esc 返回")
+        stdscr.refresh()
+        number = _prompt_int(stdscr, 8, 2, w, "生成条数", counts[str(source)], 1, 99)
+        if number is None:
+            return False
+        counts[str(source)] = number
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -809,7 +828,7 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
             if not files:
                 _flash(stdscr, f"该目录下没有视频：{directories[0]}", "bad")
                 return None
-            result = _multi_select(stdscr, "混剪 · 1/2 选择爆款视频及裂变数量",
+            result = _multi_select(stdscr, "混剪 · 1/3 选择爆款视频",
                                    files, initial=selection)
             if result is None:
                 return None
@@ -818,9 +837,15 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
             continue
 
         assert selection is not None
+        chosen, fission = selection
+        if step == 4:
+            if not _set_fission_counts(stdscr, chosen, fission):
+                step = 3
+                continue
+            step = 5
+            continue
         assert all(d is not None for d in directories)
         src_dir, clip, pip = directories
-        chosen, fission = selection
         total_out = sum(fission[str(f)] for f in chosen)
         out_dir = str(config.MONTAGE_OUT)
         lines = [
@@ -835,8 +860,9 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
         ]
         for i, src in enumerate(chosen, 1):
             lines.append((f"来源 {i}", f"{src.name} × {fission[str(src)]}"))
+        lines.insert(0, ("混剪 · 3/3", "确认以下数量后开始生成"))
         if not _confirm(stdscr, lines):
-            step = 3
+            step = 4
             continue
 
         # Preserve the existing argv/CLI contract exactly.

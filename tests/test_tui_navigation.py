@@ -152,14 +152,14 @@ class NavigationTests(unittest.TestCase):
              mock.patch.object(tui, "_multi_select",
                                return_value=selection) as multiselect, \
              mock.patch.object(tui, "_count_sticker_images", return_value=1), \
+             mock.patch.object(tui, "_set_fission_counts", return_value=True), \
              mock.patch.object(tui, "_confirm", side_effect=[False, True]):
             commands = tui._wizard_montage(Screen([]), 100)
         self.assertEqual(len(commands), 1)
         self.assertEqual(commands[0][-2:], ["--fission", "12"])
-        self.assertEqual(multiselect.call_count, 2)
+        self.assertEqual(multiselect.call_count, 1)
         self.assertIsNone(multiselect.call_args_list[0].kwargs["initial"])
-        self.assertEqual(multiselect.call_args_list[1].kwargs["initial"],
-                         selection)
+        self.assertEqual(selection[1][str(video)], 12)
 
     def test_montage_reads_configured_folders_without_picker(self):
         video = Path("/tmp/source/test.mp4")
@@ -169,6 +169,7 @@ class NavigationTests(unittest.TestCase):
              mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 1), \
              mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
              mock.patch.object(tui, "_multi_select", return_value=([video], {str(video):3})), \
+             mock.patch.object(tui, "_set_fission_counts", return_value=True), \
              mock.patch.object(tui, "_confirm", return_value=True):
             commands = tui._wizard_montage(Screen([]), 100)
         picker.assert_not_called()
