@@ -288,7 +288,8 @@ def _build_chain(params: dict, info: VideoInfo) -> list[str]:
         zoom = 1.0
     if abs(zoom - 1.0) > 1e-4:
         chain.append(f"scale=iw*{zoom:.5f}:ih*{zoom:.5f}")
-        cw, ch = int(round(cw * zoom)), int(round(ch * zoom))
+        # scale 的表达式向下截断尺寸；round 会让后继 crop 超过真实输入一像素。
+        cw, ch = int(cw * zoom), int(ch * zoom)
         geo = True
 
     # --- 梯形微变形：**已停用**，详见下方「为什么不用 perspective」---
