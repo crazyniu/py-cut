@@ -84,10 +84,57 @@ def _display_command(argv: list[str]) -> str:
     return " ".join(out)
 
 
+def _draw_results(stdscr, results: list[dict], total: int, status: str,
+                  history: deque[str], offset: int, show_details: bool) -> None:
+    import curses
+    h, w = stdscr.getmaxyx()
+    stdscr.erase()
+    labels = {"success": "全部处理完成", "review": "处理完成 · 有待复查项",
+              "error": "处理失败 · 后续依赖已停止", "cancelled": "处理已中断"}
+    color = "good" if status == "success" else "bad" if status == "error" else "warn"
+    completed = sum(r["code"] == 0 and not r["cancelled"] for r in results)
+    tui._safe_add(stdscr, 0, 1, "━━ " + labels[status] + " ━━", w, color, curses.A_BOLD)
+    tui._safe_add(stdscr, 1, 1, f"已结束 · 完成流程 {completed}/{total} · 已运行 {len(results)} · 未执行 {total - len(results)}", w, color)
+    tui._safe_add(stdscr, 2, 1, "Enter/Esc 确认返回 · Q 退出 · ↑↓滚动 · L 日志", w, "accent")
+    names = {"slice": "切片", "cover": "字幕擦除", "dedup": "去重", "montage": "混剪"}
+    rows = []
+    for i, result in enumerate(results, 1):
+        events = result["events"]
+        label = "已中断" if result["cancelled"] else "失败" if result["code"] else "待复查" if any(e.get("review") for e in events.values()) else "完成"
+        rows.append(f"{i}. {names.get(result['command'], result['command'])} · {label} · 退出码 {result['code']}")
+        if not events:
+            rows.append("  未提供阶段计数；以退出码确认任务结束")
+        for stage, event in events.items():
+            rows.append(f"  {stage} {event.get('completed', 0)}/{event.get('total', 0)} · 成功 {event.get('success', 0)} · 失败 {event.get('failed', 0)} · 待复查 {event.get('review', 0)} · 跳过 {event.get('skipped', 0)}")
+        outputs = dict.fromkeys(e['output'] for e in events.values() if e.get('output'))
+        for output in outputs:
+            rows.append("  结果目录：" + output)
+    if show_details:
+        rows.extend(line for line in history if not parse(line))
+    wrapped = []
+    for line in rows:
+        while tui._disp_width(line) > max(2, w - 3):
+            part = tui._clip(line, max(2, w - 3))
+            wrapped.append(part)
+            line = line[len(part):]
+        wrapped.append(line)
+    rows = wrapped
+    count = max(0, h - 4)
+    start = min(offset, max(0, len(rows) - count))
+    for y, row in enumerate(rows[start:start + count], 3):
+        tui._safe_add(stdscr, y, 1, row, w, "text")
+    if h > 4:
+        tui._safe_add(stdscr, h - 1, 1, "任务已经结束，等待你确认" + (" · ↓查看更多" if len(rows) > count else ""), w, "accent", curses.A_BOLD)
+    stdscr.refresh()
+
+
 def _draw(stdscr, argv: list[str], index: int, total: int,
-          history: deque[str], offset: int, status: str, progress: dict | None = None, elapsed: float = 0, show_details: bool = False) -> None:
+          history: deque[str], offset: int, status: str, progress: dict | None = None, elapsed: float = 0, show_details: bool = False, results: list[dict] | None = None) -> None:
     import curses  # noqa: PLC0415
 
+    if results is not None:
+        _draw_results(stdscr, results, total, status, history, offset, show_details)
+        return
     h, w = stdscr.getmaxyx()
     if tui._small_screen(stdscr):
         return
@@ -218,7 +265,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
     reader = threading.Thread(target=_reader, daemon=True)
     reader.start()
     started_at = time.monotonic()
-    progress = {event["stage"]: event for line in history if (event := parse(line))}
+    progress = {}  # A new child must not inherit the previous command’s stages.
     offset = 0
     show_details = False
     interrupted_at: float | None = None
@@ -304,11 +351,17 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
     cancelled = False
     last_argv = argv_list[0] if argv_list else []
     executed = 0
+    results = []
     for i, argv in enumerate(argv_list, 1):
         last_argv = argv
         executed = i
         history.append(f"━━ 任务 {i}/{len(argv_list)}：{argv[0]} ━━")
-        code, cancelled = _run_one(stdscr, argv, i, len(argv_list), history)
+        task_history: deque[str] = deque(maxlen=600)
+        code, cancelled = _run_one(stdscr, argv, i, len(argv_list), task_history)
+        history.extend(task_history)
+        results.append({"command": argv[0], "code": code or (130 if cancelled else 0),
+                        "cancelled": cancelled,
+                        "events": {e["stage"]: e for line in task_history if (e := parse(line))}})
         if cancelled and not code:
             code = 130
         if code:
@@ -322,22 +375,29 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
         f"[执行结果] {label} · 已运行 {executed}/{len(argv_list)} 项 · "
         f"跳过 {len(argv_list) - executed} 项 · 退出码 {code}"
     )
+    if status == "success" and any(e.get("review") for r in results for e in r["events"].values()):
+        status = "review"
+    import curses
+    try:
+        curses.flushinp()  # Discard keys queued while the last child was finishing.
+    except curses.error:
+        pass
     offset = 0
     show_details = False
     stdscr.timeout(-1)
     while True:
-        _draw(stdscr, last_argv, executed, len(argv_list), history, offset, status, show_details=show_details)
+        _draw(stdscr, last_argv, executed, len(argv_list), history, offset, status, show_details=show_details, results=results)
         try:
             k = stdscr.getch()
         except KeyboardInterrupt:
             return code or 130, True
-        if k in (10, 13, ord(" "), 27):
+        if k in (10, 13, 27):
             return code, False
         if k in (ord("q"), ord("Q")):
             return code, True
         if k in (ord("l"), ord("L")):
             show_details = not show_details
         if k in (ord("k"), 259, 339):
-            offset = min(max(0, len(history) - 1), offset + (12 if k == 339 else 1))
+            offset = max(0, offset - (12 if k == 339 else 1))
         if k in (ord("j"), 258, 338):
-            offset = max(0, offset - (12 if k == 338 else 1))
+            offset += 12 if k == 338 else 1
