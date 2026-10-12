@@ -786,18 +786,20 @@ def _count_sticker_images(folder: Path) -> int:
 
 
 def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
-    """Five existing steps with reversible navigation and preserved selection.
-
-    0: source directory  1: clip directory  2: PiP directory
-    3: source selection / fission  4: confirmation
-    """
+    """Use configured libraries, then select references and confirm."""
+    from .core.montage_clips import _collect_files, VIDEO_EXTS
     directories = [str(config.REFERENCE_DIR), str(config.MONTAGE_CLIP_DIR),
                    str(config.MONTAGE_DEDUP_DIR)]
-    clip_count = count_videos_recursive(directories[1])
-    pip_count = count_videos_recursive(directories[2])
-    if not clip_count or not pip_count:
-        _flash(stdscr, "背景或画中画素材为空，请在 Web 配置页检查目录", "bad")
+    # Match the actual montage collector: recursive, same supported formats.
+    counts = [len(_collect_files(Path(d))) for d in directories[1:]]
+    missing = [f"{label}：{path}" for label, path, count in
+               zip(("背景切片", "画中画切片"), directories[1:], counts) if not count]
+    if missing:
+        _flash(stdscr, "未找到混剪候选 · " + "；".join(missing)
+               + " · 递归支持 " + "/".join(ext[1:].upper() for ext in VIDEO_EXTS)
+               + "，请检查 Web 中该目录及其子目录", "bad")
         return None
+    clip_count, pip_count = counts
     selection = None
     step = 3
     while True:

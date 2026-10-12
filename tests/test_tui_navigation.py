@@ -147,7 +147,7 @@ class NavigationTests(unittest.TestCase):
         selection = ([video], {str(video): 12})
         with mock.patch.object(tui, "_pick_dir",
                                side_effect=["/tmp/sources", "/tmp/clips", "/tmp/pip"]), \
-             mock.patch.object(tui, "count_videos_recursive", return_value=2), \
+             mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 2), \
              mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
              mock.patch.object(tui, "_multi_select",
                                return_value=selection) as multiselect, \
@@ -166,7 +166,7 @@ class NavigationTests(unittest.TestCase):
         with mock.patch.object(config, "MONTAGE_CLIP_DIR", Path("/tmp/clips")), \
              mock.patch.object(config, "MONTAGE_DEDUP_DIR", Path("/tmp/pip")), \
              mock.patch.object(tui, "_pick_dir") as picker, \
-             mock.patch.object(tui, "count_videos_recursive", return_value=1), \
+             mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 1), \
              mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
              mock.patch.object(tui, "_multi_select", return_value=([video], {str(video):3})), \
              mock.patch.object(tui, "_confirm", return_value=True):
