@@ -1,6 +1,7 @@
 """Shared sibling output directories and flat filenames."""
 from datetime import datetime
 from pathlib import Path
+import os
 import re
 import unicodedata
 
@@ -17,6 +18,14 @@ def source_root(src: Path) -> Path:
 def sibling(root: Path, kind: str) -> Path:
     root = root.expanduser().resolve()
     return root.parent / kind
+
+
+def slice_output_root(source: Path, explicit: str = "") -> Path:
+    """CLI/TUI共用：显式输出 > 配置画中画目录 > 源目录同级切片。"""
+    from .. import config
+    if explicit:
+        return Path(explicit).expanduser()
+    return config.PIP_DIR if os.environ.get("PYCUT_PIP_DIR", "").strip() else sibling(source, "切片")
 
 
 def montage_output(root: Path) -> Path:

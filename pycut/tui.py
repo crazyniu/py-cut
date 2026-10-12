@@ -5,7 +5,6 @@ import curses
 import curses.textpad  # noqa: F401  必须显式导入：不会随 import curses 自动加载
 import os
 import sys
-import time
 from pathlib import Path
 
 from . import __version__, cli, config
@@ -729,16 +728,17 @@ def _wizard_slice(stdscr, w: int) -> list[list[str]] | None:
     if not n:
         _flash(stdscr, f"源目录 3 层内没有 MP4：{d}", "bad")
         return None
+    from .core.output_paths import slice_output_root
+    output = slice_output_root(config.SRC_DIR)
     values = []
-    if not _confirm(stdscr, [("源目录", d), ("切片输出", str(config.CLIP_DIR)),
+    if not _confirm(stdscr, [("源目录", d), ("画中画切片输出", str(output)),
                             ("视频数量", f"{n} 个")],
-                    [("擦除字幕", "全宽矩形马赛克", True),
+                    [("擦除字幕", "单层毛玻璃模糊", True),
                      ("去重", "仅处理本次生成的切片", False)], values):
         return None
     if values[0] and not config.key_ready():
         _flash(stdscr, "擦除字幕需要配置 LLM 主网关密钥，按 W 打开配置网页", "bad")
         return None
-    output = config.CLIP_DIR / str(time.time_ns())
     argv = ["slice", "--src-dir", d, "--max-depth", "3", "--out-dir", str(output)]
     if not values[0]:
         argv.append("--no-sub")
