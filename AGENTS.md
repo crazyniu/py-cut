@@ -17,7 +17,7 @@
 
 ## 0.6 项目管理与开工门禁
 
-- **任务唯一来源**：[Linear 项目](https://linear.app/gengyun/project/py-cut-development-963524cf0d78)，团队 `DEV`（gengyun）。Linear 管需求、Bug、测试、负责人、依赖、领取、状态与验收；GitHub 仓库 `natefox2017/py-cut` 管代码、分支、Commit、PR、Review、CI 与合并。默认分支须从远端核实，不凭聊天记忆假定。
+- **任务唯一来源**：[Linear 项目](https://linear.app/gengyun/project/py-cut-development-963524cf0d78)，团队 `DEV`（gengyun）。Linear 管需求、Bug、测试、负责人、依赖、领取、状态与验收；GitHub 仓库 `gengyun-lab/py-cut` 管代码、分支、Commit、PR、Review、CI 与合并。默认分支须从远端核实，不凭聊天记忆假定。
 - 不新建 GitHub Issues/Projects 或其他重复任务系统，不启用 GitHub Issues Sync。历史 GitHub Issue 仅供需求与交付溯源；关闭不代表代码已实现，尤其 `not_planned` 不是已完成。
 - **每次开工先审计**：读取根及适用子目录 AGENTS.md、相关长期文档与真实源码；检查 remote/default branch、fetch、当前分支/工作树、开放 PR/Review/CI、Linear 项目/任务/负责人/依赖和其他开发活动。不覆盖未提交改动，不依赖历史对话认定现状。
 - 搜索并复用现有 Linear Issue。不同可独立交付的需求按文件边界拆分，标清依赖及共享接口；避免过度拆分、重复创建和重复实现。无法访问 Linear 或领取冲突时停止受影响的仓库修改，记录阻塞；不另建 Markdown/GitHub 任务清单顶替。
