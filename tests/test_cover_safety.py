@@ -139,7 +139,7 @@ class CoverSafetyTests(unittest.TestCase):
             clip.write_bytes(b"source")
             model = SimpleNamespace(
                 enabled=True, ask_vision=mock.Mock(
-                    return_value={"has_subtitle": False, "box": None}))
+                    return_value={"frames": [{"frame":i,"has_subtitle":False,"box":None} for i in range(subtitle.SAMPLES)]}))
             info = {"format=duration": "12.0", "stream=width": "720",
                     "stream=height": "1280"}
             with mock.patch.object(subtitle, "probe_scalar",
@@ -149,7 +149,7 @@ class CoverSafetyTests(unittest.TestCase):
                  mock.patch.object(subtitle, "log"):
                 self.assertEqual(subtitle.process_clip(model, clip), "nosub")
             self.assertTrue(subtitle._marker(clip).is_file())
-            self.assertEqual(model.ask_vision.call_count, subtitle.SAMPLES)
+            self.assertEqual(model.ask_vision.call_count, 1)
 
     def test_partial_llm_failure_and_malformed_positive_do_not_mark_clean(self):
         with tempfile.TemporaryDirectory() as td:
@@ -165,7 +165,7 @@ class CoverSafetyTests(unittest.TestCase):
             for responses in cases:
                 model = SimpleNamespace(
                     enabled=True,
-                    ask_vision=mock.Mock(side_effect=responses))
+                    ask_vision=mock.Mock(return_value={"frames": [dict(r or {}, frame=i) for i,r in enumerate(responses)]}))
                 with mock.patch.object(subtitle, "probe_scalar",
                                        side_effect=lambda p, entry: info[entry]), \
                      mock.patch.object(subtitle, "_grab_frame", return_value=True), \
@@ -182,9 +182,8 @@ class CoverSafetyTests(unittest.TestCase):
                     "stream=height": "1280"}
             model = SimpleNamespace(
                 enabled=True, ask_vision=mock.Mock(side_effect=[
-                    {"has_subtitle": True, "box": [0.2, 0.6, 0.8, 0.72],
-                     "text": "标题"},
-                    None, None, None, None] + [{"has_subtitle": False}] * 3))
+                    {"frames": [{"frame":0,"has_subtitle":True,"box":[.2,.6,.8,.72],"text":"标题"}] + [{"frame":i,"has_subtitle":False} for i in range(1,5)]},
+                    {"frames": [{"frame":i,"has_subtitle":False} for i in range(3)]}]))
             with mock.patch.object(subtitle, "probe_scalar",
                                    side_effect=lambda p, entry: info[entry]), \
                  mock.patch.object(subtitle, "_grab_frame", return_value=True), \

@@ -167,7 +167,7 @@ def run(args: argparse.Namespace) -> int:
             if _stopped():
                 log("[中断] 停止处理后续视频")
                 break
-            progress("源视频", idx - 1, len(files), detail="检测镜头并处理当前视频")
+            progress("源视频", idx - 1, len(files), success=sum(not (r.failed or r.sub_fail) for r in results), failed=sum(bool(r.failed or r.sub_fail) for r in results), review=sum(r.sub_review for r in results), detail=f"识别并发 {args.workers_llm} · 编码并发 {args.workers_enc} · 检测并处理当前视频")
             log(f"--- [{idx}/{len(files)}] {f.name}")
             info: VideoInfo | None = probe_video(f)
             if info is None:

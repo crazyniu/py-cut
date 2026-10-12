@@ -235,7 +235,7 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
     # 试跑必须打印切点，即使已存在产物也不能被“续跑”逻辑吞掉。
     if not opts.force and not opts.dry_run and video_done(
         info.stem, len(segs),
-        require_sub=bool(not opts.no_sub and llm.enabled),
+        require_sub=not opts.no_sub,
     ):
         res.skipped = True
         progress("切片编码", len(segs), len(segs), skipped=len(segs), detail="完整切片已存在，本次未重切", output=str(config.OUT_FACE.parent))
@@ -406,13 +406,14 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
                 log(f"  [字幕异常] {p.name}: {type(e).__name__} {e}")
                 return "fail"
 
+        sub_calls = llm.calls
         sub_stat: dict[str, int] = {"covered": 0, "nosub": 0, "skip": 0, "fail": 0, "review": 0}
         def report(waiting=False):
             progress("字幕擦除", sum(sub_stat.values()), len(done_clips),
                      success=sub_stat['covered'] + sub_stat['nosub'], failed=sub_stat['fail'],
                      skipped=sub_stat['skip'], review=sub_stat['review'],
-                     detail=(f"正在识别/覆盖剩余 {len(done_clips) - sum(sub_stat.values())} 片；识别超时转待复查" if waiting else
-                             f"复检通过 {sub_stat['covered']} · 未检出字幕 {sub_stat['nosub']} · 待复查 {sub_stat['review']}"),
+                     detail=(f"并发 {opts.workers_llm} · 多帧合并 · {int(time.time() - t_sub)}秒 · 请求 {llm.calls - sub_calls} · " + (f"正在识别/覆盖剩余 {len(done_clips) - sum(sub_stat.values())} 片；识别超时转待复查" if waiting else
+                             f"复检通过 {sub_stat['covered']} · 未检出字幕 {sub_stat['nosub']} · 待复查 {sub_stat['review']}")),
                      output=str(face_dir.parent))
         report()
         with futures.ThreadPoolExecutor(max_workers=opts.workers_llm) as ex2:

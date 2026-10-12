@@ -41,10 +41,10 @@ def test_dashboard_prioritizes_progress_results_and_hides_command():
 
 
 def test_moving_subtitle_boxes_are_unioned():
-    model = SimpleNamespace(ask_vision=mock.Mock(side_effect=[
-        {'has_subtitle': True, 'box': [.2, .2, .5, .3]},
-        {'has_subtitle': True, 'box': [.1, .8, .8, .9]},
-        {'has_subtitle': True, 'box': [.2, .2, .5, .3]}]))
+    model = SimpleNamespace(ask_vision=mock.Mock(return_value={"frames":[
+        {'frame':0,'has_subtitle': True, 'box': [.2, .2, .5, .3]},
+        {'frame':1,'has_subtitle': True, 'box': [.1, .8, .8, .9]},
+        {'frame':2,'has_subtitle': True, 'box': [.2, .2, .5, .3]}]}))
     values = {'format=duration':'4', 'stream=width':'720', 'stream=height':'1280'}
     with mock.patch.object(subtitle, 'probe_scalar', side_effect=lambda _, key: values[key]), mock.patch.object(subtitle, '_grab_frame', return_value=True), mock.patch.object(subtitle.cv2, 'imread', return_value=object()):
         x, y, width, height, _ = subtitle.detect_region(model, Path('clip.mp4'), 3)

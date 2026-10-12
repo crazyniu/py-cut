@@ -104,6 +104,7 @@ def run(args: argparse.Namespace) -> int:
     log(f"[范围] {len(clips)} 个切片")
 
     t0 = time.time()
+    sub_calls = llm.calls
     stat = {"covered": 0, "nosub": 0, "skip": 0, "fail": 0, "dryrun": 0, "review": 0}
 
     def _do(c: Path) -> str:
@@ -144,8 +145,8 @@ def run(args: argparse.Namespace) -> int:
         progress("字幕擦除", sum(stat.values()), len(clips),
                  success=stat['covered'] + stat['nosub'], failed=stat['fail'],
                  skipped=stat['skip'], review=stat['review'],
-                 detail=(f"正在识别/覆盖剩余 {len(clips) - sum(stat.values())} 片；识别超时转待复查" if waiting else
-                         f"复检通过 {stat['covered']} · 未检出字幕 {stat['nosub']} · 待复查 {stat['review']}"),
+                 detail=(f"并发 {args.workers} · 多帧合并 · {int(time.time() - t0)}秒 · 请求 {llm.calls - sub_calls} · " + (f"正在识别/覆盖剩余 {len(clips) - sum(stat.values())} 片；识别超时转待复查" if waiting else
+                         f"复检通过 {stat['covered']} · 未检出字幕 {stat['nosub']} · 待复查 {stat['review']}")),
                  output=str(destination(clips[0]).parent))
     report()
     with futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
