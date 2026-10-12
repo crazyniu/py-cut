@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 import unicodedata
@@ -48,11 +47,11 @@ def register(subparsers) -> None:
     p.add_argument("--llm-url", default=None, help="LLM 网关地址（覆盖预设）")
     p.add_argument("--llm-key", default=None, help="LLM API Key（覆盖预设）")
     p.add_argument("--llm-model", default=None, help="LLM 模型名（覆盖预设）")
-    g = p.add_argument_group("目录（可选，覆盖默认同级切片目录）")
+    g = p.add_argument_group("目录（可选，覆盖画中画切片配置）")
     g.add_argument("--src-dir", default="",
                    help="源视频目录（默认 config.SRC_DIR，递归扫描子目录 mp4）")
     g.add_argument("--out-dir", default="",
-                   help="切片输出根目录（下建 有人脸/无人脸 子目录，默认源目录同级的切片）")
+                   help="切片输出根目录（下建 有人脸/无人脸 子目录，默认配置的画中画切片目录，未配置则源目录同级切片）")
     p.set_defaults(func=run)
 
 
@@ -108,14 +107,13 @@ def run(args: argparse.Namespace) -> int:
     install_signal_handlers()
     reset_stop()
 
-    # 输出到源目录同级；显式 --out-dir 优先。
+    # 显式输出优先，默认画中画配置；未配置则源目录同级。
     if args.src_dir:
         config.SRC_DIR = Path(args.src_dir).expanduser()
-    from ..core.output_paths import sibling
+    from ..core.output_paths import slice_output_root
     source_dir = (Path(args.file).expanduser().parent
                   if args.file and _is_explicit_file(args.file) else config.SRC_DIR)
-    od = (Path(args.out_dir).expanduser() if args.out_dir else
-          config.CLIP_DIR if os.environ.get("PYCUT_CLIP_DIR") else sibling(source_dir, "切片"))
+    od = slice_output_root(source_dir, args.out_dir)
     config.OUT_FACE = od / "有人脸"
     config.OUT_NOFACE = od / "无人脸"
     config.OUT_MANIFEST = od / "清单"

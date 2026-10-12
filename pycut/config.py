@@ -61,12 +61,13 @@ FFPROBE = _media_tool("ffprobe")
 
 SRC_DIR = _path("PYCUT_SOURCE_DIR", PROJECT_ROOT / "materials" / "source")
 CLIP_DIR = _path("PYCUT_CLIP_DIR", PROJECT_ROOT / "materials" / "background")
+PIP_DIR = _path("PYCUT_PIP_DIR", SRC_DIR.parent / "切片")
 REFERENCE_DIR = _path("PYCUT_REFERENCE_DIR", PROJECT_ROOT / "materials" / "reference")
 INTRO_DIR = _path("PYCUT_INTRO_DIR", PROJECT_ROOT / "materials" / "intro")
 OUTPUT_DIR = _path("PYCUT_OUTPUT_DIR", PROJECT_ROOT / "output")
 DESKTOP = Path.home() / "Desktop"
-OUT_FACE = CLIP_DIR / "有人脸"
-OUT_NOFACE = CLIP_DIR / "无人脸"
+OUT_FACE = PIP_DIR / "有人脸"
+OUT_NOFACE = PIP_DIR / "无人脸"
 OUT_MANIFEST = OUTPUT_DIR / "切片_清单"
 
 # ---------------------------------------------------------------------------

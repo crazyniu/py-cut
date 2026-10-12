@@ -72,3 +72,26 @@ def test_montage_uses_configured_directories_and_output():
     assert args.out_dir == '/data/混剪/1011'
     assert args.fission == 5
     pick.assert_not_called()
+
+
+def test_slice_output_prefers_pip_and_keeps_explicit_override():
+    with mock.patch.dict('os.environ', {'PYCUT_PIP_DIR':'/data/画中画 空格', 'PYCUT_CLIP_DIR':'/data/背景'}), mock.patch.object(config,'PIP_DIR',Path('/data/画中画 空格')):
+        assert output_paths.slice_output_root(Path('/data/爆款/抖音')) == Path('/data/画中画 空格')
+        assert output_paths.slice_output_root(Path('/data/爆款/抖音'),'/explicit') == Path('/explicit')
+    with mock.patch.dict('os.environ', {'PYCUT_PIP_DIR':'', 'PYCUT_CLIP_DIR':'/data/背景'}):
+        assert output_paths.slice_output_root(Path('/data/爆款/抖音')) == Path('/data/爆款/切片')
+
+
+def test_slice_tui_confirmation_and_dedup_use_pip_root_without_timestamp():
+    files=[Path('/source/demo.mp4')]
+    target=Path('/画中画 切片')
+    def confirm(screen,lines,toggles,values):
+        assert ('画中画切片输出',str(target)) in lines
+        values[:]=[False,True]
+        return True
+    with mock.patch.dict('os.environ',{'PYCUT_PIP_DIR':str(target)}),mock.patch.object(config,'SRC_DIR',Path('/source')),mock.patch.object(config,'CLIP_DIR',Path('/background')),mock.patch.object(config,'PIP_DIR',target),mock.patch('pycut.core.scan.list_videos_recursive',return_value=files),mock.patch.object(tui,'_confirm',side_effect=confirm):
+        jobs=tui._wizard_slice(None,100)
+        again=tui._wizard_slice(None,100)
+    assert jobs==again
+    assert cli.build_parser().parse_args(jobs[0]).out_dir==str(target)
+    assert cli.build_parser().parse_args(jobs[1]).src_dir==str(target)
