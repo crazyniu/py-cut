@@ -64,7 +64,7 @@ def test_cover_publishes_copy_and_force_starts_from_source():
 def test_montage_uses_configured_directories_and_output():
     source = Path('/data/爆款/demo.mp4')
     selection = ([source], {str(source): 5})
-    with mock.patch.object(config, 'REFERENCE_DIR', Path('/data/爆款')), mock.patch.object(config, 'MONTAGE_CLIP_DIR', Path('/data/切片')), mock.patch.object(config, 'MONTAGE_DEDUP_DIR', Path('/data/画中画')), mock.patch.object(config, 'MONTAGE_OUT', Path('/data/混剪/1011')), mock.patch.object(tui, '_pick_dir') as pick, mock.patch.object(tui, 'list_videos_flat', return_value=[source]), mock.patch.object(tui, 'count_videos_recursive', return_value=3), mock.patch.object(tui, '_multi_select', return_value=selection), mock.patch.object(tui, '_confirm', return_value=True):
+    with mock.patch.object(config, 'REFERENCE_DIR', Path('/data/爆款')), mock.patch.object(config, 'MONTAGE_CLIP_DIR', Path('/data/切片')), mock.patch.object(config, 'MONTAGE_DEDUP_DIR', Path('/data/画中画')), mock.patch.object(config, 'MONTAGE_OUT', Path('/data/混剪/1011')), mock.patch.object(tui, '_pick_dir') as pick, mock.patch.object(tui, 'list_videos_flat', return_value=[source]), mock.patch('pycut.core.montage_clips._collect_files', return_value=[source] * 3), mock.patch.object(tui, '_multi_select', return_value=selection), mock.patch.object(tui, '_confirm', return_value=True):
         jobs = tui._wizard_montage(None, 100)
     args = cli.build_parser().parse_args(jobs[0])
     assert args.clip_dir == '/data/切片'

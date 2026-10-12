@@ -123,7 +123,7 @@ class TUIIntegrationTests(unittest.TestCase):
         selection = ([first, second], {str(first): 12, str(second): 2})
         with mock.patch.object(config, "MONTAGE_CLIP_DIR", Path("/tmp/clips")), \
              mock.patch.object(config, "MONTAGE_DEDUP_DIR", Path("/tmp/pip")), \
-             mock.patch.object(tui, "count_videos_recursive", side_effect=[4, 3]), \
+             mock.patch("pycut.core.montage_clips._collect_files", side_effect=[[first] * 4, [second] * 3]), \
              mock.patch.object(tui, "_count_sticker_images", return_value=1), \
              mock.patch.object(tui, "list_videos_flat", return_value=[first, second]), \
              mock.patch.object(tui, "_multi_select", return_value=selection), \
@@ -147,7 +147,7 @@ class TUIIntegrationTests(unittest.TestCase):
             selection = ([video], {str(video): 1})
             with mock.patch.object(tui, "_pick_dir", side_effect=[
                      "/tmp/video", "/tmp/clips", "/tmp/pip"]) as picker, \
-                 mock.patch.object(tui, "count_videos_recursive", return_value=2), \
+                 mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 2), \
                  mock.patch.object(tui, "_count_sticker_images",
                                    side_effect=[0, 1]), \
                  mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
@@ -162,7 +162,7 @@ class TUIIntegrationTests(unittest.TestCase):
 
     def test_montage_cancel_before_confirm_never_builds_jobs(self):
         with mock.patch.object(tui, "_pick_dir", side_effect=["/tmp/clips", None, None]), \
-             mock.patch.object(tui, "count_videos_recursive", return_value=4), \
+             mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 4), \
              mock.patch.object(tui, "_confirm") as confirm, \
              mock.patch.object(tui, "_multi_select") as multi:
             self.assertIsNone(tui._wizard_montage(FakeScreen(), 100))
