@@ -1,4 +1,4 @@
-"""真实 FFmpeg 验证整宽矩形、保留音轨、校验失败与中断。"""
+"""真实 FFmpeg 验证整宽单层毛玻璃、保留音轨、校验失败与中断。"""
 import shutil
 import subprocess
 import tempfile
@@ -40,8 +40,8 @@ class NativeMosaicTests(unittest.TestCase):
             self.assertLess(outside.mean(),8)
             for x in (0,168):
                 self.assertGreater(np.abs(after[238:286,x:x+12].astype(float)-before[238:286,x:x+12]).mean(),15)
-            # 每个马赛克块内接近纯色，块的位置固定为整幅矩形。
-            self.assertLess(after[240:248,2:10].astype(float).std(axis=(0,1)).max(),4)
+            # 模糊滤镜只叠加一个连续区域，不使用像素化缩放或多层overlay。
+            self.assertLess(after[242:282].astype(float).std(axis=(0,1)).max(),15)
             def audio_hash(path):
                 return subprocess.check_output(['ffmpeg','-v','error','-i',str(path),
                     '-map','0:a:0','-c:a','copy','-f','hash','-hash','md5','-'])
@@ -74,7 +74,7 @@ class NativeMosaicTests(unittest.TestCase):
             self.assertEqual(clip.read_bytes(),b'original')
 
     def test_tiny_positive_subtitle_is_not_marked_as_no_subtitle(self):
-        model=SimpleNamespace(ask_vision=lambda *a, **kw:{'has_subtitle':True,'box':[.2,.5,.7,.501]})
+        model=SimpleNamespace(ask_vision=lambda *a, **kw:{'frames':[{'frame':i,'has_subtitle':True,'box':[.2,.5,.7,.501]} for i in range(5)]})
         values={'format=duration':'1','stream=width':'180','stream=height':'320'}
         with mock.patch.object(subtitle,'probe_scalar',side_effect=lambda p,k:values[k]), \
              mock.patch.object(subtitle,'_grab_frame',return_value=True), \

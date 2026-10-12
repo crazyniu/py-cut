@@ -1,4 +1,4 @@
-"""检测字幕高度，在全视频宽度的矩形内覆盖马赛克，保留音轨并原子替换。"""
+"""检测字幕高度，在全视频宽度的矩形内覆盖单层毛玻璃，保留音轨并原子替换。"""
 from __future__ import annotations
 
 import json
@@ -26,19 +26,17 @@ class SubtitleReviewNeeded(RuntimeError):
     """识别不确定，保留产物等待复查，不当作编码失败。"""
 
 
-WORKERS = 4             # 并发片段数（每片段 = N 次 LLM + 1 次逐帧修复）
+WORKERS = 4             # 并发片段数（每片段 = 定位/复检各1次多图LLM + 1次原生模糊）
 
 # 切片桶在运行时可能被 slice/dedup 的 --src-dir/--out-dir 覆盖，故 collect_clips
 # 直接读 config.OUT_FACE/OUT_NOFACE（动态），不再用 import 时的快照列表。
 
 DETECT_PROMPT = (
-    "这是竖屏短视频的一帧。检测画面中人为叠加的文字层"
+    "这些是竖屏短视频的采样帧。逐张检测画面中人为叠加的文字层"
     "(包括大号艺术标题、对白字幕、警示条、免责声明行等后期叠加的文字, "
     "不包括背景招牌、商品包装上的文字)。"
     "若有, 返回能同时覆盖画面中【所有】叠加文字的最小边界框"
     "(有多处文字时取整体并集框), 归一化坐标 0-1, 格式 [x1,y1,x2,y2], y 向下为正。"
-    "只返回 JSON: "
-    '{"has_subtitle": true 或 false, "box": [x1,y1,x2,y2] 或 null, "text": "字幕原文"}'
 )
 
 
@@ -77,6 +75,7 @@ def detect_region(llm: LLMClient, clip: Path,
     texts: list[str] = []
     clean_replies = 0
     uncertain_positive = 0
+    frames = []
     with tempfile.TemporaryDirectory(prefix="subchk_") as td:
         for i in range(samples):
             if STOP.flag:
@@ -88,33 +87,45 @@ def detect_region(llm: LLMClient, clip: Path,
             t = dur * (i + 0.5) / samples
             jp = Path(td) / f"f{i}.jpg"
             if not _grab_frame(clip, t, jp, timeout=max(0.01, deadline - time.monotonic())):
-                continue
+                raise SubtitleReviewNeeded("采样帧提取不完整")
             frame = cv2.imread(str(jp))
             if frame is None:
-                continue
-            r = llm.ask_vision(frame, DETECT_PROMPT, deadline=deadline)
-            if not isinstance(r, dict):
-                continue
-            if r.get("has_subtitle") is False:
-                clean_replies += 1
-                continue
-            if r.get("has_subtitle") is not True:
-                continue
-            box = r.get("box")
-            if not isinstance(box, list) or len(box) != 4:
-                uncertain_positive += 1
-                continue
-            try:
-                b = [float(v) for v in box]
-            except (TypeError, ValueError):
-                uncertain_positive += 1
-                continue
-            if all(0.0 <= v <= 1.0 for v in b) and b[2] > b[0] and b[3] > b[1]:
-                boxes.append(b)
-                if r.get("text"):
-                    texts.append(str(r["text"]))
-            else:
-                uncertain_positive += 1
+                raise SubtitleReviewNeeded("采样帧读取失败")
+            frames.append(frame)
+    prompt = (DETECT_PROMPT + f"\n这里有 {samples} 张按时间顺序排列的独立图片。"
+              "每张图片的坐标以该图片为准，不要拼接坐标。逐张检测，"
+              '只返回 {"frames":[{"frame":0,"has_subtitle":true或false,'
+              '"box":[x1,y1,x2,y2]或null,"text":"字幕原文"},...]}'
+              f"。frame 从0到{samples - 1}，每张必须恰好一项。")
+    result = llm.ask_vision(frames, prompt, deadline=deadline)
+    if STOP.flag:
+        raise RuntimeError("用户中断字幕检测")
+    replies = result.get("frames") if isinstance(result, dict) else None
+    if (not isinstance(replies, list) or len(replies) != samples
+            or any(not isinstance(r, dict) or type(r.get("frame")) is not int for r in replies)
+            or {r["frame"] for r in replies} != set(range(samples))):
+        raise SubtitleReviewNeeded("多帧识别返回不完整或不支持多图请求")
+    for r in replies:
+        if r.get("has_subtitle") is False:
+            clean_replies += 1
+            continue
+        if r.get("has_subtitle") is not True:
+            raise SubtitleReviewNeeded("多帧识别缺少明确字幕判断")
+        box = r.get("box")
+        if not isinstance(box, list) or len(box) != 4:
+            uncertain_positive += 1
+            continue
+        try:
+            b = [float(v) for v in box]
+        except (TypeError, ValueError):
+            uncertain_positive += 1
+            continue
+        if all(0.0 <= v <= 1.0 for v in b) and b[2] > b[0] and b[3] > b[1]:
+            boxes.append(b)
+            if r.get("text"):
+                texts.append(str(r["text"]))
+        else:
+            uncertain_positive += 1
 
     if not boxes:
         # 只有过半采样点得到明确否定且不存在“检测到字幕但框无效”
@@ -150,7 +161,7 @@ def detect_region(llm: LLMClient, clip: Path,
 
 
 def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
-    """FFmpeg 内完成全宽矩形马赛克，避免整帧往返 Python。"""
+    """FFmpeg 内完成全宽矩形单层高斯模糊，避免整帧往返 Python。"""
     import os
     import time
     from .montage_clips import _probe_one
@@ -167,12 +178,10 @@ def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
         log(f"  [遮盖失败] {clip.name}: 字幕区域高度无效")
         return False
     height = bottom - top
-    block = max(12, info.width // 30)
-    small_w, small_h = max(1, info.width // block), max(1, height // block)
+    sigma = min(64, max(16, height * 0.45))
     filters = (f"[0:v:0]split[base][sub];"
                f"[sub]crop={info.width}:{height}:0:{top}:exact=1,"
-               f"scale={small_w}:{small_h}:flags=area,"
-               f"scale={info.width}:{height}:flags=neighbor[mask];"
+               f"gblur=sigma={sigma:.2f}:steps=2[mask];"
                f"[base][mask]overlay=0:{top}:shortest=1[v]")
     tmp = clip.with_name(clip.stem + ".tmp_cover.mp4")
     cmd = [FFMPEG, "-y", "-loglevel", "error", "-nostdin", "-i", str(clip),
@@ -227,7 +236,8 @@ def verified_clip(clip: Path) -> bool:
     try:
         record = json.loads(_marker(clip).read_text(encoding="utf-8"))
         return (isinstance(record, dict) and record.get("version") == 2
-                and (record.get("subtitle") is False or record.get("verified") is True))
+                and (record.get("subtitle") is False or
+                     (record.get("verified") is True and record.get("effect") == "frosted")))
     except (OSError, ValueError):
         return False
 
@@ -276,7 +286,7 @@ def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
     if residual is not None:
         log(f"  [待复查] {clip.name}: 擦除后可能仍有字幕；继续处理，未标记擦除成功")
         return "review"
-    mk.write_text(json.dumps({"version": 2, "subtitle": True, "verified": True, "verified_samples": min(samples, 3), "region": [X, Y, BW, BH],
+    mk.write_text(json.dumps({"version": 2, "subtitle": True, "verified": True, "effect": "frosted", "verified_samples": min(samples, 3), "region": [X, Y, BW, BH],
                               "texts": texts,
                               "covered_at": datetime.now().isoformat()},
                              ensure_ascii=False), encoding="utf-8")

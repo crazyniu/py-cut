@@ -127,43 +127,52 @@ class LLMClient:
         ))
 
     def ask_vision(self, frame, prompt: str, *, deadline: float | None = None) -> dict | None:
-        """通用视觉问答：单帧 + 自定义 prompt，返回解析后的 JSON dict 或 None。"""
+        """通用视觉问答：单帧或多帧 + 自定义 prompt，返回解析后的 JSON dict 或 None。"""
         # 已切到备用网关：后续调用都走备用（粘性切换，避免来回抖动）
         if self._delegate is not None:
             return self._delegate.ask_vision(frame, prompt, deadline=deadline)
         if not self.enabled:
             return None
 
-        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self._jpg_quality])
-        if not ok:
+        frames = frame if isinstance(frame, (list, tuple)) else [frame]
+        if not frames:
             return None
-        b64 = base64.b64encode(buf.tobytes()).decode("ascii")
-        data_url = f"data:image/jpeg;base64,{b64}"
+        content = [{"type": "text", "text": prompt}]
+        for image in frames:
+            ok, buf = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), self._jpg_quality])
+            if not ok:
+                return None
+            b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
 
         payload = {
             "model": self.model,
             "messages": [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
+                    "content": content,
                 }
             ],
-            "max_tokens": config.LLM_MAX_TOKENS,
+            "max_tokens": config.LLM_MAX_TOKENS_RETRY if len(frames) > 1 else config.LLM_MAX_TOKENS,
             "temperature": 0,
         }
 
         for attempt in range(3):
-            if STOP.flag or not self.enabled or (deadline is not None and time.monotonic() >= deadline):
+            if STOP.flag or not self.enabled:
                 return None
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             with self._lock:
                 self._calls += 1
             status, text = (self._post(payload) if deadline is None else
                             self._post(payload, timeout=max(0.01, min(config.HTTP_TIMEOUT, 15.0, deadline - time.monotonic()))))
-            if deadline is not None and time.monotonic() >= deadline:
+            if STOP.flag:
                 return None
+            if deadline is not None and time.monotonic() >= deadline:
+                with self._lock:
+                    self._failures += 1
+                    self._consec_fail += 1
+                break
             if status == 200:
                 try:
                     obj = json.loads(text)

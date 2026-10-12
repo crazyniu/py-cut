@@ -99,7 +99,7 @@ Markdown 仅保留有效需求、业务流程、架构、接口/数据契约、�
 三步，顺序不可乱：
 1. **场景分段**（默认 2–15 秒，不识别语义，合并短尾段后仍检查上限）→ `core/scene.py`：`detect_scenes`（ffmpeg `select='gt(scene,TH)'`）+ `build_segments`（去重/合并过短/切分超长）。
 2. **人脸分流** → `core/faces.py`：Haar 严格/宽松两档 → 三态 `face/noface/ambiguous`；仅 ambiguous 送 LLM 兜底。产出按「有人脸/无人脸」分目录。
-3. **字幕擦除** → `core/subtitle.py`：`detect_region`（LLM 跨帧并集框，高度跟随真实字幕）+ `cover_clip`（FFmpeg 内按字幕高度覆盖整幅视频宽度的矩形马赛克，音轨直接 copy；验证尺寸、时长与音轨后原子替换）。
+3. **字幕擦除** → `core/subtitle.py`：`detect_region`（多图单请求、逐帧索引验证与跨帧并集框，高度跟随真实字幕）+ `cover_clip`（FFmpeg 内按字幕高度覆盖整幅视频宽度的单层矩形毛玻璃，音轨直接 copy；验证尺寸、时长与音轨后原子替换）。
 
 入口编排：`core/slice_pipeline.py` 的 `process_video`。识别不确定、超时或复检可能残留返回 review（待复查），不写完成标记，继续其他片与后继去重；真正编码失败与中断仍非零。每轮检测共享30秒等待预算，单次HTTP超时15秒，等待后台片段时每秒更新进度。
 
@@ -109,7 +109,7 @@ Markdown 仅保留有效需求、业务流程、架构、接口/数据契约、�
 - **双重 seek**：关键帧间隔 8.33s 而镜头中位数仅 2.03s，只靠输入侧 `-ss` 会抽到别的镜头的帧。切割与抽帧都必须输入侧粗 seek（回退 1.0s）+ 输出侧精 seek。见 `config.COARSE_BACKOFF`、`cut_clip`、`faces._extract_one`。
 - **LLM 推理模型** `max_tokens` 必须 ≥500，否则 `content` 被 reasoning 吃光返回空；`finish_reason=length` 时换 1200 重试（`core/llm.py` 已处理）。
 - **并发结果配对**：用 `as_completed` + 显式回传索引，绝不用 `ex.map` 的解包顺序（顺序会错位导致判定张冠李戴）。
-- **字幕处理按用户要求覆盖矩形马赛克**：宽度固定为视频全宽，高度跟随检测到的字幕并加上下余量；不得恢复逐字掩膜修复，区域外不参与马赛克。
+- **字幕处理按用户要求覆盖单层矩形毛玻璃**：宽度固定为视频全宽，高度跟随检测到的字幕并加上下余量；仅一层高斯模糊和一次 overlay，禁止像素化缩放或重复叠层；不得恢复逐字掩膜修复，区域外不参与模糊。
 - **幂等**：字幕已处理写 `<切片>.covered.json`；重跑须先按清单切割点从源视频还原原片，否则会把填补区当"模糊文字"误判。
 - `ffprobe avg_frame_rate` 用**不带 `-select_streams`** 的通用封装（`core/ffmpeg.py: probe_scalar`）时，会同时返回视频流与音频流两行，音频流那行是 `0/0` → 只能取首行（`subtitle.py:166` 已这么处理）。实测桌面切片 20 个抽样中 18 个如此，**别用 `-select_streams v:0` 的命令去验证这条**（那样看不到 `0/0`）。`dedup.py:_video_duration` 用了 `-select_streams v:0`，不受此影响。
 - **注释与报告里的「实测」数字必须是自己跑出来的，且能被独立复现**。转述他人数据即使方向对也不可查证；凭单次观察下结论（尤其喂了截断/异常样本却不自知）会让后来人无法复核。实测数字要能让人照着重跑一遍得到同样的结果。
