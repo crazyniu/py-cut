@@ -584,15 +584,14 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
     """阶段1：每段按 offset/take 双 seek 精确截取，并统一成一致的流参数。
 
     统一后的段才能喂给 concat demuxer——这正是本模块不用 inpoint/outpoint 的原因。
-    单段失败只记日志跳过，不外抛。
+    任一分段失败立即停止，并把实际编码错误交给 concat_clips 汇总。
     """
     segdir = _seg_dir("seg")
     try:
         shutil.rmtree(segdir, ignore_errors=True)
         segdir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        log(f"[混剪B] 无法创建分段目录 {segdir}: {e}")
-        return []
+        raise RuntimeError(f"无法创建分段目录 {segdir}: {e}") from e
 
     segs: list[Path] = []
     planned_seconds = 0.0
@@ -619,9 +618,12 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
                      **({"dedup_seed": d["dedup_seed"]} if "dedup_seed" in d else {})),
             timeout=timeout)
         if rc != 0 or not seg.is_file() or seg.stat().st_size < 1024:
-            msg = err.strip().splitlines()[-1] if err.strip() else "无输出"
-            log(f"  [段{i}] 截取失败 {Path(it.path).name}: {msg}")
-            continue
+            msg = err.strip()[:4000] or "输出缺失或文件过小"
+            raise RuntimeError(
+                f"分段 {i + 1}/{len(items)} 截取失败: {it.path}; "
+                f"offset={d['offset']:.3f}s take={src_take:.3f}s "
+                f"speed={speed:.3f} frames={frames} canvas={canvas} "
+                f"fps={frame_rate:g} rc={rc}\n{msg}")
 
         # 贴纸叠加：段级叠加（拼接后再加就分不清哪段配哪张了）。
         # items 里带 "sticker" 才叠；明确选择后叠加失败不得静默发布无贴纸成片。
@@ -638,8 +640,7 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
                     sticker=Path(stk)):
                 d["sticker_applied"] = True
             else:
-                log(f"  [段{i}] 已指定贴纸但叠加失败: {stk}")
-                return []
+                raise RuntimeError(f"分段 {i + 1} 已指定贴纸但叠加失败: {stk}")
         # 段间亮度淡化在标准化和段级贴纸完成后执行，原片段不重叠也不裁短。
         if seam_fade > 0 and len(items) > 1:
             faded = None
@@ -663,8 +664,7 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
                         raise RuntimeError("转场前后片段时长不一致")
                     os.replace(faded, seg)
             except (OSError, ValueError, RuntimeError) as exc:
-                log(f"  [段{i}] 转场失败: {exc}")
-                return []
+                raise RuntimeError(f"分段 {i + 1} 转场失败: {exc}") from exc
             finally:
                 if faded is not None and faded.is_file():
                     faded.unlink()
@@ -744,7 +744,7 @@ def concat_clips(items: list[dict], out: Path, canvas=None, fps=None,
         cmd, lst = build_concat_cmd(usable, out, canvas, fps, str(crf),
                                     seam_fade=seam_fade)
         if not cmd or not lst.is_file():
-            res["error"] = "拼接命令构造失败（分段截取全部失败）"
+            res["error"] = "分段截取不完整，已取消拼接（详见分段日志）"
             return res
 
         expect = sum(float(d["take"]) for d in usable)
