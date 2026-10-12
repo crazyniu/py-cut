@@ -33,3 +33,15 @@ def test_montage_nested_chinese_libraries_and_specific_empty_message(tmp_path):
         warning = flash.call_args.args[1]
         assert f'背景切片：{background}' in warning
         assert f'画中画切片：{pip}' in warning
+
+
+def test_flash_keeps_long_chinese_path_across_lines():
+    screen = mock.Mock()
+    screen.getmaxyx.return_value = (30, 50)
+    path = '/Volumes/Lexar/' + '中文 长目录/' * 6
+    with mock.patch.object(tui, '_safe_add') as draw, mock.patch.object(tui, '_footer'):
+        tui._flash(screen, '画中画切片：\n' + path)
+    shown = ''.join(call.args[3][1:] for call in draw.call_args_list if call.args[3].strip())
+    assert shown == '画中画切片：' + path
+    assert all(tui._disp_width(call.args[3]) <= 45 for call in draw.call_args_list if call.args[3].strip())
+    screen.getch.assert_called_once()

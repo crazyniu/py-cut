@@ -795,8 +795,8 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     missing = [f"{label}：{path}" for label, path, count in
                zip(("背景切片", "画中画切片"), directories[1:], counts) if not count]
     if missing:
-        _flash(stdscr, "未找到混剪候选 · " + "；".join(missing)
-               + " · 递归支持 " + "/".join(ext[1:].upper() for ext in VIDEO_EXTS)
+        _flash(stdscr, "未找到混剪候选\n" + "\n".join(missing)
+               + "\n递归支持 " + "/".join(ext[1:].upper() for ext in VIDEO_EXTS)
                + "，请检查 Web 中该目录及其子目录", "bad")
         return None
     clip_count, pip_count = counts
@@ -855,8 +855,17 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
 
 def _flash(stdscr, msg: str, color: str = "bad") -> None:
     h, w = stdscr.getmaxyx()
-    _safe_add(stdscr, h - 3, 2, " " * (w - 4), w, color, curses.A_REVERSE)
-    _safe_add(stdscr, h - 3, 2, " " + msg, w, color, curses.A_REVERSE)
+    lines = []
+    for paragraph in msg.splitlines():
+        while _disp_width(paragraph) > max(2, w - 6):
+            part = _clip(paragraph, max(2, w - 6))
+            lines.append(part)
+            paragraph = paragraph[len(part):]
+        lines.append(paragraph)
+    lines = lines[:max(1, h - 4)]
+    for row, line in enumerate(lines, h - 2 - len(lines)):
+        _safe_add(stdscr, row, 2, " " * (w - 4), w, color, curses.A_REVERSE)
+        _safe_add(stdscr, row, 2, " " + line, w, color, curses.A_REVERSE)
     _footer(stdscr, "按任意键继续", "按任意键继续")
     stdscr.refresh()
     stdscr.getch()
