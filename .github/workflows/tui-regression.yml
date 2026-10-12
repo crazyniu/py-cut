@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   tui:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, grok-box]
     outputs:
       docs-only: ${{ steps.scope.outputs.docs-only }}
     steps:
