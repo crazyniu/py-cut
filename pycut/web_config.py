@@ -94,7 +94,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(400, {'error':'保存失败：请检查字段提示和 .env 写入权限后重试。', 'problems':settings.problems(values, require_all=False) if isinstance(values, dict) and all(isinstance(v, str) for v in values.values()) else []})
 
 
-def start(*, open_browser=True) -> str:
+def start(*, open_browser=False) -> str:
     global _SERVER
     if _SERVER is None:
         _SERVER = ThreadingHTTPServer(('127.0.0.1', 0), Handler)

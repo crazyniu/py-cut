@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from pycut import __version__, config, tui, tui_runner
+from pycut import config, tui, tui_runner
 
 
 class Screen:
@@ -52,13 +52,13 @@ class NavigationTests(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def test_home_has_brand_and_actual_version(self):
+    def test_home_has_brand_and_local_settings_address(self):
         screen = Screen([ord("q")])
         with mock.patch.object(tui.curses, "curs_set"):
             self.assertEqual(tui._loop(screen), ("quit", None))
         drawn = "\n".join(s for _, _, s in screen.printed)
-        self.assertIn("████", drawn)
-        self.assertIn(f"v{__version__}", drawn)
+        self.assertIn("▶ PYCUT", drawn)
+        self.assertIn("设置 http://127.0.0.1:", drawn)
 
     def test_home_instructions_are_only_at_bottom_and_never_repeated(self):
         for size in ((14, 60), (24, 80), (32, 100)):

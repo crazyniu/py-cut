@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, cli, config
+from . import cli, config
 from .core.scan import count_videos_recursive, list_videos_flat
 from .folder_picker import choose_directory
 
@@ -197,21 +197,26 @@ def _small_screen(stdscr) -> bool:
     if w >= 60 and h >= 14:
         return False
     stdscr.erase()
-    _safe_add(stdscr, 1, 2, "终端窗口太小", w, "warn", curses.A_BOLD)
-    _safe_add(stdscr, 3, 2, f"当前 {w}×{h}，至少需要 60×14", w, "text")
-    _safe_add(stdscr, 5, 2, "请放大窗口 · Esc 返回 · Q 取消/退出", w, "dim")
+    _brand(stdscr)
+    _safe_add(stdscr, 3, 2, "终端窗口太小", w, "warn", curses.A_BOLD)
+    _safe_add(stdscr, 5, 2, f"当前 {w}×{h}，至少需要 60×14", w, "text")
+    _safe_add(stdscr, 7, 2, "请放大窗口 · Esc 返回 · Q 取消/退出", w, "dim")
     stdscr.refresh()
     return True
 
 
-def _frame(stdscr, title: str, subtitle: str = "") -> None:
-    """Consistent, non-inverted CLI header, title, context and divider."""
+def _brand(stdscr) -> None:
+    """Every TUI surface shares the same wordmark and local settings URL."""
+    from . import web_config
     _h, w = stdscr.getmaxyx()
-    _safe_add(stdscr, 0, 2, "◈  pycut", w, "accent", curses.A_BOLD)
-    version = f"v{__version__}"
-    _safe_add(stdscr, 0, max(18, w - _disp_width(version) - 3),
-              version, w, "dim")
-    _safe_add(stdscr, 1, 2, "─" * max(0, w - 4), w, "muted")
+    _safe_add(stdscr, 0, 2, "▶ PYCUT", w, "accent", curses.A_BOLD)
+    _safe_add(stdscr, 1, 2, "设置 " + web_config.start(open_browser=False), w, "text")
+
+
+def _frame(stdscr, title: str, subtitle: str = "") -> None:
+    """Consistent header, title, context and divider without moving content."""
+    _h, w = stdscr.getmaxyx()
+    _brand(stdscr)
     _safe_add(stdscr, 2, 2,
               _ellipsize(title.replace(" · ", "  /  ", 1), w - 4),
               w, "text", curses.A_BOLD)
@@ -231,25 +236,10 @@ def _footer(stdscr, full: str, compact: str) -> None:
 
 
 def _home_brand(stdscr) -> None:
-    """A single prominent wordmark; instructions belong in the footer."""
-    h, w = stdscr.getmaxyx()
-    if h >= 20:
-        logo = (
-            "████   █   █   ████  █   █  █████",
-            "█   █   █ █   █      █   █    █",
-            "████     █    █      █   █    █",
-            "█        █    █      █   █    █",
-            "█        █     ████   ███     █",
-        )
-        for y, line in enumerate(logo, 1):
-            _safe_add(stdscr, y, 3, line, w, "accent", curses.A_BOLD)
-        divider_y = 7
-    else:
-        _safe_add(stdscr, 1, 3, "PYCUT", w, "accent", curses.A_BOLD)
-        divider_y = 3
-    version = f"v{__version__}"
-    _safe_add(stdscr, 1, w - _disp_width(version) - 3, version, w, "dim")
-    _safe_add(stdscr, divider_y, 2, "─" * max(0, w - 4), w, "muted")
+    """The home screen uses the same compact wordmark as every task page."""
+    _h, w = stdscr.getmaxyx()
+    _brand(stdscr)
+    _safe_add(stdscr, 3, 2, "─" * max(0, w - 4), w, "muted")
 
 
 # ---------------------------------------------------------------------------
@@ -657,8 +647,7 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
 
         stdscr.erase()
         _home_brand(stdscr)
-        spacious = h >= 20
-        menu_y = 9 if spacious else 5
+        menu_y = 5
         row_step = 2 if h >= 29 else 1
 
         for i, (key, name, desc) in enumerate(FEATURES):
@@ -679,8 +668,8 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
             _safe_add(stdscr, summary_y, 3,
                       f"当前：{name}  ·  {FEATURE_HINTS[key]}", w, "dim")
         _footer(stdscr,
-                f"↑↓ 移动 · →/Enter 进入 · 1-{len(FEATURES)} 快捷键 · W 配置网页 · Q 退出",
-                f"↑↓移动  →进入  W配置  Q退出")
+                f"↑↓ 移动 · →/Enter 进入 · 1-{len(FEATURES)} 快捷键 · W 设置地址 · Q 退出",
+                f"↑↓移动  →进入  W地址  Q退出")
         stdscr.refresh()
 
         k = stdscr.getch()
@@ -688,7 +677,7 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
             return ("quit", None)
         if k in (ord("w"), ord("W")):
             from . import web_config
-            _flash(stdscr, "配置网页：" + web_config.start(), "text")
+            _flash(stdscr, "手动在浏览器访问：" + web_config.start(), "text")
             continue
         if k in (curses.KEY_UP, ord("k")):
             feat_sel = max(0, feat_sel - 1)
@@ -883,6 +872,7 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
 
 def _flash(stdscr, msg: str, color: str = "bad") -> None:
     h, w = stdscr.getmaxyx()
+    _brand(stdscr)
     lines = []
     for paragraph in msg.splitlines():
         while _disp_width(paragraph) > max(2, w - 6):
