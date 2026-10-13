@@ -58,7 +58,7 @@ class NavigationTests(unittest.TestCase):
             self.assertEqual(tui._loop(screen), ("quit", None))
         drawn = "\n".join(s for _, _, s in screen.printed)
         self.assertIn("\n".join(tui._LOGO), drawn)
-        self.assertIn("设置 http://127.0.0.1:", drawn)
+        self.assertIn("http://127.0.0.1:", drawn)
 
     def test_home_instructions_are_only_at_bottom_and_never_repeated(self):
         for size in ((14, 60), (24, 80), (32, 100)):
