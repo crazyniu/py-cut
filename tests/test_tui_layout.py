@@ -82,7 +82,7 @@ class LayoutTests(unittest.TestCase):
     def test_confirmation_scrolls_all_selected_sources(self):
         lines = [("来源 " + str(i), "中文片段.mp4 × " + str(i)) for i in range(1, 26)]
         screen = Screen([curses.KEY_NPAGE, curses.KEY_NPAGE,
-                         curses.KEY_NPAGE, 10], size=(20, 60))
+                         curses.KEY_NPAGE, curses.KEY_NPAGE, 10], size=(20, 60))
         self.assertTrue(tui._confirm(screen, lines))
         self.assertTrue(any("来源 25" in text for _, _, text in screen.printed))
         self.assertTrue(any("PgUp/PgDn" in text for _, _, text in screen.printed))

@@ -69,7 +69,7 @@ class KeymapTests(unittest.TestCase):
             "↑↓移动  ←上级  →进入  Space选目录  Esc返回"
         )
         self.assertTrue(any(tui._LOGO[0] in s for _, _, s, _ in screen.drawn))
-        self.assertTrue(any("设置 http://127.0.0.1:" in s for _, _, s, _ in screen.drawn))
+        self.assertTrue(any("http://127.0.0.1:" in s for _, _, s, _ in screen.drawn))
         self.assertTrue(any("←上级" in s and "Esc返回" in s
                             for _, _, s, _ in screen.drawn))
         self.assertFalse(any(attr & curses.A_REVERSE

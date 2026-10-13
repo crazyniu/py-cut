@@ -197,10 +197,10 @@ def _small_screen(stdscr) -> bool:
     if w >= 60 and h >= 14:
         return False
     stdscr.erase()
-    _brand(stdscr)
-    _safe_add(stdscr, 3, 2, "终端窗口太小", w, "warn", curses.A_BOLD)
-    _safe_add(stdscr, 5, 2, f"当前 {w}×{h}，至少需要 60×14", w, "text")
-    _safe_add(stdscr, 7, 2, "请放大窗口 · Esc 返回 · Q 取消/退出", w, "dim")
+    header = _brand(stdscr)
+    _safe_add(stdscr, header, 2, "终端窗口太小", w, "warn", curses.A_BOLD)
+    _safe_add(stdscr, header + 2, 2, f"当前 {w}×{h}，至少需要 60×14", w, "text")
+    _safe_add(stdscr, header + 4, 2, "请放大窗口 · Esc 返回 · Q 取消/退出", w, "dim")
     stdscr.refresh()
     return True
 
@@ -215,14 +215,27 @@ _LOGO = (
 
 
 def _brand(stdscr) -> int:
-    """Draw the original large wordmark when it fits; return occupied rows."""
+    """Logo, actionable configuration help and one shared content divider."""
     from . import web_config
     h, w = stdscr.getmaxyx()
     logo = _LOGO if h >= 20 and w >= 60 else ("▶ PYCUT",)
+    url = web_config.start(open_browser=False)
     for y, line in enumerate(logo):
         _safe_add(stdscr, y, 2, line, w, "accent", curses.A_BOLD)
-    _safe_add(stdscr, len(logo), 2, "设置 " + web_config.start(open_browser=False), w, "text")
-    return len(logo) + 1
+    settings_x = 2 + max(_disp_width(line) for line in logo) + 5
+    explanation = "设置素材目录和模型，保存后回到终端"
+    if len(logo) > 1 and settings_x + _disp_width(explanation) <= w - 2:
+        _safe_add(stdscr, 0, settings_x, "素材目录与 LLM 配置", w, "text", curses.A_BOLD)
+        _safe_add(stdscr, 1, settings_x, url, w, "value")
+        _safe_add(stdscr, 2, settings_x, "复制地址到浏览器打开", w, "text")
+        _safe_add(stdscr, 3, settings_x, explanation, w, "dim")
+        divider = len(logo)
+    else:
+        _safe_add(stdscr, len(logo), 2, "素材/LLM设置 · 复制地址到浏览器打开", w, "text")
+        _safe_add(stdscr, len(logo) + 1, 2, url, w, "value")
+        divider = len(logo) + 2
+    _safe_add(stdscr, divider, 2, "─" * max(0, w - 4), w, "muted")
+    return divider + 1
 
 
 def _frame(stdscr, title: str, subtitle: str = "") -> int:
@@ -234,8 +247,7 @@ def _frame(stdscr, title: str, subtitle: str = "") -> int:
               w, "text", curses.A_BOLD)
     _safe_add(stdscr, header + 1, 2,
               _ellipsize(subtitle, w - 4, tail=True), w, "dim")
-    _safe_add(stdscr, header + 2, 2, "─" * max(0, w - 4), w, "muted")
-    return header + 3
+    return header + 2
 
 
 def _footer(stdscr, full: str, compact: str) -> None:
@@ -251,9 +263,7 @@ def _footer(stdscr, full: str, compact: str) -> None:
 def _home_brand(stdscr) -> int:
     """The home screen uses the shared large wordmark and responsive height."""
     _h, w = stdscr.getmaxyx()
-    header = _brand(stdscr)
-    _safe_add(stdscr, header + 1, 2, "─" * max(0, w - 4), w, "muted")
-    return header + 3
+    return _brand(stdscr) + 1
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +490,7 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
             y += 1
 
         if toggles:
-            y += 1
+            y += 1 if h >= 20 else 0
             _safe_add(stdscr, y, 2, "功能开关（空格切换）", w, "dim")
             y += 1
             for i, (label, desc, _v) in enumerate(toggles):

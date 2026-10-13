@@ -47,9 +47,22 @@ def test_header_url_is_identical_and_visible_on_all_surfaces(size,surface):
         assert screen.drawn[row,2]==line
         visible="".join(screen.cells.get((row,x)," ") for x in range(size[1]))
         assert visible[2:2+len(line)]==line
-    assert screen.drawn[len(logo),2]=='设置 '+url
-    visible=''.join(screen.cells.get((len(logo),x),' ') for x in range(size[1]))
-    assert visible[7:7+len(url)]==url
+    settings_x=2+max(tui._disp_width(line) for line in logo)+5
+    wide=len(logo)>1 and settings_x+tui._disp_width("设置素材目录和模型，保存后回到终端")<=size[1]-2
+    url_row,url_x=(1,settings_x) if wide else (len(logo)+1,2)
+    assert screen.drawn[url_row,url_x]==url
+    visible=''.join(screen.cells.get((url_row,x),' ') for x in range(size[1]))
+    assert visible[url_x:url_x+len(url)]==url
+    divider=len(logo) if wide else len(logo)+2
+    assert screen.drawn[divider,2]=='─'*(size[1]-4)
+    visible=''.join(screen.cells.get((divider,x),' ') for x in range(size[1]))
+    assert visible[2:size[1]-2]=='─'*(size[1]-4)
+    descriptions=''.join(screen.drawn.values())
+    assert '复制地址到浏览器打开' in descriptions
+    assert ('素材目录与 LLM 配置' if wide else '素材/LLM设置') in descriptions
+    if surface=="confirm":
+        actions=[row for (row,column),text in screen.drawn.items() if "确认并开始处理" in text]
+        assert actions and max(actions)<size[0]-2
     start.assert_called_with(open_browser=False)
 
 
@@ -75,7 +88,7 @@ def test_missing_configuration_shows_address_without_browser():
     with mock.patch.object(web_config.webbrowser,'open') as browser,mock.patch.object(config,'refresh'),mock.patch.object(settings,'effective',return_value={}),mock.patch.object(tui,'_attr',return_value=0):
         try:
             assert tui._run_feature_wizard(terminal,'slice',60) is None
-            assert terminal.drawn[1,2].startswith('设置 http://127.0.0.1:')
+            assert terminal.drawn[2,2].startswith('http://127.0.0.1:')
             browser.assert_not_called()
         finally: web_config.stop()
 
@@ -86,6 +99,6 @@ def test_tui_start_and_w_never_launch_browser():
     terminal.getch=lambda: next(keys)
     with mock.patch.object(web_config.webbrowser,'open') as browser,mock.patch.object(tui.sys,'stdin',mock.Mock(isatty=lambda:True)),mock.patch.object(tui.sys,'stdout',mock.Mock(isatty=lambda:True)),mock.patch.object(tui.curses,'wrapper',side_effect=lambda app: tui._loop(terminal)[0]=='quit'),mock.patch.object(tui,'_attr',return_value=0):
         tui.run()
-        assert terminal.drawn[1,2].startswith('设置 http://127.0.0.1:')
+        assert terminal.drawn[2,2].startswith('http://127.0.0.1:')
         browser.assert_not_called()
         assert web_config._SERVER is None
