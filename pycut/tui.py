@@ -848,13 +848,15 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
         src_dir, clip, pip = directories
         total_out = sum(fission[str(f)] for f in chosen)
         out_dir = str(config.MONTAGE_OUT)
+        intro_dir = os.environ.get("PYCUT_INTRO_DIR", "").strip()
         lines = [
             ("片段库", f"{clip}（{clip_count} 个）"),
             ("画中画", f"{pip}（{pip_count} 个）"),
             ("规格", "720×1280 · 9:16 · 固定右上角画中画"),
             ("切换效果", "段间转场 · 背景与画中画标准档扰动"),
             ("贴纸", "本地优先，未配置则在线下载"),
-            ("前贴", f"{config.INTRO_DIR} · 自动去重、贴纸，保留字幕"),
+            ("原声", "直接使用爆款视频音轨，不变速、不变声"),
+            ("前贴", f"{config.INTRO_DIR} · 没有视频时跳过" if intro_dir else "未配置，跳过"),
             ("爆款视频", f"{len(chosen)} 支 × 裂变 = {total_out} 支成片"),
             ("输出目录", out_dir),
         ]
@@ -871,7 +873,7 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
             argv = [
                 "montage", "--source", str(src), "--clip-dir", clip,
                 "--dedup-dir", pip, "--out-dir", out_dir,
-                "--intro-dir", str(config.INTRO_DIR),
+                "--intro-dir", str(config.INTRO_DIR) if intro_dir else "",
             ]
             argv.extend(["--fission", str(fission[str(src)])])
             argv_list.append(argv)

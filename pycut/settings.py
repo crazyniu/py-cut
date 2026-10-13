@@ -16,7 +16,7 @@ FIELDS = {
     'PYCUT_REFERENCE_DIR': ('爆款视频目录', '混剪参考视频及同名 SRT'),
     'PYCUT_CLIP_DIR': ('背景切片目录', '混剪背景素材，也用于独立字幕擦除和去重读取'),
     'PYCUT_PIP_DIR': ('画中画切片目录', '切片输出（有人脸/无人脸），也用于混剪画中画素材'),
-    'PYCUT_INTRO_DIR': ('前贴目录', '随机取一支片段放在混剪前面；自动去重、加贴纸，保留字幕'),
+    'PYCUT_INTRO_DIR': ('前贴目录', '可选；留空或目录没有视频时跳过，有素材时去重、加贴纸并保留字幕'),
     'PYCUT_OUTPUT_DIR': ('成片输出目录', '去重与混剪的输出根目录，可自动创建'),
     'PYCUT_STICKER_DIR': ('贴纸目录', '可选；留空时使用现有在线贴纸'),
     'PYCUT_MAIN_URL': ('主网关地址', 'OpenAI 兼容 API 地址'),
@@ -27,7 +27,7 @@ FIELDS = {
     'PYCUT_BACKUP_KEY': ('备用 API Key', '留空保留已有密钥'),
 }
 DIRECTORIES = tuple(k for k in FIELDS if k.endswith('_DIR'))
-REQUIRED = DIRECTORIES[:6]
+REQUIRED = tuple(k for k in DIRECTORIES[:6] if k != 'PYCUT_INTRO_DIR')
 
 
 def read_env() -> dict[str, str]:

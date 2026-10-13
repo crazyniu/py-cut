@@ -478,8 +478,8 @@ def _make_continuous(timeline: list[dict], total: float) -> list[dict]:
 def _attach_audio(video: Path, audio_src: Path, crf: str = "20") -> bool:
     """把基准视频的音轨贴回无声的混剪成片（原子替换）。
 
-    视频流直接 copy 避免再次编码改变帧数；音频用 AAC 并 apad 到画面末尾。
-    -shortest 以视频为准，即使参考音轨略短，也绝不截短成片。
+    视频与爆款原声音轨直接 copy，不滤波、变速或补长。
+    音轨超出画面时仅截取所需时长；短音轨不截短视频。
     """
     tmp = video.with_name(video.stem + f".aud_{os.getpid()}{video.suffix}")
     cmd = [
@@ -488,13 +488,23 @@ def _attach_audio(video: Path, audio_src: Path, crf: str = "20") -> bool:
         "-i", str(audio_src),   # 基准原声
         "-map", "0:v:0", "-map", "1:a:0",
         "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "128k", "-af", "apad",
-        "-shortest",             # apad 后音频可延展，以视频流结束时刻为准
+        "-c:a", "copy", "-t", f"{_duration(video):.6f}",
         "-movflags", "+faststart",
         str(tmp),
     ]
-    ok = _run(cmd)
-    if not ok or not tmp.is_file() or tmp.stat().st_size < 1024:
+    from ..core.utils import run_cmd
+    rc, _, error = run_cmd(cmd, timeout=3600)
+    if rc and ("Could not find tag for codec" in error
+               or "not currently supported in container" in error):
+        log("  [音频兼容] 原声音频编码不支持当前封装，仅转码 AAC；不变速、不变声")
+        cmd[cmd.index("-c:a") + 1] = "aac"
+        rc, _, error = run_cmd(cmd, timeout=3600)
+    if rc or not tmp.is_file() or tmp.stat().st_size < 1024:
+        log(f"  [音轨失败] {error.strip()[:2000] or '输出缺失'}")
+        _unlink(tmp)
+        return False
+    if abs(_duration(tmp) - _duration(video)) > 1 / config.MONTAGE_FPS:
+        log("  [音轨失败] 贴回音轨后视频时长变化，保留原画面")
         _unlink(tmp)
         return False
     os.replace(str(tmp), str(video))
