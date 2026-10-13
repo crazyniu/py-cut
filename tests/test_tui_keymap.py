@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from pycut import __version__, tui
+from pycut import tui
 
 
 class Screen:
@@ -68,7 +68,8 @@ class KeymapTests(unittest.TestCase):
             screen, "↑↓移动 · " + "很多按键 · " * 20,
             "↑↓移动  ←上级  →进入  Space选目录  Esc返回"
         )
-        self.assertTrue(any(f"v{__version__}" in s for _, _, s, _ in screen.drawn))
+        self.assertTrue(any("▶ PYCUT" in s for _, _, s, _ in screen.drawn))
+        self.assertTrue(any("设置 http://127.0.0.1:" in s for _, _, s, _ in screen.drawn))
         self.assertTrue(any("←上级" in s and "Esc返回" in s
                             for _, _, s, _ in screen.drawn))
         self.assertFalse(any(attr & curses.A_REVERSE
