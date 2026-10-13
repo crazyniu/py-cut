@@ -279,8 +279,11 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     )
     if opts.intro_dir is not None and opts.step in ("all", "c"):
         from ..core.scan import list_videos_recursive
-        if not list_videos_recursive(opts.intro_dir):
-            log(f"[错误] 前贴目录没有可用视频：{opts.intro_dir}")
+        try:
+            if not list_videos_recursive(opts.intro_dir, raise_on_error=True):
+                log(f"[跳过] 前贴目录没有视频，直接输出正文：{opts.intro_dir}")
+        except OSError as exc:
+            log(f"[错误] 无法读取前贴目录：{exc}")
             return 2
     if STOP.flag:
         log("[中断] 已取消混剪，未启动处理（退出码 130）")

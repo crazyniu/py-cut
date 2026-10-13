@@ -40,12 +40,11 @@ class IntroTests(unittest.TestCase):
                 self.assertEqual(bool(probe.strip()), keep_audio)
                 self.assertEqual(source.read_bytes(), original)
 
-    def test_empty_intro_refuses_to_modify_main(self):
+    def test_empty_intro_skips_without_modifying_main(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);video=root/'main.mp4';video.write_bytes(b'original')
             folder=root/'empty';folder.mkdir()
-            with self.assertRaises(RuntimeError):
-                prepend(video,folder,seed=1,canvas=(180,320),stickers=[],crf='20',keep_audio=False)
+            self.assertIsNone(prepend(video,folder,seed=1,canvas=(180,320),stickers=[],crf='20',keep_audio=False))
             self.assertEqual(video.read_bytes(), b'original')
 
 

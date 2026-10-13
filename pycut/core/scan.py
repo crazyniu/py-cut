@@ -102,14 +102,20 @@ def count_videos_recursive(root: Path, max_depth: int = DEFAULT_MAX_DEPTH) -> in
     return n
 
 
-def list_videos_recursive(root: Path, max_depth: int = DEFAULT_MAX_DEPTH) -> list[Path]:
+def list_videos_recursive(root: Path, max_depth: int = DEFAULT_MAX_DEPTH,
+                          *, raise_on_error: bool = False) -> list[Path]:
     """递归列出目录下所有视频（按「父目录 + 文件名」排序，稳定），最多下探 max_depth 层。"""
     root = Path(root).expanduser()
     if not root.is_dir():
+        if raise_on_error:
+            raise NotADirectoryError(f"视频目录不存在或无法访问: {root}")
         return []
     files: list[Path] = []
     base = str(root)
-    for dirpath, dirnames, filenames in os.walk(base):
+    def on_error(error):
+        if raise_on_error:
+            raise error
+    for dirpath, dirnames, filenames in os.walk(base, onerror=on_error):
         dirnames[:] = [
             d for d in dirnames if not _is_system_dir(Path(dirpath) / d)
         ]

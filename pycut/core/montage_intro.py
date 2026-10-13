@@ -7,14 +7,15 @@ from .. import config
 from .dedup_presets import derive_seed
 from .montage_clips import _probe_one, concat_clips
 from .scan import list_videos_recursive
-from .utils import run_cmd
+from .utils import log, run_cmd
 
 
 def prepend(video: Path, folder: Path, *, seed: int, canvas: tuple[int, int],
-            stickers: list[Path], crf: str, keep_audio: bool) -> dict:
-    files = list_videos_recursive(folder)
+            stickers: list[Path], crf: str, keep_audio: bool) -> dict | None:
+    files = list_videos_recursive(folder, raise_on_error=True)
     if not files:
-        raise RuntimeError('前贴目录没有视频')
+        log(f'[跳过] 前贴目录没有视频，直接输出正文：{folder}')
+        return None
     rng = random.Random(derive_seed(seed, 'intro'))
     source = rng.choice(files)
     item = _probe_one(source)

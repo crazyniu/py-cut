@@ -19,7 +19,7 @@ def page() -> str:
     for key, (label, help_text) in settings.FIELDS.items():
         kind = 'password' if key.endswith('_KEY') else 'text'
         section = 'directories' if key.endswith('_DIR') else 'llm'
-        optional = '可选' if key == 'PYCUT_STICKER_DIR' or key.startswith('PYCUT_BACKUP_') else ''
+        optional = '可选' if key in ('PYCUT_INTRO_DIR', 'PYCUT_STICKER_DIR') or key.startswith('PYCUT_BACKUP_') else ''
         sections[section].append(
             f'<div class="field"><label for="{key}">{html.escape(label)}'
             f'<span class="optional">{optional}</span></label>'
