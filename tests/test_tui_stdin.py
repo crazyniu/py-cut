@@ -34,7 +34,7 @@ class RuntimeIsolationTests(unittest.TestCase):
         screen = mock.Mock()
         screen.getmaxyx.return_value = (20, 60)
         with mock.patch.object(tui, "_small_screen", return_value=False), \
-             mock.patch.object(tui, "_frame"), \
+             mock.patch.object(tui, "_frame", return_value=9), \
              mock.patch.object(tui, "_safe_add"), \
              mock.patch.object(tui, "_footer") as footer:
             tui_runner._draw(screen, ["slice"], 1, 2,
@@ -46,7 +46,7 @@ class RuntimeIsolationTests(unittest.TestCase):
         screen = mock.Mock()
         screen.getmaxyx.return_value = (20, 60)
         with mock.patch.object(tui, "_small_screen", return_value=False), \
-             mock.patch.object(tui, "_frame"), \
+             mock.patch.object(tui, "_frame", return_value=9), \
              mock.patch.object(tui, "_safe_add"), \
              mock.patch.object(tui, "_footer") as footer:
             tui_runner._draw(screen, ["slice"], 1, 1,

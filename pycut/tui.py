@@ -205,24 +205,37 @@ def _small_screen(stdscr) -> bool:
     return True
 
 
-def _brand(stdscr) -> None:
-    """Every TUI surface shares the same wordmark and local settings URL."""
+_LOGO = (
+    "████   █   █   ████  █   █  █████",
+    "█   █   █ █   █      █   █    █",
+    "████     █    █      █   █    █",
+    "█        █    █      █   █    █",
+    "█        █     ████   ███     █",
+)
+
+
+def _brand(stdscr) -> int:
+    """Draw the original large wordmark when it fits; return occupied rows."""
     from . import web_config
-    _h, w = stdscr.getmaxyx()
-    _safe_add(stdscr, 0, 2, "▶ PYCUT", w, "accent", curses.A_BOLD)
-    _safe_add(stdscr, 1, 2, "设置 " + web_config.start(open_browser=False), w, "text")
+    h, w = stdscr.getmaxyx()
+    logo = _LOGO if h >= 20 and w >= 60 else ("▶ PYCUT",)
+    for y, line in enumerate(logo):
+        _safe_add(stdscr, y, 2, line, w, "accent", curses.A_BOLD)
+    _safe_add(stdscr, len(logo), 2, "设置 " + web_config.start(open_browser=False), w, "text")
+    return len(logo) + 1
 
 
-def _frame(stdscr, title: str, subtitle: str = "") -> None:
-    """Consistent header, title, context and divider without moving content."""
+def _frame(stdscr, title: str, subtitle: str = "") -> int:
+    """Shared brand/title/context; return the first free content row."""
     _h, w = stdscr.getmaxyx()
-    _brand(stdscr)
-    _safe_add(stdscr, 2, 2,
+    header = _brand(stdscr)
+    _safe_add(stdscr, header, 2,
               _ellipsize(title.replace(" · ", "  /  ", 1), w - 4),
               w, "text", curses.A_BOLD)
-    _safe_add(stdscr, 3, 2,
+    _safe_add(stdscr, header + 1, 2,
               _ellipsize(subtitle, w - 4, tail=True), w, "dim")
-    _safe_add(stdscr, 4, 2, "─" * max(0, w - 4), w, "muted")
+    _safe_add(stdscr, header + 2, 2, "─" * max(0, w - 4), w, "muted")
+    return header + 3
 
 
 def _footer(stdscr, full: str, compact: str) -> None:
@@ -235,11 +248,12 @@ def _footer(stdscr, full: str, compact: str) -> None:
     _safe_add(stdscr, h - 2, 2, _ellipsize(hint, width), w, "dim")
 
 
-def _home_brand(stdscr) -> None:
-    """The home screen uses the same compact wordmark as every task page."""
+def _home_brand(stdscr) -> int:
+    """The home screen uses the shared large wordmark and responsive height."""
     _h, w = stdscr.getmaxyx()
-    _brand(stdscr)
-    _safe_add(stdscr, 3, 2, "─" * max(0, w - 4), w, "muted")
+    header = _brand(stdscr)
+    _safe_add(stdscr, header + 1, 2, "─" * max(0, w - 4), w, "muted")
+    return header + 3
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +270,8 @@ def _prompt_int(stdscr, y, x, w, title, default, lo, hi) -> int | None:
             if stdscr.getch() in (27, ord("q"), ord("Q")):
                 return None
             continue
-        line_y = min(y, h - 4)
+        header = _brand(stdscr)
+        line_y = max(header, min(y, h - 4))
         w = screen_w
         try:
             stdscr.move(line_y, 0)
@@ -319,7 +334,8 @@ def _prompt_text(stdscr, y, x, w, title, default="", *, validate=None) -> str | 
             if k in ("\x1b", 27, "q", "Q", ord("q"), ord("Q")):
                 return None
             continue
-        line_y = min(y, h - 4)
+        header = _brand(stdscr)
+        line_y = max(header, min(y, h - 4))
         w = screen_w
         try:
             stdscr.move(line_y, 0)
@@ -437,7 +453,9 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
             continue
 
         # Never hide the action button or the toggles beneath the footer.
-        visible_rows = max(1, h - 13 - len(toggle_vals)) if toggles else max(1, h - 9)
+        stdscr.erase()
+        body = _frame(stdscr, "处理前确认")
+        visible_rows = max(1, h - body - 8 - len(toggle_vals)) if toggles else max(1, h - body - 4)
         summary_offset = min(summary_offset, max(0, len(lines) - visible_rows))
         has_more = len(lines) > visible_rows
         subtitle = "检查输入与选项"
@@ -447,12 +465,11 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
                          " · PgUp/PgDn 查看")
         else:
             subtitle += "，按 Enter 开始执行"
-        stdscr.erase()
-        _frame(stdscr, "处理前确认", subtitle)
+        _safe_add(stdscr, body - 2, 2, _ellipsize(subtitle, w - 4, tail=True), w, "dim")
 
         label_width = 16 if w >= 80 else 12
         value_x = 2 + label_width
-        y = 5
+        y = body
         for label, value in lines[summary_offset:summary_offset + visible_rows]:
             _safe_add(stdscr, y, 2,
                       _pad(_ellipsize(str(label), label_width - 1), label_width),
@@ -545,14 +562,14 @@ def _multi_select(stdscr, title: str, files: list[Path],
             continue
         stdscr.erase()
         total = sum(fission[str(files[i])] for i in selected)
-        _frame(stdscr, title, f"{len(files)} 个视频 · 已选 {len(selected)} 个 · 预计输出 {total} 支")
+        body = _frame(stdscr, title, f"{len(files)} 个视频 · 已选 {len(selected)} 个 · 预计输出 {total} 支")
 
-        max_rows = max(1, h - 8)
+        max_rows = max(1, h - body - 3)
         top = 0
         if sel >= max_rows:
             top = sel - max_rows + 1
         for i in range(top, min(len(files), top + max_rows)):
-            y = 5 + (i - top)
+            y = body + (i - top)
             f = files[i]
             active = (i == sel)
             checked = i in selected
@@ -613,13 +630,13 @@ def _set_fission_counts(stdscr, chosen: list[Path], counts: dict[str, int]) -> b
     for index, source in enumerate(chosen, 1):
         h, w = stdscr.getmaxyx()
         stdscr.erase()
-        _frame(stdscr, "混剪 · 2/3 设置裂变数量",
+        body = _frame(stdscr, "混剪 · 2/3 设置裂变数量",
                f"第 {index}/{len(chosen)} 个视频 · 每个视频可生成 1～99 条")
-        _safe_add(stdscr, 5, 2, _ellipsize(source.name, w - 4), w, "accent", curses.A_BOLD)
-        _safe_add(stdscr, 6, 2, "输入这支视频要生成的成片数量", w, "text")
+        _safe_add(stdscr, body, 2, _ellipsize(source.name, w - 4), w, "accent", curses.A_BOLD)
+        _safe_add(stdscr, body + 1, 2, "输入这支视频要生成的成片数量", w, "text")
         _footer(stdscr, "Enter 保存数量并继续 · Esc 返回视频选择", "Enter 继续 · Esc 返回")
         stdscr.refresh()
-        number = _prompt_int(stdscr, 8, 2, w, "生成条数", counts[str(source)], 1, 99)
+        number = _prompt_int(stdscr, body + 3, 2, w, "生成条数", counts[str(source)], 1, 99)
         if number is None:
             return False
         counts[str(source)] = number
@@ -646,8 +663,7 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
             continue
 
         stdscr.erase()
-        _home_brand(stdscr)
-        menu_y = 5
+        menu_y = _home_brand(stdscr)
         row_step = 2 if h >= 29 else 1
 
         for i, (key, name, desc) in enumerate(FEATURES):
@@ -872,7 +888,7 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
 
 def _flash(stdscr, msg: str, color: str = "bad") -> None:
     h, w = stdscr.getmaxyx()
-    _brand(stdscr)
+    header = _brand(stdscr)
     lines = []
     for paragraph in msg.splitlines():
         while _disp_width(paragraph) > max(2, w - 6):
@@ -880,7 +896,7 @@ def _flash(stdscr, msg: str, color: str = "bad") -> None:
             lines.append(part)
             paragraph = paragraph[len(part):]
         lines.append(paragraph)
-    lines = lines[:max(1, h - 4)]
+    lines = lines[:max(1, h - header - 2)]
     for row, line in enumerate(lines, h - 2 - len(lines)):
         _safe_add(stdscr, row, 2, " " * (w - 4), w, color, curses.A_REVERSE)
         _safe_add(stdscr, row, 2, " " + line, w, color, curses.A_REVERSE)

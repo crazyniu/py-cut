@@ -41,7 +41,8 @@ def test_flash_keeps_long_chinese_path_across_lines():
     path = '/Volumes/Lexar/' + '中文 长目录/' * 6
     with mock.patch.object(tui, '_safe_add') as draw, mock.patch.object(tui, '_footer'):
         tui._flash(screen, '背景切片：\n' + path + '\n画中画切片：\n' + path)
-    shown = ''.join(call.args[3][1:] for call in draw.call_args_list if call.args[1] >= 2 and call.args[3].strip())
+    header_rows=len(tui._LOGO)+1 if screen.getmaxyx()[0]>=20 and screen.getmaxyx()[1]>=60 else 2
+    shown = ''.join(call.args[3][1:] for call in draw.call_args_list if call.args[1] >= header_rows and call.args[3].strip())
     assert shown == '背景切片：' + path + '画中画切片：' + path
-    assert all(tui._disp_width(call.args[3]) <= 45 for call in draw.call_args_list if call.args[1] >= 2 and call.args[3].strip())
+    assert all(tui._disp_width(call.args[3]) <= 45 for call in draw.call_args_list if call.args[1] >= header_rows and call.args[3].strip())
     screen.getch.assert_called_once()

@@ -89,14 +89,14 @@ def _draw_results(stdscr, results: list[dict], total: int, status: str,
     import curses
     h, w = stdscr.getmaxyx()
     stdscr.erase()
-    tui._brand(stdscr)
+    header = tui._brand(stdscr)
     labels = {"success": "全部处理完成", "review": "处理完成 · 有待复查项",
               "error": "处理失败 · 后续依赖已停止", "cancelled": "处理已中断"}
     color = "good" if status == "success" else "bad" if status == "error" else "warn"
     completed = sum(r["code"] == 0 and not r["cancelled"] for r in results)
-    tui._safe_add(stdscr, 2, 1, "━━ " + labels[status] + " ━━", w, color, curses.A_BOLD)
-    tui._safe_add(stdscr, 3, 1, f"已结束 · 完成流程 {completed}/{total} · 已运行 {len(results)} · 未执行 {total - len(results)}", w, color)
-    tui._safe_add(stdscr, 4, 1, "Enter/Esc 确认返回 · Q 退出 · ↑↓滚动 · L 日志", w, "accent")
+    tui._safe_add(stdscr, header, 1, "━━ " + labels[status] + " ━━", w, color, curses.A_BOLD)
+    tui._safe_add(stdscr, header + 1, 1, f"已结束 · 完成流程 {completed}/{total} · 已运行 {len(results)} · 未执行 {total - len(results)}", w, color)
+    tui._safe_add(stdscr, header + 2, 1, "Enter/Esc 确认返回 · Q 退出 · ↑↓滚动 · L 日志", w, "accent")
     names = {"slice": "切片", "cover": "字幕擦除", "dedup": "去重", "montage": "混剪"}
     rows = []
     for i, result in enumerate(results, 1):
@@ -120,11 +120,11 @@ def _draw_results(stdscr, results: list[dict], total: int, status: str,
             line = line[len(part):]
         wrapped.append(line)
     rows = wrapped
-    count = max(0, h - 6)
+    count = max(0, h - header - 4)
     start = min(offset, max(0, len(rows) - count))
-    for y, row in enumerate(rows[start:start + count], 5):
+    for y, row in enumerate(rows[start:start + count], header + 3):
         tui._safe_add(stdscr, y, 1, row, w, "text")
-    if h > 6:
+    if h > header + 4:
         tui._safe_add(stdscr, h - 1, 1, "任务已经结束，等待你确认" + (" · ↓查看更多" if len(rows) > count else ""), w, "accent", curses.A_BOLD)
     stdscr.refresh()
     return start
@@ -141,7 +141,7 @@ def _draw(stdscr, argv: list[str], index: int, total: int,
         return
     stdscr.erase()
     names = {"slice": "切片", "cover": "字幕擦除", "dedup": "去重", "montage": "混剪"}
-    tui._frame(stdscr, "任务进度" if status in ("running", "stopping") else "处理结果",
+    body = tui._frame(stdscr, "任务进度" if status in ("running", "stopping") else "处理结果",
                f"{names.get(argv[0], '视频处理')} · 流程 {index}/{total}")
     color = ("info" if status == "running" else "warn" if status == "stopping"
              else "good" if status == "success" else "bad")
@@ -156,9 +156,10 @@ def _draw(stdscr, argv: list[str], index: int, total: int,
     if status == "success" and any(e.get("review") for e in states.values()):
         labels["success"] = "处理完成 · 有待复查项"
         color = "warn"
-    tui._safe_add(stdscr, 5, 2, labels.get(status, status) + (f" · 已用时 {int(elapsed // 60)}分{int(elapsed % 60)}秒" if status == "running" else ""), w, color, curses.A_BOLD)
-    y = 6
-    for stage, event in list(states.items())[-max(1, min(2 if h < 20 else 5, h - 10)):]:
+    tui._safe_add(stdscr, body, 2, labels.get(status, status) + (f" · 已用时 {int(elapsed // 60)}分{int(elapsed % 60)}秒" if status == "running" else ""), w, color, curses.A_BOLD)
+    y = body + 1
+    stage_rows = max(0, min(5, h - y - 6))
+    for stage, event in (list(states.items())[-stage_rows:] if stage_rows else []):
         done, count = event.get("completed", 0), event.get("total", 0)
         percent = f"{done * 100 // count}%" if count else "处理中"
         bar_width = 8 if w < 80 else 12
