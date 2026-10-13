@@ -57,7 +57,7 @@ class NavigationTests(unittest.TestCase):
         with mock.patch.object(tui.curses, "curs_set"):
             self.assertEqual(tui._loop(screen), ("quit", None))
         drawn = "\n".join(s for _, _, s in screen.printed)
-        self.assertIn("▶ PYCUT", drawn)
+        self.assertIn("\n".join(tui._LOGO), drawn)
         self.assertIn("设置 http://127.0.0.1:", drawn)
 
     def test_home_instructions_are_only_at_bottom_and_never_repeated(self):

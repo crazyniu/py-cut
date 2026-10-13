@@ -1,5 +1,6 @@
 """One local settings URL on every TUI surface, without browser focus theft."""
 from collections import deque
+from pathlib import Path
 import urllib.request
 from unittest import mock
 import pytest
@@ -7,31 +8,48 @@ from pycut import tui, tui_runner, web_config, config, settings
 
 
 class Screen:
-    def __init__(self,size): self.size=size; self.drawn={}
+    def __init__(self,size): self.size=size; self.drawn={}; self.cells={}
     def getmaxyx(self): return self.size
     def addstr(self,y,x,text,attr=0):
         assert 0<=y<self.size[0] and 0<=x<self.size[1]
         assert tui._disp_width(text)<=self.size[1]-x-1
         self.drawn[y,x]=text
-    def erase(self): self.drawn={}
+        for char in text:
+            self.cells[y,x]=char
+            x+=tui._char_width(char)
+    def erase(self): self.drawn={}; self.cells={}
+    def move(self,y,x): self.cursor=(y,x)
+    def clrtoeol(self):
+        row,column=self.cursor
+        for x in range(column,self.size[1]): self.cells[row,x]=" "
     def refresh(self): pass
     def keypad(self,enabled): pass
     def getch(self): return 27
 
 
-@pytest.mark.parametrize('size',[(14,60),(24,100)])
-@pytest.mark.parametrize('surface',['home','wizard','flash','running','results'])
+@pytest.mark.parametrize('size',[(14,60),(20,60),(24,100)])
+@pytest.mark.parametrize('surface',['home','wizard','flash','running','results','confirm','selection','count','text'])
 def test_header_url_is_identical_and_visible_on_all_surfaces(size,surface):
     screen=Screen(size)
     url='http://127.0.0.1:65535/'
     with mock.patch.object(web_config,'start',return_value=url) as start,mock.patch.object(tui,'_attr',return_value=0):
         if surface=='home': tui._home_brand(screen)
         elif surface=='wizard': tui._frame(screen,'确认执行','说明')
-        elif surface=='flash': tui._flash(screen,'请检查配置')
+        elif surface=='flash': tui._flash(screen,'请检查配置' * 100)
         elif surface=='running': tui_runner._draw(screen,['slice'],1,1,deque(),0,'running')
+        elif surface=='confirm': tui._confirm(screen,[("目录","/路径")],[("字幕","选项",True),("去重","选项",False)])
+        elif surface=='selection': tui._multi_select(screen,'选择爆款',[Path('/视频.mp4')])
+        elif surface=='count': tui._set_fission_counts(screen,[Path('/视频.mp4')],{'/视频.mp4':1})
+        elif surface=='text': tui._prompt_text(screen,0,2,size[1],'输入')
         else: tui_runner._draw_results(screen,[dict(command='slice',code=0,cancelled=False,events={})],1,'success',deque(),0,False)
-    assert screen.drawn[0,2]=='▶ PYCUT'
-    assert screen.drawn[1,2]=='设置 '+url
+    logo=tui._LOGO if size[0]>=20 else ('▶ PYCUT',)
+    for row,line in enumerate(logo):
+        assert screen.drawn[row,2]==line
+        visible="".join(screen.cells.get((row,x)," ") for x in range(size[1]))
+        assert visible[2:2+len(line)]==line
+    assert screen.drawn[len(logo),2]=='设置 '+url
+    visible=''.join(screen.cells.get((len(logo),x),' ') for x in range(size[1]))
+    assert visible[7:7+len(url)]==url
     start.assert_called_with(open_browser=False)
 
 
