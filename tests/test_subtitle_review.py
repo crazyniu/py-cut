@@ -110,7 +110,7 @@ def test_heartbeat_during_pending_worker_and_review_display():
     screen = mock.Mock()
     screen.getmaxyx.return_value=(24,120)
     event = dict(stage='字幕擦除', completed=2, total=2, success=1, failed=0, review=1, detail='待复查 1')
-    with mock.patch.object(tui, '_safe_add', side_effect=lambda *a: calls.append(a)), mock.patch.object(tui, '_frame'), mock.patch.object(tui, '_footer'):
+    with mock.patch.object(tui, '_safe_add', side_effect=lambda *a: calls.append(a)), mock.patch.object(tui, '_frame', return_value=9), mock.patch.object(tui, '_footer'):
         tui_runner._draw(screen, ['slice'], 1,1, deque([progress.PREFIX+json.dumps(event), '[待复查] 字幕残留']),0,'success')
     assert any('处理完成 · 有待复查项' in c[3] and c[5]=='warn' for c in calls)
     assert any('待复查 1' in c[3] and c[5]=='warn' for c in calls)
