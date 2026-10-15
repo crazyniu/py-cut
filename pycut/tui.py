@@ -832,6 +832,7 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
                + "，请检查 Web 中该目录及其子目录", "bad")
         return None
     pip_configured = bool(os.environ.get("PYCUT_PIP_DIR", "").strip())
+    values: list[bool] = [pip_configured]
     selection = None
     step = 3
     while True:
@@ -877,9 +878,8 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
         for i, src in enumerate(chosen, 1):
             lines.append((f"来源 {i}", f"{src.name} × {fission[str(src)]}"))
         lines.insert(0, ("混剪 · 3/3", "确认以下数量后开始生成"))
-        values: list[bool] = [pip_configured]
         if not _confirm(stdscr, lines,
-                        [("叠加画中画", "右上角画中画；关闭则不扫描不渲染", pip_configured)],
+                        [("叠加画中画", "右上角画中画；关闭则不扫描不渲染", values[0])],
                         values):
             step = 4
             continue

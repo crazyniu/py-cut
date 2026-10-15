@@ -2,6 +2,8 @@
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from pycut import cli, config, settings, tui
 
 
@@ -107,6 +109,38 @@ def test_montage_checking_pip_without_config_is_rejected(tmp_path):
                                            confirm_side_effect=check)
     assert jobs is None
     assert '未配置 PYCUT_PIP_DIR' in flash.call_args.args[1]
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_montage_back_keeps_pip_choice_and_fission_count(tmp_path, enabled):
+    source = tmp_path / '爆款.mp4'
+    selection = _selection(source)
+    defaults = []
+
+    def confirm(_scr, _lines, toggles, values):
+        defaults.append(toggles[0][2])
+        if len(defaults) == 1:
+            values[:] = [enabled]
+            return False
+        values[:] = [toggles[0][2]]
+        return True
+
+    with mock.patch.dict('os.environ', {'PYCUT_PIP_DIR': str(tmp_path)}), \
+         mock.patch.object(tui, 'list_videos_flat', return_value=[source]), \
+         mock.patch.object(tui, '_multi_select', return_value=selection) as select, \
+         mock.patch.object(tui, '_set_fission_counts', return_value=True) as counts, \
+         mock.patch.object(tui, '_confirm', side_effect=confirm), \
+         mock.patch('pycut.core.montage_clips._collect_files', return_value=[source]) as collect:
+        selection[1][str(source)] = 7
+        jobs = tui._wizard_montage(None, 100)
+    assert defaults == [True, enabled]
+    args = cli.build_parser().parse_args(jobs[0])
+    assert args.no_pip is not enabled
+    assert args.fission == 7
+    assert counts.call_count == 2
+    assert counts.call_args.args[2] is selection[1]
+    select.assert_called_once()
+    assert collect.call_count == (2 if enabled else 1)
 
 
 def test_settings_pip_dir_is_optional_but_validated_when_set(tmp_path):
