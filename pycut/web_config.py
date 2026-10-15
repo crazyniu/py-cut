@@ -6,7 +6,8 @@ import secrets
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from . import config, settings
+from urllib.parse import parse_qs, urlsplit
+from . import config, settings, web_dir_browser
 
 _SERVER = None
 _TOKEN = secrets.token_urlsafe(32)
@@ -20,11 +21,16 @@ def page() -> str:
         kind = 'password' if key.endswith('_KEY') else 'text'
         section = 'directories' if key.endswith('_DIR') else 'llm'
         optional = '可选' if key in ('PYCUT_INTRO_DIR', 'PYCUT_STICKER_DIR') or key.startswith('PYCUT_BACKUP_') else ''
+        input_html = (f'<input id="{key}" name="{key}" type="{kind}" autocomplete="off" '
+                      f'spellcheck="false" aria-describedby="{key}-help {key}-error">')
+        if key.endswith('_DIR'):
+            input_html = (f'<div class="input-row">{input_html}'
+                          f'<button type="button" class="browse" data-key="{key}" '
+                          f'aria-label="选择{html.escape(label)}">选择…</button></div>')
         sections[section].append(
             f'<div class="field"><label for="{key}">{html.escape(label)}'
             f'<span class="optional">{optional}</span></label>'
-            f'<input id="{key}" name="{key}" type="{kind}" autocomplete="off" '
-            f'spellcheck="false" aria-describedby="{key}-help {key}-error">'
+            f'{input_html}'
             f'<small id="{key}-help">{html.escape(help_text)}</small>'
             f'<span class="field-error" id="{key}-error"></span></div>')
     template = Path(__file__).with_name('templates').joinpath('config.html').read_text(encoding='utf-8')
@@ -62,7 +68,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(403, {'error':'仅允许本机配置页面访问'})
         if self.path == '/':
             return self.reply(200, page(), 'text/html')
-        if self.path != '/api/config':
+        route = urlsplit(self.path).path
+        if route == '/api/dirs':
+            if not self.authorized():
+                return self.reply(403, {'error':'无效的配置会话，请刷新页面'})
+            path = parse_qs(urlsplit(self.path).query).get('path', [''])[0] or None
+            return self.reply(200, web_dir_browser.list_dir(path, config.PROJECT_ROOT))
+        if route != '/api/config':
             return self.reply(404, {'error':'页面不存在'})
         if not self.authorized():
             return self.reply(403, {'error':'无效的配置会话，请刷新页面'})
