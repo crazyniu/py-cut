@@ -121,7 +121,8 @@ class TUIIntegrationTests(unittest.TestCase):
         first = Path("/tmp/video/第一支.mp4")
         second = Path("/tmp/video/second.mp4")
         selection = ([first, second], {str(first): 12, str(second): 2})
-        with mock.patch.object(config, "MONTAGE_CLIP_DIR", Path("/tmp/clips")), \
+        with mock.patch.dict("os.environ", {"PYCUT_PIP_DIR": "/tmp/pip"}), \
+             mock.patch.object(config, "MONTAGE_CLIP_DIR", Path("/tmp/clips")), \
              mock.patch.object(config, "MONTAGE_DEDUP_DIR", Path("/tmp/pip")), \
              mock.patch("pycut.core.montage_clips._collect_files", side_effect=[[first] * 4, [second] * 3]), \
              mock.patch.object(tui, "_count_sticker_images", return_value=1), \
