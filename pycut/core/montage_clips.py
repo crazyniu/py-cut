@@ -3,7 +3,7 @@
 对应需求 docs/MONTAGE.md 步骤B。流程三步：
     1. `scan_library`      递归探测片段库，**只留竖屏**（横屏 1920x1080/3840x2160 一律排除）
     2. `pick_clips`        按步骤A 给出的时间槽随机分配素材，同一素材不重复
-    3. `concat_clips`      拼成 720x1276 静音视频（`build_concat_cmd` 只造命令）
+    3. `concat_clips`      拼成 720x1276 静音视频（`build_concat_cmd` 内部先跑完阶段1 截取，只返回阶段2 命令）
 
 **为什么不用 concat demuxer 的 inpoint/outpoint**（实测，本机 ffmpeg 9.0.2）：
 取 3 段（3.0s + 2.5s + 3.83s，混 720x1280 与 544x960）直接写 concat 列表：
@@ -15,7 +15,9 @@ ffmpeg **rc=0 不报错**，产物时长只有 **3.73s**（期望 9.33s）。
 **rc=0 但产物静默短一大截**是最坏的一类错误，所以本模块改成两阶段：
 先把每段双 seek 精确截取并统一规格（分辨率/帧率/SAR/pix_fmt 全一致），**再** concat。
 实测两阶段结果 9.333s / 720x1276 / 无音轨，与 filter_complex 单次编码一致；
-选两阶段是因为每段可单独校验，且第二次 concat 能 `-c copy` 免二次损失。
+选两阶段是因为每段可单独校验规格与时长。注意阶段2 是**再编码一次**（`_enc_args`
+的 libx264 + CRF），**不是** `-c copy`：段与段的分辨率/SAR/像素格式已统一，但拼接
+本身仍过一次编码器。
 
 拼接命令一律**列表形式**传参（素材名含中文/空格/括号，实测有 `财源滚滚来__ (1)`），
 绝不 shell 拼串；写临时文件 + `os.replace` 原子替换，单个文件失败不外抛。
@@ -46,13 +48,14 @@ DEDUP_CHUNK = 1 << 20
 # 片段截取/拼接默认 CRF（libx264 软件编码）
 CRF_DEFAULT = "20"
 
-# 片段截取/拼接/转场的 x264 速度档：与贴纸/画中画/字幕/前贴已有的 veryfast 一致。
-# 分段截取、拼接、段间淡化都是中间产物，随后还要被步骤C/D 各编码一次；画质口径是
-# 固定的 CRF（仍 20），preset 只决定用多少算力换体积，不改任何效果参数。
+# 片段截取/拼接/转场的 x264 速度档：与贴纸/画中画/字幕/前贴/去重已有的 veryfast 一致。
+# 这三处都是中间产物，随后还要被步骤C 画中画、步骤D 字幕各编码一次；preset 是
+# 速度/体积/画质的三方取舍——**同样的 CRF 在不同 preset 下并不保证码率或画质相同**，
+# 所以选档位必须用成片证据（体积 + 抽帧 + VMAF）核对，不能只说「只影响速度」。
 # 本机实测（14 核 / ffmpeg-full 9.0.2 / work/bench 固定素材与 seed，8 段含贴纸与
-# 段间淡化）：改 veryfast 后分段标准化 7.25s -> 5.55s、12s 整片拼接编码
-# 0.87s -> 0.47s，整条命令 13.31s -> 10.73s；同一轮里画中画 / 字幕 / 贴音轨
-# 三步（本来就是 veryfast）耗时不变，收益确实只来自这个档位。
+# 段间淡化）：veryfast 相比 x264 默认 medium，分段标准化 7.25s -> 5.55s、12s 整片
+# 拼接编码 0.87s -> 0.47s，整条命令 13.31s -> 10.73s；同一轮里画中画 / 字幕 /
+# 贴音轨三步（本来就是 veryfast）耗时不变。成片差异见 PR #103 的体积/抽帧/VMAF 证据。
 X264_PRESET = "veryfast"
 
 # 单文件 ffprobe 超时：读容器头很快，60s 足够，异常文件不拖死整批
@@ -697,7 +700,8 @@ def build_concat_cmd(items: list[dict], out: Path, canvas=None, fps=None,
     - **静音**：`-an`，且 concat 列表只含视频流（阶段1 产出的段本就无音轨）。
     - `libx264` + `-pix_fmt yuv420p` + `-movflags +faststart` + `-fps_mode cfr`。
     - **原子替换**：阶段2 产物先写 `<out>.tmp_<pid>.mp4`，由 `concat_clips` 在
-      ffmpeg 成功后才 `os.replace` 到 `out`（本函数只造命令、不执行替换）。
+      ffmpeg 成功后才 `os.replace` 到 `out`（本函数只负责阶段2 的命令，替换由
+      `concat_clips` 执行；阶段1 的截取编码已经在本函数内跑完了）。
     - 返回 `(ffmpeg argv, 实际使用的 concat 列表路径)`；列表在 `config.MONTAGE_TMP`
       下、文件名带 pid，便于调用方打印与清理。
 
