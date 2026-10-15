@@ -22,12 +22,27 @@ window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.return
 async function load(){try{const r=await fetch('/api/config',{headers:{'X-Config-Token':token}});if(!r.ok)throw Error('读取失败');const data=await r.json();for(const [k,v] of Object.entries(data.values))form.elements[k].value=v;for(const k of data.configured_keys)form.elements[k].placeholder='已配置，留空保持不变';document.getElementById('location').textContent=data.path;showOverrides(data.overrides);showProblems(data.problems);status.textContent=data.problems.length?`还有 ${data.problems.length} 项待配置`:'目录已就绪，可以返回终端开始处理';loading=false;}catch(e){status.className='error';status.textContent='读取失败，请刷新页面重试';}save.disabled=loading||!dirty;}
 form.addEventListener('submit',async e=>{e.preventDefault();if(loading||saving)return;saving=true;save.disabled=true;save.textContent='正在保存…';status.className='';status.textContent='正在保存配置…';const submittedRevision=revision;try{const values=Object.fromEntries(new FormData(form));const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json','X-Config-Token':token},body:JSON.stringify(values)});const data=await r.json();showProblems(data.problems||[]);if(!r.ok){const invalid=form.querySelector('[aria-invalid=true]');if(invalid){selectPanel(invalid.closest('.panel').id);invalid.focus();}throw Error(data.error);}dirty=revision!==submittedRevision;showOverrides(data.overrides);status.textContent=dirty?'配置已保存；还有新修改未保存':data.problems.length?`已保存；还有 ${data.problems.length} 项待配置`:'已保存，目录已就绪。返回终端即可开始';if(!dirty)for(const input of form.querySelectorAll('input[type=password]')){if(input.value)input.placeholder='已配置，留空保持不变';input.value='';}}catch(e){status.className='error';status.textContent=e.message==='Failed to fetch'?'连接中断，请确认程序仍在运行后重试':e.message;}finally{saving=false;save.textContent='保存配置';save.disabled=loading||!dirty;}});load();
 const browseModal=document.getElementById('browse-modal'),browseTitle=document.getElementById('browse-title'),browsePath=document.getElementById('browse-path'),browseError=document.getElementById('browse-error'),browseRoots=document.getElementById('browse-roots'),browseList=document.getElementById('browse-list');
-const browse={key:null,path:null,parent:null,valid:false,button:null};
+const browseSelect=document.getElementById('browse-select');
+const browse={key:null,path:null,parent:null,valid:false,button:null,request:0};
 function browseFail(msg){browseError.textContent=msg;browseError.hidden=!msg;}
-async function browseEnter(path){browseFail('');try{const r=await fetch('/api/dirs'+(path?('?path='+encodeURIComponent(path)):''),{headers:{'X-Config-Token':token}});if(!r.ok)throw Error('读取失败');const data=await r.json();browse.path=data.path||null;browse.parent=data.parent||null;browse.valid=!data.error;browseFail(data.error||'');renderBrowse(data);}catch(e){browse.valid=false;browseFail('无法读取目录，请确认程序仍在运行');}}
+async function browseEnter(path){
+  const request=++browse.request;
+  browse.valid=false;browse.parent=null;browseSelect.disabled=true;browseFail('');
+  try{
+    const r=await fetch('/api/dirs'+(path?('?path='+encodeURIComponent(path)):''),{headers:{'X-Config-Token':token}});
+    if(!r.ok)throw Error('读取失败');
+    const data=await r.json();
+    if(request!==browse.request)return;
+    browse.path=data.path||null;browse.parent=data.parent||null;browse.valid=!!browse.path&&!data.error;
+    browseSelect.disabled=!browse.valid;browseFail(data.error||'');renderBrowse(data);
+  }catch(e){
+    if(request!==browse.request)return;
+    browseFail('无法读取目录，请确认程序仍在运行');
+  }
+}
 function renderBrowse(data){browsePath.textContent=browse.path||'';browseRoots.innerHTML='';if(data&&data.roots)data.roots.forEach(r=>{const b=document.createElement('button');b.type='button';b.textContent=r.name;b.addEventListener('click',()=>browseEnter(r.path));browseRoots.appendChild(b);});browseList.innerHTML='';if(data&&data.dirs&&data.dirs.length){data.dirs.forEach(d=>{const li=document.createElement('li');const b=document.createElement('button');b.type='button';b.textContent=d.name;b.addEventListener('click',()=>browseEnter(d.path));li.appendChild(b);browseList.appendChild(li);});}else if(browse.valid){const li=document.createElement('li');li.className='modal-empty';li.textContent='该目录下没有子目录';browseList.appendChild(li);}}
 function openBrowse(button,key){browse.key=key;browse.path=null;browse.parent=null;browse.valid=false;browse.button=button;browseTitle.textContent='选择：'+(labels[key]||'目录');browseFail('');browseModal.hidden=false;browseEnter(form.elements[key].value.trim()||'');document.getElementById('browse-close').focus();}
-function closeBrowse(commit){if(!browseModal.hidden&&commit&&browse.key&&browse.path&&browse.valid){const input=form.elements[browse.key];if(input){input.value=browse.path;input.dispatchEvent(new Event('input',{bubbles:true}));}}browseModal.hidden=true;if(browse.button)browse.button.focus();}
+function closeBrowse(commit){if(!browseModal.hidden&&commit&&browse.key&&browse.path&&browse.valid){const input=form.elements[browse.key];if(input){input.value=browse.path;input.dispatchEvent(new Event('input',{bubbles:true}));}}browse.request++;browse.valid=false;browseSelect.disabled=true;browseModal.hidden=true;if(browse.button)browse.button.focus();}
 document.querySelectorAll('.browse').forEach(b=>b.addEventListener('click',()=>openBrowse(b,b.dataset.key)));
 document.getElementById('browse-select').addEventListener('click',()=>closeBrowse(true));
 document.getElementById('browse-cancel').addEventListener('click',()=>closeBrowse(false));
