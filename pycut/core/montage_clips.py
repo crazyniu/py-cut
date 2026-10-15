@@ -48,14 +48,7 @@ DEDUP_CHUNK = 1 << 20
 # 片段截取/拼接默认 CRF（libx264 软件编码）
 CRF_DEFAULT = "20"
 
-# 片段截取/拼接/转场的 x264 速度档：与贴纸/画中画/字幕/前贴/去重已有的 veryfast 一致。
-# 这三处都是中间产物，随后还要被步骤C 画中画、步骤D 字幕各编码一次；preset 是
-# 速度/体积/画质的三方取舍——**同样的 CRF 在不同 preset 下并不保证码率或画质相同**，
-# 所以选档位必须用成片证据（体积 + 抽帧 + VMAF）核对，不能只说「只影响速度」。
-# 本机实测（14 核 / ffmpeg-full 9.0.2 / work/bench 固定素材与 seed，8 段含贴纸与
-# 段间淡化）：veryfast 相比 x264 默认 medium，分段标准化 7.25s -> 5.55s、12s 整片
-# 拼接编码 0.87s -> 0.47s，整条命令 13.31s -> 10.73s；同一轮里画中画 / 字幕 /
-# 贴音轨三步（本来就是 veryfast）耗时不变。成片差异见 PR #103 的体积/抽帧/VMAF 证据。
+# 中间编码使用与贴纸、画中画和字幕一致的速度档；CRF 保持不变。
 X264_PRESET = "veryfast"
 
 # 单文件 ffprobe 超时：读容器头很快，60s 足够，异常文件不拖死整批
@@ -129,7 +122,7 @@ def _enc_args(out: Path, fps: int | None, crf: str) -> list[str]:
 
     `-an` 静音（音轨由步骤C 统一叠）；libx264 + yuv420p + faststart；
     `-fps_mode cfr` 而非 `-vsync`（ffmpeg 9.0 已移除 -vsync）；
-    `-preset veryfast`（中间编码用速度档，画质仍由 CRF 口径控制，见 X264_PRESET）；
+    `-preset veryfast` 用于中间编码；
     不加 `-threads`（AGENTS.md：scene 检测下反而更慢）。
     """
     return [
