@@ -23,6 +23,10 @@ echo "[pycut] 系统: $PLATFORM"
 install_system_package() {
   local package="$1"
   local admin=()
+  # Bash 3.2 的 set -u 下，空数组直接 "${admin[@]}" 会报 "admin[@]: unbound variable"。
+  # 用 "${admin[@]+"${admin[@]}"}" 让空数组展开为零个参数（root 不加 sudo）、
+  # 非空数组逐元素展开（非 root 加 sudo）；所有包管理器调用统一经 run_admin 走这里。
+  run_admin() { "${admin[@]+"${admin[@]}"}" "$@"; }
   if [ "$PLATFORM" = Darwin ]; then
     command -v brew >/dev/null 2>&1 || {
       echo '[pycut] 错误: 缺少 Homebrew，请先安装 Homebrew 后重新启动'
@@ -40,23 +44,23 @@ install_system_package() {
     admin=(sudo)
   fi
   if command -v apt-get >/dev/null 2>&1; then
-    "${admin[@]}" apt-get update || return 1
+    run_admin apt-get update || return 1
     if [ "$package" = python3 ]; then
-      "${admin[@]}" apt-get install -y python3 python3-pip python3-venv
+      run_admin apt-get install -y python3 python3-pip python3-venv
     else
-      "${admin[@]}" apt-get install -y "$package"
+      run_admin apt-get install -y "$package"
     fi
   elif command -v dnf >/dev/null 2>&1; then
-    "${admin[@]}" dnf install -y "$package"
+    run_admin dnf install -y "$package"
   elif command -v yum >/dev/null 2>&1; then
-    "${admin[@]}" yum install -y "$package"
+    run_admin yum install -y "$package"
   elif command -v pacman >/dev/null 2>&1; then
     [ "$package" != python3 ] || package=python
-    "${admin[@]}" pacman -S --needed --noconfirm "$package"
+    run_admin pacman -S --needed --noconfirm "$package"
   elif command -v zypper >/dev/null 2>&1; then
-    "${admin[@]}" zypper --non-interactive install "$package"
+    run_admin zypper --non-interactive install "$package"
   elif command -v apk >/dev/null 2>&1; then
-    "${admin[@]}" apk add "$package"
+    run_admin apk add "$package"
   else
     echo "[pycut] 错误: 未找到支持的包管理器，请安装 $package 后重新启动"
     return 1
