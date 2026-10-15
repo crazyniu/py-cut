@@ -163,7 +163,8 @@ class NavigationTests(unittest.TestCase):
 
     def test_montage_reads_configured_folders_without_picker(self):
         video = Path("/tmp/source/test.mp4")
-        with mock.patch.object(config, "MONTAGE_CLIP_DIR", Path("/tmp/clips")), \
+        with mock.patch.dict("os.environ", {"PYCUT_PIP_DIR": "/tmp/pip"}), \
+             mock.patch.object(config, "MONTAGE_CLIP_DIR", Path("/tmp/clips")), \
              mock.patch.object(config, "MONTAGE_DEDUP_DIR", Path("/tmp/pip")), \
              mock.patch.object(tui, "_pick_dir") as picker, \
              mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 1), \

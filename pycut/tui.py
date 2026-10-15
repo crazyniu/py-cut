@@ -824,16 +824,14 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     from .core.montage_clips import _collect_files, VIDEO_EXTS
     directories = [str(config.REFERENCE_DIR), str(config.MONTAGE_CLIP_DIR),
                    str(config.MONTAGE_DEDUP_DIR)]
-    # Match the actual montage collector: recursive, same supported formats.
-    counts = [len(_collect_files(Path(d))) for d in directories[1:]]
-    missing = [f"{label}：{path}" for label, path, count in
-               zip(("背景切片", "画中画切片"), directories[1:], counts) if not count]
-    if missing:
-        _flash(stdscr, "未找到混剪候选\n" + "\n".join(missing)
+    # 背景切片目录始终需要；画中画可选：勾选后才校验配置并扫描，未勾选不扫描/不渲染。
+    clip_count = len(_collect_files(Path(directories[1])))
+    if not clip_count:
+        _flash(stdscr, "未找到混剪候选\n背景切片：" + directories[1]
                + "\n递归支持 " + "/".join(ext[1:].upper() for ext in VIDEO_EXTS)
                + "，请检查 Web 中该目录及其子目录", "bad")
         return None
-    clip_count, pip_count = counts
+    pip_configured = bool(os.environ.get("PYCUT_PIP_DIR", "").strip())
     selection = None
     step = 3
     while True:
@@ -866,9 +864,10 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
         intro_dir = os.environ.get("PYCUT_INTRO_DIR", "").strip()
         lines = [
             ("片段库", f"{clip}（{clip_count} 个）"),
-            ("画中画", f"{pip}（{pip_count} 个）"),
-            ("规格", "720×1280 · 9:16 · 固定右上角画中画"),
-            ("切换效果", "段间转场 · 背景与画中画标准档扰动"),
+            ("画中画", pip if pip_configured else "未配置（不叠加）"),
+            ("规格", "720×1280 · 9:16" + (" · 右上角画中画" if pip_configured else "")),
+            ("切换效果", "段间转场 · 背景标准档扰动"
+             + (" · 画中画标准档扰动" if pip_configured else "")),
             ("贴纸", "本地优先，未配置则在线下载"),
             ("原声", "直接使用爆款视频音轨，不变速、不变声"),
             ("前贴", f"{config.INTRO_DIR} · 没有视频时跳过" if intro_dir else "未配置，跳过"),
@@ -878,18 +877,34 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
         for i, src in enumerate(chosen, 1):
             lines.append((f"来源 {i}", f"{src.name} × {fission[str(src)]}"))
         lines.insert(0, ("混剪 · 3/3", "确认以下数量后开始生成"))
-        if not _confirm(stdscr, lines):
+        values: list[bool] = [pip_configured]
+        if not _confirm(stdscr, lines,
+                        [("叠加画中画", "右上角画中画；关闭则不扫描不渲染", pip_configured)],
+                        values):
             step = 4
             continue
+        use_pip = values[0]
+        if use_pip:
+            if not pip_configured:
+                _flash(stdscr, "已勾选画中画但未配置 PYCUT_PIP_DIR；"
+                       "请先在网页配置画中画目录或取消勾选", "bad")
+                return None
+            if not len(_collect_files(Path(pip))):
+                _flash(stdscr, f"画中画目录没有可用素材：{pip}", "bad")
+                return None
 
         # Preserve the existing argv/CLI contract exactly.
         argv_list: list[list[str]] = []
         for src in chosen:
             argv = [
                 "montage", "--source", str(src), "--clip-dir", clip,
-                "--dedup-dir", pip, "--out-dir", out_dir,
+                "--out-dir", out_dir,
                 "--intro-dir", str(config.INTRO_DIR) if intro_dir else "",
             ]
+            if use_pip:
+                argv.extend(["--dedup-dir", pip])
+            else:
+                argv.append("--no-pip")
             argv.extend(["--fission", str(fission[str(src)])])
             argv_list.append(argv)
         return argv_list

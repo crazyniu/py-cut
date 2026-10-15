@@ -1,23 +1,25 @@
 """The count step is required, editable, bounded and preserves backtracking."""
 from pathlib import Path
 from unittest import mock
+import curses
 from pycut import cli, tui
 
 
 def screen(keys):
-    result=mock.Mock()
-    result.getmaxyx.return_value=(24,100)
-    result.getch.side_effect=keys
+    result = mock.Mock()
+    result.getmaxyx.return_value = (30, 100)
+    result.getch.side_effect = keys
     return result
 
 
 def test_full_keyboard_flow_requires_count_after_selection():
-    source=Path('/素材/爆款.mp4')
-    terminal=screen([ord(' '),10,ord('5'),10,10])
-    with mock.patch.object(tui,'_attr',return_value=0),mock.patch('pycut.core.montage_clips._collect_files',return_value=[source]),mock.patch.object(tui,'list_videos_flat',return_value=[source]):
-        commands=tui._wizard_montage(terminal,100)
-    assert cli.build_parser().parse_args(commands[0]).fission==5
-    rendered='\n'.join(c.args[2] for c in terminal.addstr.call_args_list)
+    source = Path('/素材/爆款.mp4')
+    # 确认页多了一个「叠加画中画」开关：→ 移到确认按钮再 Enter。
+    terminal = screen([ord(' '), 10, ord('5'), 10, curses.KEY_RIGHT, 10])
+    with mock.patch.object(tui, '_attr', return_value=0), mock.patch('pycut.core.montage_clips._collect_files', return_value=[source]), mock.patch.object(tui, 'list_videos_flat', return_value=[source]):
+        commands = tui._wizard_montage(terminal, 100)
+    assert cli.build_parser().parse_args(commands[0]).fission == 5
+    rendered = '\n'.join(c.args[2] for c in terminal.addstr.call_args_list)
     assert '2/3 设置裂变数量' in rendered and '生成条数' in rendered
     assert '5 支成片' in rendered
 
