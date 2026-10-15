@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from unittest import mock
@@ -81,6 +82,31 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as error:
                 urllib.request.urlopen(req)
             self.assertEqual(error.exception.code, 403)
+
+    def test_dir_browse_endpoint_requires_token_and_returns_absolute_paths(self):
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(config, 'PROJECT_ROOT', Path(td)), mock.patch.object(config, 'refresh'), mock.patch.dict('os.environ', {}, clear=True):
+            root = Path(td)
+            (root / '中文 空格').mkdir()
+            url = web_config.start(open_browser=False)
+            self.addCleanup(web_config.stop)
+            quoted = urllib.parse.quote(str(root))
+            # 无 token 拒绝
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(url + 'api/dirs?path=' + quoted)
+            self.assertEqual(error.exception.code, 403)
+            # 带 token 返回真实绝对路径与中文空格目录
+            headers = {'X-Config-Token': web_config._TOKEN}
+            req = urllib.request.Request(url + 'api/dirs?path=' + quoted, headers=headers)
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read())
+            self.assertIsNone(data['error'])
+            self.assertEqual(data['path'], str(root.resolve()))
+            self.assertIn('中文 空格', [d['name'] for d in data['dirs']])
+            # 不存在的路径返回清晰错误
+            req = urllib.request.Request(url + 'api/dirs?path=' + urllib.parse.quote(str(root / 'nope')), headers=headers)
+            with urllib.request.urlopen(req) as response:
+                data = json.loads(response.read())
+            self.assertEqual(data['error'], '目录不存在')
 
     def test_missing_configuration_never_enters_processing(self):
         with mock.patch.object(config, 'refresh'), mock.patch.object(settings, 'effective', return_value={}), mock.patch.object(web_config, 'start', return_value='http://localhost/'), mock.patch.object(tui, '_flash'), mock.patch.object(tui, '_wizard_slice') as wizard:
