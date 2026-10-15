@@ -109,7 +109,7 @@ class TUIIntegrationTests(unittest.TestCase):
     def test_no_video_short_circuits_before_confirm(self):
         for wizard in (tui._wizard_cover, tui._wizard_dedup):
             with self.subTest(wizard=wizard.__name__), \
-                 mock.patch.object(tui, "_pick_dir", side_effect=["/tmp/empty", None]), \
+                 mock.patch("pycut.core.scan.list_videos_recursive", return_value=[]), \
                  mock.patch.object(tui, "count_videos_recursive", return_value=0), \
                  mock.patch.object(tui, "_flash") as flash, \
                  mock.patch.object(tui, "_confirm") as confirm:
@@ -164,13 +164,13 @@ class TUIIntegrationTests(unittest.TestCase):
         picker.assert_not_called()
 
     def test_montage_cancel_before_confirm_never_builds_jobs(self):
-        with mock.patch.object(tui, "_pick_dir", side_effect=["/tmp/clips", None, None]), \
+        with mock.patch.object(tui, "list_videos_flat", return_value=[Path("reference.mp4")]), \
              mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 4), \
              mock.patch.object(tui, "_confirm") as confirm, \
-             mock.patch.object(tui, "_multi_select") as multi:
+             mock.patch.object(tui, "_multi_select", return_value=None) as multi:
             self.assertIsNone(tui._wizard_montage(FakeScreen(), 100))
             confirm.assert_not_called()
-            multi.assert_not_called()
+            multi.assert_called_once()
 
     def test_only_processing_features_are_accessible_from_main_menu(self):
         self.assertEqual(
