@@ -460,17 +460,17 @@ def _make_continuous(timeline: list[dict], total: float) -> list[dict]:
     out: list[dict] = []
     cur = 0.0
     for t in timeline:
-        d = float(t["duration"])
-        if cur + d > total:
-            d = total - cur
-            if d < 0.3:            # 尾巴太短不值得单独一段
-                break
+        d = min(float(t["duration"]), total - cur)
+        # 连续模式保留有实际毫秒长度的尾段，不沿用间隔模式的最短镜头限制。
+        if round(d, 3) <= 0:
+            break
         t = dict(t)
         t["start"] = round(cur, 3)
         t["duration"] = round(d, 3)
+        t["allow_short"] = True
         out.append(t)
         cur += d
-        if cur >= total - 0.05:
+        if cur >= total:
             break
     return out
 

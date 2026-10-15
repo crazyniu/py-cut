@@ -494,6 +494,8 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
         "-crf", str(crf),
         "-pix_fmt", "yuv420p",
         "-r", str(fps), "-fps_mode", "cfr",
+        # 次流末帧经 framesync/CFR 可多延一帧；输出仍严格按主视频帧预算。
+        "-frames:v", str(max(1, round(info.duration * fps))),
         "-movflags", "+faststart",
         str(tmp),
     ]
