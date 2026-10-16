@@ -17,7 +17,7 @@ def test_intro_not_required_and_web_labels_it_optional(tmp_path):
     values = {key: str(tmp_path) for key in settings.REQUIRED}
     assert 'PYCUT_INTRO_DIR' not in settings.REQUIRED
     assert settings.problems(values) == []
-    assert '可选' in web_config.page().split('for="PYCUT_INTRO_DIR"')[1].split('</label>')[0]
+    assert '可选' in web_config.page().split('data-key="PYCUT_INTRO_DIR"')[1].split('</legend>')[0]
 
 
 def test_empty_intro_preflight_and_late_scan_continue_but_scan_errors_fail(tmp_path):
@@ -57,15 +57,15 @@ def test_empty_intro_preflight_and_late_scan_continue_but_scan_errors_fail(tmp_p
 def test_tui_unconfigured_intro_does_not_enable_default_folder(tmp_path):
     source = tmp_path / 'reference.mp4'
     source.touch()
-    with mock.patch.object(tui, 'list_videos_flat', return_value=[source]), \
+    with mock.patch.object(config, 'CLIP_DIRS', [tmp_path]), mock.patch.object(config, 'INTRO_DIRS', []), mock.patch.object(config, 'PIP_DIRS', []), mock.patch.object(tui, 'list_videos_recursive', return_value=[source]), \
          mock.patch('pycut.core.montage_clips._collect_files', return_value=[source]), \
          mock.patch.object(tui, '_multi_select', return_value=([source], {str(source): 1})), \
          mock.patch.object(tui, '_set_fission_counts', return_value=True), \
          mock.patch.object(tui, '_confirm', return_value=True) as confirm, \
          mock.patch.dict(os.environ, {'PYCUT_INTRO_DIR': ''}):
         jobs = tui._wizard_montage(None, 100)
-    assert jobs[0][jobs[0].index('--intro-dir') + 1] == ''
-    assert ('前贴', '未配置，跳过') in confirm.call_args.args[1]
+    assert settings.directories(jobs[0][jobs[0].index('--intro-dir') + 1]) == []
+    assert ('前贴目录', '未配置，跳过') in confirm.call_args.args[1]
 
 
 def ffmpeg(*args):

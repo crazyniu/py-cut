@@ -4,9 +4,9 @@
 # 用法:
 #   ./run.sh                              # 无参数：交互终端进入 TUI
 #   ./run.sh tui                          # 显式进入 TUI
-#   ./run.sh slice --file "文件名" --dry-run
-#   ./run.sh slice                        # 批量切片
-#   ./run.sh cover --all                  # 补跑字幕擦除
+#   ./run.sh cover                        # 用户切片字幕擦除
+#   ./run.sh dedup                        # 用户切片去重
+#   ./run.sh montage --source "话术/a/1.mp4"
 #
 # 说明：密钥与网关配置全部在项目根 .env（首次运行会自动从 .env.example 生成）。
 set -uo pipefail
@@ -184,7 +184,7 @@ for line in config.gateway_summary().splitlines():
     print('[pycut] ' + line)
 if not config.key_ready():
     print('[pycut] 警告: 主网关未配置密钥（.env 的 PYCUT_MAIN_KEY），LLM 步骤会 401。')
-    print('         可先填密钥，或用 --no-llm 走纯 Haar（不调用大模型）。')
+    print('         字幕擦除需在设置页填写视觉模型和密钥；去重、混剪不依赖此密钥。')
 " 2>/dev/null || echo "[pycut] 警告: 无法读取网关配置，请检查 .env"
 
 # ---------- 6. 运行入口（无参数且为交互终端会自动进 TUI）----------

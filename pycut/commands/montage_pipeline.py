@@ -23,10 +23,10 @@ class MontageOptions:
     prepared: dict | None = field(default=None, repr=False)  # 仅同一批裂变共享准备结果
     step: str = "all"
     source: Path = field(default_factory=lambda: config.MONTAGE_SRC)
-    clip_dir: Path = field(default_factory=lambda: config.MONTAGE_CLIP_DIR)
-    dedup_dir: Path = field(default_factory=lambda: config.MONTAGE_DEDUP_DIR)
+    clip_dir: Path | list[Path] = field(default_factory=lambda: config.CLIP_DIRS)
+    dedup_dir: Path | list[Path] = field(default_factory=lambda: config.PIP_DIRS)
     out_dir: Path = field(default_factory=lambda: config.MONTAGE_OUT)
-    intro_dir: Path | None = None
+    intro_dir: Path | list[Path] | None = None
     seed: int | None = None
     allow_landscape: bool = False
     pip_slot: float = 2.5
@@ -209,7 +209,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
         if "pip" not in prepared:
             prepared["pip"] = scan_dedup_pool(opts.dedup_dir, min_dur=opts.min_clip)
         if not prepared["pip"]:
-            result["error"] = f"画中画素材目录没有可用 MP4：{opts.dedup_dir}"
+            result["error"] = f"画中画素材目录没有可用 MP4/MOV/M4V：{opts.dedup_dir}"
             log(f"  [失败] {result['error']}（请检查素材长度/路径或显式使用 --no-pip）")
             return result
 

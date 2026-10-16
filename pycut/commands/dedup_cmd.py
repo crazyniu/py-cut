@@ -37,9 +37,9 @@ def register(subparsers) -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     g = p.add_argument_group("范围")
     g.add_argument("--file", nargs="+", help="要处理的视频/切片路径（可多个）")
-    g.add_argument("--all", action="store_true", help="处理切片桶（有人脸/无人脸）的全部切片")
-    g.add_argument("--source-stems", nargs="*", help="仅处理指定源视频的编号切片（切片后继任务）")
-    g.add_argument("--src-dir", default="",
+    g.add_argument("--all", action="store_true", help="处理配置的混剪切片目录中的全部 MP4")
+    g.add_argument("--source-stems", nargs="*", help=argparse.SUPPRESS)
+    g.add_argument("--src-dir", action="append", default=None,
                    help="视频目录（递归扫描所有 mp4；优先于 --all）")
 
     g = p.add_argument_group("本地账号预设（不存储凭证）")
@@ -113,19 +113,18 @@ def _pick_srcs(args: argparse.Namespace) -> list[Path]:
         if invalid:
             sys.exit(f"[错误] 仅支持 MP4 视频文件: {invalid[0]}")
         return srcs
-    if args.src_dir:
+    if args.src_dir or config.CLIP_DIRS:
         # 递归扫描指定目录下所有视频（不限切片桶结构，也不要求 --all）
         from ..core.scan import list_videos_recursive  # noqa: PLC0415
-        srcs = list_videos_recursive(Path(args.src_dir).expanduser())
+        srcs = [p for p in list_videos_recursive(args.src_dir or config.CLIP_DIRS, max_depth=None, raise_on_error=True)
+                if p.suffix.lower() == ".mp4"]
+        if not getattr(args, "in_place", False):
+            from ..core.output_paths import without_outputs
+            srcs = without_outputs(srcs, args.src_dir or config.CLIP_DIRS, "去重", getattr(args, "out_dir", ""))
         if not srcs:
             sys.exit(f"[错误] {args.src_dir} 下没有可处理的视频")
         return srcs
-    if args.all:
-        clips = collect_clips(None)
-        if not clips:
-            sys.exit("[错误] 桌面两个切片目录里没有可处理的切片")
-        return clips
-    sys.exit("[错误] 需要 --file、--src-dir 或 --all")
+    sys.exit("[错误] 请配置混剪切片目录，或使用 --file / --src-dir 指定输入")
 
 
 def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
@@ -145,6 +144,9 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
         if STOP.flag:
             log("[中断] 自检已停止，不再检查后续视频（退出码 130）")
             return 130
+        if not args.out_dir and (args.src_dir or config.CLIP_DIRS):
+            from ..core.output_paths import sibling, matching_root
+            output_opts = DedupOptions(out_dir=str(sibling(matching_root(s, args.src_dir or config.CLIP_DIRS), "去重")))
         out = resolve_output_path(s, output_opts)
         if not out.is_file():
             log(f"  [跳过] {s.name}: 还没有去重产物（{out.name}）")
@@ -252,19 +254,24 @@ def run(args: argparse.Namespace) -> int:
             log(f"[音轨输入错误] {exc}")
             return 2
 
-    srcs = _pick_srcs(args)
-    from ..core.output_paths import sibling, validate_targets
-    if not args.out_dir and os.environ.get("PYCUT_OUTPUT_DIR"):
-        args.out_dir = str(config.DEDUP_OUT)
-    elif args.src_dir and not args.out_dir:
-        args.out_dir = str(sibling(Path(args.src_dir), "去重"))
+    try:
+        srcs = _pick_srcs(args)
+    except (ValueError, OSError) as exc:
+        log(f"[错误] {exc}")
+        return 2
+    from ..core.output_paths import sibling, validate_targets, matching_root, flat_output
+    roots = args.src_dir or (config.CLIP_DIRS if not args.file else [])
+    def output_directory(p):
+        return Path(args.out_dir).expanduser() if args.out_dir else sibling(matching_root(p, roots), "去重")
+    def output_for(p):
+        return flat_output(p, output_directory(p))
     if args.source_stems is not None:
         import re
         srcs = [p for p in srcs if any(re.fullmatch(re.escape(stem) + r"_[1-9][0-9]*", p.stem)
                                       for stem in args.source_stems)]
     try:
         if not args.in_place:
-            validate_targets([(p, resolve_output_path(p, DedupOptions(out_dir=args.out_dir))) for p in srcs])
+            validate_targets([(p, output_for(p)) for p in srcs])
     except ValueError as exc:
         log(f"[错误] {exc}")
         return 2
@@ -302,7 +309,16 @@ def run(args: argparse.Namespace) -> int:
         log("[警告] --in-place 会覆盖源文件，务必确认已备份")
 
     t0 = time.time()
-    items = process_batch(srcs, opts, workers=args.workers)
+    from dataclasses import replace
+    groups = {}
+    for source in srcs:
+        directory = str(output_directory(source))
+        groups.setdefault(directory, []).append(source)
+    items = []
+    for directory, sources in groups.items():
+        if STOP.flag:
+            break
+        items.extend(process_batch(sources, replace(opts, out_dir=directory), workers=args.workers))
 
     ok = sum(1 for i in items if i.get("ok"))
     bad = sum(1 for i in items if not i.get("ok") and not i.get("skipped"))

@@ -1,4 +1,4 @@
-"""四个视频处理向导：Web/.env 配置目录，终端预览素材、确认任务、显示日志。"""
+"""三个视频处理向导：Web/.env 配置目录，终端预览素材、确认任务、显示日志。"""
 from __future__ import annotations
 
 import curses
@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import cli, config
-from .core.scan import count_videos_recursive, list_videos_flat
+from .core.scan import list_videos_recursive
 from .folder_picker import choose_directory
 
 # ---------------------------------------------------------------------------
@@ -119,17 +119,15 @@ def _attr(name: str) -> int:
 # 功能菜单文案
 # ---------------------------------------------------------------------------
 FEATURES = [
-    ("slice", "切片",    "把长视频切成多段，可选擦除字幕、去重"),
     ("cover", "字幕擦除", "擦除画面中的字幕"),
     ("dedup", "去重",    "调整视频画面，降低相似度"),
     ("montage", "混剪",  "组合片段生成新视频（可批量裂变）"),
 ]
 
 FEATURE_HINTS = {
-    "slice": "场景分段 → 人脸分流 → 可选字幕擦除 / 去重",
-    "cover": "读取切片配置 → 全宽矩形马赛克",
+    "cover": "读取用户切片 → 单层毛玻璃遮盖字幕",
     "dedup": "读取切片配置 → 画面处理及相似度自检",
-    "montage": "读取目录配置 → 选择爆款视频 → 自动加前贴",
+    "montage": "读取目录配置 → 选择话术 → 数量 → 确认混剪",
 }
 
 
@@ -548,8 +546,15 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
 
 
 # ---------------------------------------------------------------------------
-# 多选列表（混剪爆款视频）
+# 多选列表（混剪话术视频）
 # ---------------------------------------------------------------------------
+def _reference_label(source: Path) -> str:
+    try:
+        return str(source.resolve().relative_to(config.REFERENCE_DIR.resolve()))
+    except ValueError:
+        return source.name
+
+
 def _multi_select(stdscr, title: str, files: list[Path],
                   initial: tuple[list[Path], dict[str, int]] | None = None
                   ) -> tuple[list[Path], dict[str, int]] | None:
@@ -587,7 +592,7 @@ def _multi_select(stdscr, title: str, files: list[Path],
             box = "[✓]" if checked else "[ ]"
             bcolor = "good" if checked else "muted"
             attr = curses.A_BOLD if active else curses.A_NORMAL
-            name = f.name
+            name = _reference_label(f)
             name = _ellipsize(name, w - 24)
             _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
             _safe_add(stdscr, y, 5, box, w, bcolor, attr)
@@ -642,7 +647,7 @@ def _set_fission_counts(stdscr, chosen: list[Path], counts: dict[str, int]) -> b
         stdscr.erase()
         body = _frame(stdscr, "混剪 · 2/3 设置裂变数量",
                f"第 {index}/{len(chosen)} 个视频 · 每个视频可生成 1～99 条")
-        _safe_add(stdscr, body, 2, _ellipsize(source.name, w - 4), w, "accent", curses.A_BOLD)
+        _safe_add(stdscr, body, 2, _ellipsize(_reference_label(source), w - 4), w, "accent", curses.A_BOLD)
         _safe_add(stdscr, body + 1, 2, "输入这支视频要生成的成片数量", w, "text")
         _footer(stdscr, "Enter 保存数量并继续 · Esc 返回视频选择", "Enter 继续 · Esc 返回")
         stdscr.refresh()
@@ -733,78 +738,61 @@ def _run_feature_wizard(stdscr, key: str, w: int) -> list[list[str]] | str | Non
     """
     from . import settings, web_config
     config.refresh()
-    errors = settings.problems(settings.effective())
+    keys = ("PYCUT_CLIP_DIR",) if key in ("cover", "dedup") else ("PYCUT_REFERENCE_DIR", "PYCUT_CLIP_DIR", "PYCUT_OUTPUT_DIR", "PYCUT_INTRO_DIR")
+    errors = settings.problems(settings.effective(), keys=keys)
     if errors:
         url = web_config.start()
         _flash(stdscr, "请先在网页配置：" + url + " · " + "；".join(errors), "bad")
         return None
-    if key == "slice":
-        return _wizard_slice(stdscr, w)
     if key == "cover" and not config.key_ready():
-        _flash(stdscr, "字幕定位需要配置 LLM 主网关密钥，按 W 打开配置网页", "bad")
+        _flash(stdscr, "字幕定位需要配置视觉模型和密钥，请在顶部设置地址填写 LLM 网关", "bad")
         return None
-    if key == "cover":
-        return _wizard_cover(stdscr, w)
-    if key == "dedup":
-        return _wizard_dedup(stdscr, w)
-    if key == "montage":
-        return _wizard_montage(stdscr, w)
+    wizard = {"cover": _wizard_cover, "dedup": _wizard_dedup, "montage": _wizard_montage}.get(key)
+    if wizard:
+        try:
+            return wizard(stdscr, w)
+        except (ValueError, OSError) as exc:
+            _flash(stdscr, f"无法读取素材目录：{exc}", "bad")
     return None
 
 
 # ---------------------------------------------------------------------------
 # 各功能向导
 # ---------------------------------------------------------------------------
-def _wizard_slice(stdscr, w: int) -> list[list[str]] | None:
-    from .core.scan import list_videos_recursive
-    d = str(config.SRC_DIR)
-    n = sum(p.suffix.lower() == ".mp4" for p in list_videos_recursive(d))
-    if not n:
-        _flash(stdscr, f"源目录 3 层内没有 MP4：{d}", "bad")
-        return None
-    from .core.output_paths import slice_output_root
-    output = slice_output_root(config.SRC_DIR)
-    values = []
-    if not _confirm(stdscr, [("源目录", d), ("画中画切片输出", str(output)),
-                            ("视频数量", f"{n} 个")],
-                    [("擦除字幕", "单层毛玻璃模糊", True),
-                     ("去重", "仅处理本次生成的切片", False)], values):
-        return None
-    if values[0] and not config.key_ready():
-        _flash(stdscr, "擦除字幕需要配置 LLM 主网关密钥，按 W 打开配置网页", "bad")
-        return None
-    argv = ["slice", "--src-dir", d, "--max-depth", "3", "--out-dir", str(output)]
-    if not values[0]:
-        argv.append("--no-sub")
-    jobs = [argv]
-    if values[1]:
-        jobs.append(["dedup", "--src-dir", str(output), "--force", "--source-stems",
-                     *[p.stem for p in list_videos_recursive(d) if p.suffix.lower() == ".mp4"]])
-    return jobs
+def _library_summary(paths: list[Path]) -> str:
+    return "；".join(str(p) for p in paths) or "未配置"
 
 
 def _wizard_cover(stdscr, w: int) -> list[list[str]] | None:
-    from .core.scan import list_videos_recursive
-    d = str(config.CLIP_DIR)
-    n = sum(p.suffix.lower() == ".mp4" for p in list_videos_recursive(d))
-    if not n:
-        _flash(stdscr, f"切片目录 3 层内没有 MP4：{d}", "bad")
+    from . import settings
+    from .core.output_paths import without_outputs
+    paths = config.CLIP_DIRS
+    files = [p for p in list_videos_recursive(paths, max_depth=None, raise_on_error=True)
+             if p.suffix.lower() == ".mp4"]
+    files = without_outputs(files, paths, "字幕查重")
+    if not files:
+        _flash(stdscr, "混剪切片目录及其子目录没有 MP4：" + _library_summary(paths), "bad")
         return None
-    if _confirm(stdscr, [("切片目录", d), ("字幕处理", "按字幕高度覆盖全宽矩形马赛克"),
-                        ("MP4 数量", f"{n} 个")]):
-        return [["cover", "--src-dir", d]]
+    if _confirm(stdscr, [("用户切片目录", _library_summary(paths)),
+                        ("字幕处理", "单层毛玻璃遮盖字幕"), ("MP4 数量", str(len(files))),
+                        ("输出", "各输入目录同级的字幕查重目录")]):
+        return [["cover", "--src-dir", settings.encoded_directories(paths)]]
     return None
 
 
 def _wizard_dedup(stdscr, w: int) -> list[list[str]] | None:
-    d = str(config.CLIP_DIR)
-    n = count_videos_recursive(d)
-    if not n:
-        _flash(stdscr, f"切片目录没有视频：{d}", "bad")
+    from . import settings
+    from .core.output_paths import without_outputs
+    paths = config.CLIP_DIRS
+    files = [p for p in list_videos_recursive(paths, max_depth=None, raise_on_error=True)
+             if p.suffix.lower() == ".mp4"]
+    files = without_outputs(files, paths, "去重")
+    if not files:
+        _flash(stdscr, "混剪切片目录及其子目录没有 MP4：" + _library_summary(paths), "bad")
         return None
-    if _confirm(stdscr, [("切片目录", d), ("视频数量", str(n)),
-                        ("输出", str(config.DEDUP_OUT))]):
-        return [["dedup", "--src-dir", d]]
+    if _confirm(stdscr, [("用户切片目录", _library_summary(paths)), ("MP4 数量", str(len(files))),
+                        ("输出", "各输入目录同级的去重目录")]):
+        return [["dedup", "--src-dir", settings.encoded_directories(paths)]]
     return None
 
 
@@ -820,95 +808,71 @@ def _count_sticker_images(folder: Path) -> int:
 
 
 def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
-    """Use configured libraries, then select references and confirm."""
+    """Choose script-folder videos, then quantities and optional PIP."""
+    from . import settings
     from .core.montage_clips import _collect_files, VIDEO_EXTS
-    directories = [str(config.REFERENCE_DIR), str(config.MONTAGE_CLIP_DIR),
-                   str(config.MONTAGE_DEDUP_DIR)]
-    # 背景切片目录始终需要；画中画可选：勾选后才校验配置并扫描，未勾选不扫描/不渲染。
-    clip_count = len(_collect_files(Path(directories[1])))
-    if not clip_count:
-        _flash(stdscr, "未找到混剪候选\n背景切片：" + directories[1]
-               + "\n递归支持 " + "/".join(ext[1:].upper() for ext in VIDEO_EXTS)
-               + "，请检查 Web 中该目录及其子目录", "bad")
+    from .core.output_paths import montage_output
+    clips = config.CLIP_DIRS
+    pips = config.PIP_DIRS
+    intros = config.INTRO_DIRS
+    output = config.MONTAGE_OUT if os.environ.get("PYCUT_OUTPUT_DIR", "").strip() else montage_output(config.REFERENCE_DIR)
+    clip_files = {p.resolve() for root in clips for p in _collect_files(root)}
+    if not clip_files:
+        _flash(stdscr, "未找到混剪切片：" + _library_summary(clips)
+               + "\n递归支持 " + "/".join(ext[1:].upper() for ext in VIDEO_EXTS), "bad")
         return None
-    pip_configured = bool(os.environ.get("PYCUT_PIP_DIR", "").strip())
-    values: list[bool] = [pip_configured]
+    files = [p for p in list_videos_recursive(config.REFERENCE_DIR, max_depth=None, raise_on_error=True)
+             if p.parent.resolve() != config.REFERENCE_DIR.resolve()]
+    if not files:
+        _flash(stdscr, "话术目录的子文件夹中没有视频：" + str(config.REFERENCE_DIR)
+               + "\n例如：a/1.mp4 和 a/1.srt", "bad")
+        return None
+    values = [bool(pips)]
     selection = None
-    step = 3
+    step = 1
     while True:
-        if step == 3:
-            assert directories[0] is not None
-            files = list_videos_flat(directories[0])
-            if not files:
-                _flash(stdscr, f"该目录下没有视频：{directories[0]}", "bad")
-                return None
-            result = _multi_select(stdscr, "混剪 · 1/3 选择爆款视频",
-                                   files, initial=selection)
+        if step == 1:
+            result = _multi_select(stdscr, "混剪 · 1/3 选择话术视频", files, initial=selection)
             if result is None:
                 return None
             selection = result
-            step = 4
-            continue
-
-        assert selection is not None
+            step = 2
         chosen, fission = selection
-        if step == 4:
+        if step == 2:
             if not _set_fission_counts(stdscr, chosen, fission):
-                step = 3
+                step = 1
                 continue
-            step = 5
+            step = 3
+        lines = [("混剪 · 3/3", f"{len(chosen)} 个话术，共 {sum(fission[str(f)] for f in chosen)} 支成片"),
+                 ("混剪切片", f"{len(clips)} 个目录 · {len(clip_files)} 个视频"),
+                 ("画中画目录", _library_summary(pips)),
+                 ("前贴目录", _library_summary(intros) if intros else "未配置，跳过"),
+                 ("规格", "720×1280 · 9:16"),
+                 ("原声", "正文使用话术原声，前贴保留自身原声"),
+                 ("输出", str(output))]
+        lines += [(f"话术 {i}", f"{_reference_label(src)} × {fission[str(src)]}")
+                  for i, src in enumerate(chosen, 1)]
+        if not _confirm(stdscr, lines, [("叠加画中画", "关闭则不读取画中画素材", values[0])], values):
+            step = 2
             continue
-        assert all(d is not None for d in directories)
-        src_dir, clip, pip = directories
-        total_out = sum(fission[str(f)] for f in chosen)
-        out_dir = str(config.MONTAGE_OUT)
-        intro_dir = os.environ.get("PYCUT_INTRO_DIR", "").strip()
-        lines = [
-            ("片段库", f"{clip}（{clip_count} 个）"),
-            ("画中画", pip if pip_configured else "未配置（不叠加）"),
-            ("规格", "720×1280 · 9:16" + (" · 右上角画中画" if pip_configured else "")),
-            ("切换效果", "段间转场 · 背景标准档扰动"
-             + (" · 画中画标准档扰动" if pip_configured else "")),
-            ("贴纸", "本地优先，未配置则在线下载"),
-            ("原声", "直接使用爆款视频音轨，不变速、不变声"),
-            ("前贴", f"{config.INTRO_DIR} · 没有视频时跳过" if intro_dir else "未配置，跳过"),
-            ("爆款视频", f"{len(chosen)} 支 × 裂变 = {total_out} 支成片"),
-            ("输出目录", out_dir),
-        ]
-        for i, src in enumerate(chosen, 1):
-            lines.append((f"来源 {i}", f"{src.name} × {fission[str(src)]}"))
-        lines.insert(0, ("混剪 · 3/3", "确认以下数量后开始生成"))
-        if not _confirm(stdscr, lines,
-                        [("叠加画中画", "右上角画中画；关闭则不扫描不渲染", values[0])],
-                        values):
-            step = 4
-            continue
-        use_pip = values[0]
-        if use_pip:
-            if not pip_configured:
-                _flash(stdscr, "已勾选画中画但未配置 PYCUT_PIP_DIR；"
-                       "请先在网页配置画中画目录或取消勾选", "bad")
+        if values[0]:
+            errors = settings.problems(settings.effective(), keys=("PYCUT_PIP_DIR",))
+            if errors or not pips or not any(_collect_files(p) for p in pips):
+                _flash(stdscr, "画中画素材不可用，请添加目录或取消勾选：" + "；".join(errors), "bad")
                 return None
-            if not len(_collect_files(Path(pip))):
-                _flash(stdscr, f"画中画目录没有可用素材：{pip}", "bad")
-                return None
-
-        # Preserve the existing argv/CLI contract exactly.
-        argv_list: list[list[str]] = []
+        argv_list = []
         for src in chosen:
-            argv = [
-                "montage", "--source", str(src), "--clip-dir", clip,
-                "--out-dir", out_dir,
-                "--intro-dir", str(config.INTRO_DIR) if intro_dir else "",
-            ]
-            if use_pip:
-                argv.extend(["--dedup-dir", pip])
+            argv = ["montage", "--source", str(src),
+                    "--clip-dir", settings.encoded_directories(clips),
+                    "--out-dir", str(output),
+                    "--intro-dir", settings.encoded_directories(intros),
+                    "--fission", str(fission[str(src)])]
+            if values[0]:
+                argv.extend(["--dedup-dir", settings.encoded_directories(pips)])
             else:
                 argv.append("--no-pip")
-            argv.extend(["--fission", str(fission[str(src)])])
             argv_list.append(argv)
         return argv_list
-
 
 
 def _flash(stdscr, msg: str, color: str = "bad") -> None:

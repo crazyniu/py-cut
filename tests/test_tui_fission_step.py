@@ -2,7 +2,7 @@
 from pathlib import Path
 from unittest import mock
 import curses
-from pycut import cli, tui
+from pycut import cli, config, tui
 
 
 def screen(keys):
@@ -16,7 +16,7 @@ def test_full_keyboard_flow_requires_count_after_selection():
     source = Path('/素材/爆款.mp4')
     # 确认页多了一个「叠加画中画」开关：→ 移到确认按钮再 Enter。
     terminal = screen([ord(' '), 10, ord('5'), 10, curses.KEY_RIGHT, 10])
-    with mock.patch.object(tui, '_attr', return_value=0), mock.patch('pycut.core.montage_clips._collect_files', return_value=[source]), mock.patch.object(tui, 'list_videos_flat', return_value=[source]):
+    with mock.patch.object(config, 'CLIP_DIRS', [Path('/clips')]), mock.patch.object(config, 'PIP_DIRS', []), mock.patch.object(tui, '_attr', return_value=0), mock.patch('pycut.core.montage_clips._collect_files', return_value=[source]), mock.patch.object(tui, 'list_videos_recursive', return_value=[source]):
         commands = tui._wizard_montage(terminal, 100)
     assert cli.build_parser().parse_args(commands[0]).fission == 5
     rendered = '\n'.join(c.args[2] for c in terminal.addstr.call_args_list)
@@ -47,7 +47,7 @@ def test_final_review_back_keeps_counts_and_requires_reconfirmation():
     source=Path('/素材/a.mp4')
     selection=([source],{str(source):1})
     terminal=screen([ord('7'),10,10])
-    with mock.patch.object(tui,'_attr',return_value=0),mock.patch('pycut.core.montage_clips._collect_files',return_value=[source]),mock.patch.object(tui,'list_videos_flat',return_value=[source]),mock.patch.object(tui,'_multi_select',return_value=selection) as select,mock.patch.object(tui,'_confirm',side_effect=[False,True]):
+    with mock.patch.object(config, 'CLIP_DIRS', [Path('/clips')]), mock.patch.object(config, 'PIP_DIRS', []), mock.patch.object(tui,'_attr',return_value=0),mock.patch('pycut.core.montage_clips._collect_files',return_value=[source]),mock.patch.object(tui,'list_videos_recursive',return_value=[source]),mock.patch.object(tui,'_multi_select',return_value=selection) as select,mock.patch.object(tui,'_confirm',side_effect=[False,True]):
         commands=tui._wizard_montage(terminal,100)
     assert cli.build_parser().parse_args(commands[0]).fission==7
     assert select.call_count==1

@@ -102,33 +102,30 @@ def count_videos_recursive(root: Path, max_depth: int = DEFAULT_MAX_DEPTH) -> in
     return n
 
 
-def list_videos_recursive(root: Path, max_depth: int = DEFAULT_MAX_DEPTH,
+def list_videos_recursive(root, max_depth: int | None = DEFAULT_MAX_DEPTH,
                           *, raise_on_error: bool = False) -> list[Path]:
-    """递归列出目录下所有视频（按「父目录 + 文件名」排序，稳定），最多下探 max_depth 层。"""
-    root = Path(root).expanduser()
-    if not root.is_dir():
-        if raise_on_error:
-            raise NotADirectoryError(f"视频目录不存在或无法访问: {root}")
-        return []
-    files: list[Path] = []
-    base = str(root)
+    """合并多根目录，按真实路径去重；None 深度表示无限递归，不进入目录链接。"""
+    from ..settings import directories
+    files = {}
     def on_error(error):
         if raise_on_error:
             raise error
-    for dirpath, dirnames, filenames in os.walk(base, onerror=on_error):
-        dirnames[:] = [
-            d for d in dirnames if not _is_system_dir(Path(dirpath) / d)
-        ]
-        rel = os.path.relpath(dirpath, base)
-        depth = 0 if rel == "." else rel.count(os.sep) + 1
-        if depth > max_depth:
-            dirnames[:] = []
+    for folder in directories(root):
+        if not folder.is_dir():
+            if raise_on_error:
+                raise NotADirectoryError(f"素材目录不存在或无法访问: {folder}")
             continue
-        for fn in filenames:
-            if _is_video(fn):
-                files.append(Path(dirpath) / fn)
-    files.sort(key=lambda p: (str(p.parent), p.name.lower()))
-    return files
+        for dirpath, dirnames, filenames in os.walk(folder, onerror=on_error):
+            dirnames[:] = [d for d in dirnames if not _is_system_dir(Path(dirpath) / d)]
+            rel = Path(dirpath).relative_to(folder)
+            if max_depth is not None and len(rel.parts) > max_depth:
+                dirnames[:] = []
+                continue
+            for name in filenames:
+                path = Path(dirpath) / name
+                if _is_video(name):
+                    files.setdefault(path.resolve(), path)
+    return sorted(files.values(), key=lambda p: (str(p.parent), p.name.lower()))
 
 
 def list_videos_flat(root: Path) -> list[Path]:

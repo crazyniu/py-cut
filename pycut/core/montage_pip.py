@@ -67,27 +67,11 @@ class PipItem:
 # 素材池扫描
 # ---------------------------------------------------------------------------
 def _iter_mp4(root: Path):
-    """递归产出 mp4 路径。
-
-    用 `os.scandir` 而不是 `find -iname`——后者在 macOS 上会静默丢文件
-    （AGENTS.md 已记录）。目录不可读时跳过，不抛异常。
-    """
-    stack = [Path(root)]
-    while stack:
-        cur = stack.pop()
-        try:
-            with os.scandir(str(cur)) as it:
-                for entry in it:
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            stack.append(Path(entry.path))
-                        elif (entry.is_file(follow_symlinks=False)
-                              and entry.name.lower().endswith(".mp4")):
-                            yield Path(entry.path)
-                    except OSError:
-                        continue
-        except OSError:
-            continue
+    """合并多个根下的 MP4/MOV/M4V；目录访问失败交由调用方提示。"""
+    from .scan import list_videos_recursive
+    from .montage_clips import VIDEO_EXTS
+    yield from (p for p in list_videos_recursive(root, max_depth=None, raise_on_error=True)
+                if p.suffix.lower() in VIDEO_EXTS)
 
 
 def _probe_duration(path: Path) -> float:
@@ -132,7 +116,7 @@ def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
 
     探测失败 / 读不出时长的直接跳过，不抛异常。按路径排序保证可复现。
     """
-    base = Path(root) if root else Path(config.MONTAGE_DEDUP_DIR)
+    base = root if root is not None else config.PIP_DIRS
     lo = float(min_dur) if min_dur else float(config.MONTAGE_CLIP_MIN_DUR)
 
     items: list[PipItem] = []

@@ -12,7 +12,7 @@ from .utils import log, run_cmd
 
 def prepend(video: Path, folder: Path, *, seed: int, canvas: tuple[int, int],
             stickers: list[Path], crf: str, keep_audio: bool) -> dict | None:
-    files = list_videos_recursive(folder, raise_on_error=True)
+    files = list_videos_recursive(folder, max_depth=None, raise_on_error=True)
     if not files:
         log(f'[跳过] 前贴目录没有视频，直接输出正文：{folder}')
         return None

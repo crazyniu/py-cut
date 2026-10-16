@@ -76,7 +76,7 @@ class KeymapTests(unittest.TestCase):
                              for _, _, _, attr in screen.drawn))
 
     def test_main_menu_right_enters_and_left_is_not_exit(self):
-        screen = Screen([curses.KEY_LEFT, curses.KEY_DOWN, curses.KEY_RIGHT])
+        screen = Screen([curses.KEY_LEFT, curses.KEY_RIGHT])
         with mock.patch.object(tui.curses, "curs_set"), \
              mock.patch.object(tui, "_run_feature_wizard",
                                return_value=[["cover"]]) as wizard:

@@ -9,7 +9,7 @@ const navigation = template.split("const browseModal=")[1].split('</script>')[0]
 function setup() {
   const elements = new Map();
   function element() {
-    return {hidden: true, disabled: false, value: '', textContent: '', innerHTML: '',
+    return {hidden: true, disabled: false, isConnected: true, value: '', textContent: '', innerHTML: '',
       addEventListener() {}, appendChild() {}, focus() {}, dispatchEvent() {}};
   }
   const document = {
@@ -23,7 +23,7 @@ function setup() {
   const fields = {first: element(), second: element()};
   fields.first.value = '/original';
   fields.second.value = '/second-original';
-  const context = vm.createContext({document, form: {elements: fields}, labels: {}, token: 'test',
+  const context = vm.createContext({document, form: {elements: fields, addEventListener() {}}, labels: {}, token: 'test',
     Event: class {}, fetch: () => new Promise((resolve, reject) => pending.push({resolve, reject})),
   });
   vm.runInContext('const browseModal=' + navigation, context);
@@ -40,8 +40,9 @@ function setup() {
 (async () => {
   const t = setup();
   const {context: c} = t;
+  const button = () => ({isConnected: true, focus() {}, closest() { return null; }});
   // A previous valid selection must become invalid immediately when navigation starts.
-  c.openBrowse({focus() {}}, 'first');
+  c.openBrowse(button(), 'first');
   t.respond(0, '/original');
   await new Promise(resolve => setImmediate(resolve));
   const slow = c.browseEnter('/slow');
@@ -51,7 +52,7 @@ function setup() {
   assert.equal(t.fields.first.value, '/original');
 
   // Reopen for another field; the old response cannot select a directory for it.
-  c.openBrowse({focus() {}}, 'second');
+  c.openBrowse(button(), 'second');
   t.respond(2, '/中文 空格');
   await new Promise(resolve => setImmediate(resolve));
   t.respond(1, '/slow');
@@ -60,7 +61,7 @@ function setup() {
   c.closeBrowse(true);
   assert.equal(t.fields.second.value, '/中文 空格');
 
-  c.openBrowse({focus() {}}, 'first');
+  c.openBrowse(button(), 'first');
   const latest = c.browseEnter('/latest');
   t.respond(4, '/latest');
   await latest;
@@ -84,7 +85,7 @@ function setup() {
   c.closeBrowse(true);
   assert.equal(t.fields.first.value, '/original');
 
-  c.openBrowse({focus() {}}, 'first');
+  c.openBrowse(button(), 'first');
   c.closeBrowse(false);
   t.respond(8, '/cancelled');
   await new Promise(resolve => setImmediate(resolve));

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import tempfile
 from unittest import mock
 
-from pycut import cli, config, tui
+from pycut import cli, config, settings, tui
 from pycut.commands import cover_cmd
 from pycut.core import dedup, output_paths, slice_pipeline, subtitle
 
@@ -62,13 +62,13 @@ def test_cover_publishes_copy_and_force_starts_from_source():
 
 
 def test_montage_uses_configured_directories_and_output():
-    source = Path('/data/爆款/demo.mp4')
+    source = Path('/data/爆款/a/demo.mp4')
     selection = ([source], {str(source): 5})
-    with mock.patch.dict('os.environ', {'PYCUT_PIP_DIR': '/data/画中画'}), mock.patch.object(config, 'REFERENCE_DIR', Path('/data/爆款')), mock.patch.object(config, 'MONTAGE_CLIP_DIR', Path('/data/切片')), mock.patch.object(config, 'MONTAGE_DEDUP_DIR', Path('/data/画中画')), mock.patch.object(config, 'MONTAGE_OUT', Path('/data/混剪/1011')), mock.patch.object(tui, '_pick_dir') as pick, mock.patch.object(tui, 'list_videos_flat', return_value=[source]), mock.patch('pycut.core.montage_clips._collect_files', return_value=[source] * 3), mock.patch.object(tui, '_multi_select', return_value=selection), mock.patch.object(tui, '_set_fission_counts', return_value=True), mock.patch.object(tui, '_confirm', return_value=True):
+    with mock.patch.dict('os.environ', {'PYCUT_PIP_DIR': '/data/画中画', 'PYCUT_OUTPUT_DIR': '/data'}), mock.patch.object(config, 'REFERENCE_DIR', Path('/data/爆款')), mock.patch.object(config, 'CLIP_DIRS', [Path('/data/切片')]), mock.patch.object(config, 'PIP_DIRS', [Path('/data/画中画')]), mock.patch.object(config, 'MONTAGE_OUT', Path('/data/混剪/1011')), mock.patch.object(settings, 'problems', return_value=[]), mock.patch.object(tui, '_pick_dir') as pick, mock.patch.object(tui, 'list_videos_recursive', return_value=[source]), mock.patch('pycut.core.montage_clips._collect_files', return_value=[source] * 3), mock.patch.object(tui, '_multi_select', return_value=selection), mock.patch.object(tui, '_set_fission_counts', return_value=True), mock.patch.object(tui, '_confirm', return_value=True):
         jobs = tui._wizard_montage(None, 100)
     args = cli.build_parser().parse_args(jobs[0])
-    assert args.clip_dir == '/data/切片'
-    assert args.dedup_dir == '/data/画中画'
+    assert settings.directories(args.clip_dir) == [Path('/data/切片')]
+    assert settings.directories(args.dedup_dir) == [Path('/data/画中画')]
     assert args.out_dir == '/data/混剪/1011'
     assert args.fission == 5
     pick.assert_not_called()
@@ -82,16 +82,9 @@ def test_slice_output_prefers_pip_and_keeps_explicit_override():
         assert output_paths.slice_output_root(Path('/data/爆款/抖音')) == Path('/data/爆款/切片')
 
 
-def test_slice_tui_confirmation_and_dedup_use_pip_root_without_timestamp():
-    files=[Path('/source/demo.mp4')]
-    target=Path('/画中画 切片')
-    def confirm(screen,lines,toggles,values):
-        assert ('画中画切片输出',str(target)) in lines
-        values[:]=[False,True]
-        return True
-    with mock.patch.dict('os.environ',{'PYCUT_PIP_DIR':str(target)}),mock.patch.object(config,'SRC_DIR',Path('/source')),mock.patch.object(config,'CLIP_DIR',Path('/background')),mock.patch.object(config,'PIP_DIR',target),mock.patch('pycut.core.scan.list_videos_recursive',return_value=files),mock.patch.object(tui,'_confirm',side_effect=confirm):
-        jobs=tui._wizard_slice(None,100)
-        again=tui._wizard_slice(None,100)
-    assert jobs==again
-    assert cli.build_parser().parse_args(jobs[0]).out_dir==str(target)
-    assert cli.build_parser().parse_args(jobs[1]).src_dir==str(target)
+def test_public_slice_entry_is_removed_but_internal_resume_is_preserved():
+    import pytest
+    assert not hasattr(tui, '_wizard_slice')
+    assert [key for key, _, _ in tui.FEATURES] == ['cover', 'dedup', 'montage']
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(['slice'])

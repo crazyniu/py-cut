@@ -87,7 +87,7 @@ def test_missing_configuration_shows_address_without_browser():
     terminal=Screen((14,60))
     with mock.patch.object(web_config.webbrowser,'open') as browser,mock.patch.object(config,'refresh'),mock.patch.object(settings,'effective',return_value={}),mock.patch.object(tui,'_attr',return_value=0):
         try:
-            assert tui._run_feature_wizard(terminal,'slice',60) is None
+            assert tui._run_feature_wizard(terminal,'cover',60) is None
             assert terminal.drawn[2,2].startswith('http://127.0.0.1:')
             browser.assert_not_called()
         finally: web_config.stop()

@@ -72,7 +72,10 @@ class SceneSafetyTests(unittest.TestCase):
 
     def test_one_failed_video_has_nonzero_final_code_and_does_not_abort_batch(self):
         paths = [Path("/tmp/a.mp4"), Path("/tmp/b.mp4")]
-        args = cli.build_parser().parse_args(["slice", "--no-sub"])
+        import argparse
+        parser = argparse.ArgumentParser()
+        slice_cmd.register(parser.add_subparsers(dest='command'))
+        args = parser.parse_args(["slice", "--no-sub"])
         result = SimpleNamespace(segs=1, face=1, noface=0, failed=0,
                                  bytes_out=1000, detect_s=0.0, enc_s=0.0,
                                  sub_s=0.0, sub_covered=0, sub_fail=0, sub_review=0,

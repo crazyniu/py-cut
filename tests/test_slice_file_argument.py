@@ -25,7 +25,10 @@ class SliceFileArgumentTests(unittest.TestCase):
 
     @staticmethod
     def _args(*flags):
-        return cli.build_parser().parse_args(["slice", *flags])
+        import argparse
+        parser = argparse.ArgumentParser()
+        slice_cmd.register(parser.add_subparsers(dest='command'))
+        return parser.parse_args(["slice", *flags])
 
     def test_absolute_file_outside_missing_default_source(self):
         chosen = self._file("elsewhere/授权视频.MP4")

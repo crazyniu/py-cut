@@ -51,6 +51,10 @@ class NavigationTests(unittest.TestCase):
         patch = mock.patch.object(tui, "_attr", return_value=0)
         patch.start()
         self.addCleanup(patch.stop)
+        for name, value in [('PIP_DIRS', []), ('CLIP_DIRS', [Path('/tmp/clips')])]:
+            patcher = mock.patch.object(config, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_home_has_brand_and_local_settings_address(self):
         screen = Screen([ord("q")])
@@ -72,7 +76,7 @@ class NavigationTests(unittest.TestCase):
                                  for _, _, text in screen.printed))
 
     def test_home_back_keys_do_not_exit_or_run_jobs(self):
-        screen = Screen([27, curses.KEY_LEFT, curses.KEY_BACKSPACE, ord("2")])
+        screen = Screen([27, curses.KEY_LEFT, curses.KEY_BACKSPACE, ord("1")])
         with mock.patch.object(tui.curses, "curs_set"), \
              mock.patch.object(tui, "_run_feature_wizard",
                                return_value=[["cover"]]) as dispatch:
@@ -118,7 +122,7 @@ class NavigationTests(unittest.TestCase):
 
     def test_review_escape_returns_to_main_without_directory_picker(self):
         with mock.patch.object(tui, "_pick_dir") as picker, \
-             mock.patch("pycut.core.scan.list_videos_recursive", return_value=[Path("/tmp/video.mp4")]), \
+             mock.patch.object(tui, "list_videos_recursive", return_value=[Path("/tmp/video.mp4")]), \
              mock.patch.object(tui, "_confirm", return_value=False):
             self.assertIsNone(tui._wizard_cover(Screen([]), 100))
         picker.assert_not_called()
@@ -126,7 +130,7 @@ class NavigationTests(unittest.TestCase):
     def test_review_esc_then_picker_esc_goes_to_main(self):
         with mock.patch.object(tui, "_pick_dir",
                                side_effect=["/tmp/one", None]), \
-             mock.patch("pycut.core.scan.list_videos_recursive",
+             mock.patch.object(tui, "list_videos_recursive",
                         return_value=[Path("/tmp/video.mp4")]), \
              mock.patch.object(tui, "_confirm", return_value=False) as confirm:
             self.assertIsNone(tui._wizard_cover(Screen([]), 100))
@@ -134,7 +138,7 @@ class NavigationTests(unittest.TestCase):
 
     def test_empty_configured_directory_does_not_start_processing(self):
         with mock.patch.object(tui, "_pick_dir") as picker, \
-             mock.patch.object(tui, "count_videos_recursive", return_value=0), \
+             mock.patch.object(tui, "list_videos_recursive", return_value=[]), \
              mock.patch.object(tui, "_flash") as flash, \
              mock.patch.object(tui, "_confirm") as confirm:
             self.assertIsNone(tui._wizard_dedup(Screen([]), 100))
@@ -148,7 +152,7 @@ class NavigationTests(unittest.TestCase):
         with mock.patch.object(tui, "_pick_dir",
                                side_effect=["/tmp/sources", "/tmp/clips", "/tmp/pip"]), \
              mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 2), \
-             mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
+             mock.patch.object(tui, "list_videos_recursive", return_value=[video]), \
              mock.patch.object(tui, "_multi_select",
                                return_value=selection) as multiselect, \
              mock.patch.object(tui, "_count_sticker_images", return_value=1), \
@@ -156,7 +160,7 @@ class NavigationTests(unittest.TestCase):
              mock.patch.object(tui, "_confirm", side_effect=[False, True]):
             commands = tui._wizard_montage(Screen([]), 100)
         self.assertEqual(len(commands), 1)
-        self.assertEqual(commands[0][-2:], ["--fission", "12"])
+        self.assertEqual(commands[0][commands[0].index("--fission") + 1], "12")
         self.assertEqual(multiselect.call_count, 1)
         self.assertIsNone(multiselect.call_args_list[0].kwargs["initial"])
         self.assertEqual(selection[1][str(video)], 12)
@@ -164,18 +168,19 @@ class NavigationTests(unittest.TestCase):
     def test_montage_reads_configured_folders_without_picker(self):
         video = Path("/tmp/source/test.mp4")
         with mock.patch.dict("os.environ", {"PYCUT_PIP_DIR": "/tmp/pip"}), \
-             mock.patch.object(config, "MONTAGE_CLIP_DIR", Path("/tmp/clips")), \
-             mock.patch.object(config, "MONTAGE_DEDUP_DIR", Path("/tmp/pip")), \
+             mock.patch("pycut.settings.problems", return_value=[]), \
+             mock.patch.object(config, "CLIP_DIRS", [Path("/tmp/clips")]), \
+             mock.patch.object(config, "PIP_DIRS", [Path("/tmp/pip")]), \
              mock.patch.object(tui, "_pick_dir") as picker, \
              mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 1), \
-             mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
+             mock.patch.object(tui, "list_videos_recursive", return_value=[video]), \
              mock.patch.object(tui, "_multi_select", return_value=([video], {str(video):3})), \
              mock.patch.object(tui, "_set_fission_counts", return_value=True), \
              mock.patch.object(tui, "_confirm", return_value=True):
             commands = tui._wizard_montage(Screen([]), 100)
         picker.assert_not_called()
-        self.assertIn("/tmp/clips", commands[0])
-        self.assertIn("/tmp/pip", commands[0])
+        self.assertIn('"/tmp/clips"', commands[0][commands[0].index("--clip-dir") + 1])
+        self.assertIn('"/tmp/pip"', commands[0][commands[0].index("--dedup-dir") + 1])
         self.assertIn("--intro-dir", commands[0])
 
     def test_multi_select_preserves_existing_selection_when_backtracking(self):
