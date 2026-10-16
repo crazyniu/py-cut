@@ -646,7 +646,8 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
         multiplier = speed if speed > 1.0 else 1.0
         wanted = float(d["take"]) * multiplier
         available = max(0.0, float(it.duration) - float(d.get("offset") or 0.0))
-        src_take = min(wanted, available)
+        # FFmpeg 的 -t 保留三位小数；向下量化以免格式化进位超出源末尾。
+        src_take = math.floor(min(wanted, available) * 1000 + 1e-7) / 1000
         if src_take <= 0:
             raise RuntimeError(f"分段 {i + 1}/{len(items)} 源视频没有剩余时长: {it.path}")
         if src_take < wanted - EPS:
@@ -655,7 +656,7 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
                             math.floor(src_take / multiplier * 1000) / 1000)
             if d["take"] <= 0:
                 raise RuntimeError(f"分段 {i + 1}/{len(items)} 源视频不足一毫秒: {it.path}")
-            src_take = d["take"] * multiplier
+            src_take = math.floor(d["take"] * multiplier * 1000 + 1e-7) / 1000
 
         planned_seconds += float(d["take"])
         cumulative_frames = round(planned_seconds * frame_rate)
