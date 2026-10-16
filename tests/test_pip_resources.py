@@ -22,7 +22,7 @@ def test_all_decoders_and_filter_encoder_threads_are_bounded(tmp_path):
     out=tmp_path/'out.mp4'
     def encode(command, timeout):
         Path(command[-1]).write_bytes(b'video'*500)
-        return 0,'',''
+        return 0,'','pycut.complete=1\n'
     with mock.patch.object(pip,'probe_video',return_value=SimpleNamespace(width=720,height=1280,duration=6)),mock.patch.object(pip,'run_cmd',side_effect=encode):
         command=pip.build_pip_cmd(tmp_path/'base.mp4',timeline(tmp_path/'clip.mp4'),out)
     inputs=[i for i,arg in enumerate(command) if arg=='-i']

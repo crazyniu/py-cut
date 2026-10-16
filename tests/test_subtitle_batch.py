@@ -33,7 +33,7 @@ def test_incomplete_or_mismatched_batch_cannot_mark_clean(tmp_path,replies):
     client=mock.Mock(enabled=True)
     client.ask_vision.return_value={'frames':replies}
     frame=np.zeros((8,8,3),np.uint8)
-    with mock.patch.object(subtitle,'probe_scalar',side_effect=lambda _,k:values[k]),mock.patch.object(subtitle,'_grab_frame',return_value=True),mock.patch.object(subtitle.cv2,'imread',return_value=frame):
+    with mock.patch.object(subtitle,'probe_scalar',side_effect=lambda _,k:values[k]),mock.patch.object(subtitle,'grab_frames',side_effect=lambda clip,times,folder,**kw:[folder/f'f{i}.jpg' for i in range(len(times))]),mock.patch.object(subtitle.cv2,'imread',return_value=frame):
         clip=tmp_path/'test.mp4'
         assert subtitle.process_clip(client,clip)=='review'
         assert not subtitle._marker(clip).exists()

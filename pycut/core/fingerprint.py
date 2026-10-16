@@ -48,7 +48,7 @@ def phash(frame_bgr: np.ndarray) -> int:
     """单帧 BGR -> 64 位感知哈希（整数）。
 
     做法：灰度 -> 缩放到 32x32 -> 二维 DCT -> 取左上 8x8 低频系数 ->
-    去掉 DC 分量（`[0,0]` 只反映整体亮度，留着会让哈希对亮度调整过于敏感）->
+    去掉 DC 分量（`[0,0]` 只反映整体亮度，留着会让哈希对整体亮度过于敏感）->
     与其余 63 个系数的中位数比较得 64 个比特 -> 低位在前打包成 int。
 
     打包时 DC 位恒为 0，所以哈希整体亮度不变；有效信息 63 bit。
@@ -192,11 +192,12 @@ def _sample_without_count(cap, path: Path | str, n: int) -> list[np.ndarray]:
     kept: list[np.ndarray] = []
     stride = 1          # 当前保留步长（每隔 stride-1 帧丢一帧）
     seen = 0            # 已解码帧数
-    while True:
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            break
+    while cap.grab():
+        # 未知帧数的退化路径也只取回被采样的帧；抽稀索引和内存预算不变。
         if (seen % stride) == 0:
+            ok, frame = cap.retrieve()
+            if not ok or frame is None:
+                break
             kept.append(frame)
             if len(kept) >= 2 * n:
                 kept = kept[::2]

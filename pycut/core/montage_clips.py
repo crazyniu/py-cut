@@ -143,7 +143,7 @@ def _enc_args(out: Path, fps: int | None, crf: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # 步骤B-1：扫描片段库
 # ---------------------------------------------------------------------------
-def _probe_one(path: Path) -> ClipItem | None:
+def _probe_one(path: Path, *, details: dict | None = None) -> ClipItem | None:
     """ffprobe 单文件，**一次调用**同时取视频流尺寸/时长与「有没有音轨」。
 
     库里 509 个文件，ffprobe 串行要几分钟，能少一次调用就少一次。
@@ -151,7 +151,7 @@ def _probe_one(path: Path) -> ClipItem | None:
     """
     args = [
         FFPROBE, "-v", "error",
-        "-show_entries", "stream=codec_type,width,height,duration",
+        "-show_entries", "stream=codec_type,width,height,duration,avg_frame_rate",
         "-show_entries", "format=duration",
         "-of", "json", str(path),
     ]
@@ -189,6 +189,8 @@ def _probe_one(path: Path) -> ClipItem | None:
         return None
 
     has_audio = any(s.get("codec_type") == "audio" for s in streams)
+    if details is not None:
+        details.update(vs)  # 原始视频流字段，供参考视频保留严格的视频时长口径。
     return ClipItem(path=Path(path), duration=dur, width=width, height=height,
                     has_audio=has_audio)
 
@@ -513,6 +515,22 @@ def pick_clips(items: list[ClipItem], slots: list[tuple[float, float]],
             cursor = (hit_pos + 1) % n
 
     taken = sum(d["take"] for d in out)
+    # 已选镜头短于时间槽时，使用尚未选过的素材填补，而不是留空或克隆末帧。
+    # 没有缺口的正常路径完全不改变随机数序列或选片结果。
+    for idx in order:
+        need = target - taken
+        if need <= EPS:
+            break
+        if used[idx] or items[idx].duration < lo - EPS:
+            continue
+        take = min(need, hi, float(items[idx].duration))
+        offset = rng.uniform(0.0, max(0.0, items[idx].duration - take))
+        take = round(take, 6)
+        offset = min(round(offset, 6), max(0.0, items[idx].duration - take))
+        out.append({"item": items[idx], "take": take, "offset": offset,
+                    "slot_index": len(slots), "reused": False, "short": False})
+        used[idx] = True
+        taken += take
     shortfall = max(0.0, target - taken)
     for d in out:
         d["target_dur"] = round(target, 3)
@@ -562,12 +580,14 @@ def _seg_cmd(src: Path, offset: float, take: float, out: Path,
     """
     off = max(0.0, float(offset))
     coarse = max(0.0, off - float(config.COARSE_BACKOFF))
-    fine = off - coarse
+    factor = float(speed) if abs(speed - 1.0) > 1e-3 else 1.0
+    fine = (off - coarse) / factor
     chain = fit_filter(canvas, fps)
     if dedup_seed is not None:
         from .dedup import montage_variation
         _params, variation = montage_variation(*(canvas or config.MONTAGE_CANVAS), dedup_seed)
-        chain += "," + variation
+        # 几何缩放会修改 SAR；标准片段必须在扰动后恢复方形像素。
+        chain += "," + variation + ",setsar=1"
     # 速度/镜像放在 scale 之前：镜像后缩放与先缩放后镜像等价，但先变速能少处理
     # 一些帧（setpts 改时间轴，越靠前生效越早丢帧）。
     pre = []
@@ -611,8 +631,8 @@ def _seg_cmd(src: Path, offset: float, take: float, out: Path,
     return [
         FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
         *inputs,
-        "-ss", f"{fine:.3f}",
-        "-t", f"{max(0.0, float(take)):.3f}",
+        "-ss", f"{fine:.6f}",
+        "-t", f"{max(0.0, float(take)):.6f}",
         *output_filter,
         *([] if frames is None else ["-frames:v", str(frames)]),
         *_enc_args(out, fps, crf),
@@ -643,20 +663,16 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
             continue
         seg = segdir / f"{i:04d}.mp4"
         speed = float(d.get("speed") or 1.0)
-        multiplier = speed if speed > 1.0 else 1.0
+        multiplier = speed if abs(speed - 1.0) > 1e-3 else 1.0
         wanted = float(d["take"]) * multiplier
         available = max(0.0, float(it.duration) - float(d.get("offset") or 0.0))
-        # FFmpeg 的 -t 保留三位小数；向下量化以免格式化进位超出源末尾。
-        src_take = math.floor(min(wanted, available) * 1000 + 1e-7) / 1000
+        # 只比较真实可用长度，不把命令行小数格式化误认为素材不足。
+        # take 是输出时间预算；浮点/毫秒舍入不能逐段侵蚀它。
+        src_take = min(wanted, available)
         if src_take <= 0:
             raise RuntimeError(f"分段 {i + 1}/{len(items)} 源视频没有剩余时长: {it.path}")
-        if src_take < wanted - EPS:
-            # 向下取毫秒，避免 float/seek 进位再次越过源末尾。
-            d["take"] = min(float(d["take"]),
-                            math.floor(src_take / multiplier * 1000) / 1000)
-            if d["take"] <= 0:
-                raise RuntimeError(f"分段 {i + 1}/{len(items)} 源视频不足一毫秒: {it.path}")
-            src_take = math.floor(d["take"] * multiplier * 1000 + 1e-7) / 1000
+        if available < wanted - EPS:
+            d["take"] = available / multiplier
 
         planned_seconds += float(d["take"])
         cumulative_frames = round(planned_seconds * frame_rate)

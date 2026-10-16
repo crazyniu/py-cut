@@ -1,51 +1,94 @@
-"""前贴只在最后拼到完整正文之前；兼容时直接复制两段视频流。"""
+"""前贴最后拼到完整正文之前；只适配前贴，正文视频流始终复制。"""
 from __future__ import annotations
 
 import json
-import math
 import os
 import random
 import tempfile
+from fractions import Fraction
 from pathlib import Path
 
 from .. import config
 from .dedup_presets import derive_seed
-from .montage_clips import _probe_one, concat_clips
+from .montage_clips import _probe_one, concat_clips, fit_filter
 from .scan import list_videos_recursive
 from .utils import log, run_cmd
 
 
-def _video_signature(path: Path) -> tuple | None:
-    """仅在 H.264 配置、时间基和 SPS/PPS 都一致时尝试无损流复制。"""
-    fields = (
-        "codec_name", "profile", "level", "width", "height", "pix_fmt",
-        "sample_aspect_ratio", "r_frame_rate", "time_base", "extradata_hash",
-    )
+def _video_signature(path: Path) -> dict | None:
+    """读流规格、帧数和音轨；H.264 的 SPS/PPS 不要求字节相同。"""
     cmd = [
-        config.FFPROBE, "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=" + ",".join(fields),
-        "-show_data_hash", "sha256", "-of", "json", str(path),
+        config.FFPROBE, "-v", "error", "-show_entries",
+        "stream=codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,"
+        "r_frame_rate,time_base,duration,nb_frames", "-of", "json", str(path),
     ]
     rc, output, _ = run_cmd(cmd, timeout=60)
     if rc:
         return None
     try:
-        stream = json.loads(output)["streams"][0]
-        if stream.get("codec_name") != "h264" or any(key not in stream for key in fields):
+        streams = json.loads(output)["streams"]
+        video = next(s for s in streams if s.get("codec_type") == "video")
+        result = dict(video)
+        result["duration"] = float(video["duration"])
+        result["nb_frames"] = int(video["nb_frames"])
+        result["has_audio"] = any(s.get("codec_type") == "audio" for s in streams)
+        if result["duration"] <= 0 or result["nb_frames"] <= 0:
             return None
-        return tuple(stream[key] for key in fields)
-    except (ValueError, TypeError, KeyError, IndexError):
+        return result
+    except (ValueError, TypeError, KeyError, StopIteration):
         return None
+
+
+def _compatible(left: dict, right: dict) -> bool:
+    """concat 自动转 Annex B 携带各段参数集，profile/level 差异无需重编码。"""
+    fields = ("codec_name", "width", "height", "pix_fmt", "sample_aspect_ratio",
+              "r_frame_rate", "time_base")
+    return (left.get("codec_name") == "h264"
+            and all(key in left and left[key] == right.get(key) for key in fields))
+
+
+def _adapt_intro(intro: Path, body_info: dict, output: Path, crf: str) -> Path:
+    """仅重封装时间基或适配前贴，绝不把完成的正文传入视频编码器。"""
+    info = _video_signature(intro)
+    if info is None:
+        raise RuntimeError("无法读取已处理前贴的流参数")
+    if _compatible(info, body_info):
+        return intro
+    try:
+        time_base = Fraction(body_info["time_base"])
+        fps = Fraction(body_info["r_frame_rate"])
+        if (body_info.get("codec_name") != "h264" or time_base.numerator != 1
+                or fps != config.MONTAGE_FPS or body_info.get("pix_fmt") != "yuv420p"):
+            raise ValueError("正文不是标准 H.264/yuv420p/30fps")
+        width, height = int(body_info["width"]), int(body_info["height"])
+    except (KeyError, ValueError, TypeError, ZeroDivisionError) as exc:
+        raise RuntimeError("正文流规格异常，拒绝用重新编码改变已完成正文") from exc
+    spatial = ("codec_name", "width", "height", "pix_fmt", "sample_aspect_ratio", "r_frame_rate")
+    copy = all(info.get(k) == body_info.get(k) for k in spatial)
+    cmd = [config.FFMPEG, "-y", "-loglevel", "error", "-nostdin", "-i", str(intro),
+           "-map", "0:v:0", "-an"]
+    if copy:
+        cmd += ["-c:v", "copy"]
+    else:
+        cmd += ["-vf", fit_filter((width, height), config.MONTAGE_FPS),
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", crf,
+                "-pix_fmt", "yuv420p", "-fps_mode", "cfr"]
+    cmd += ["-video_track_timescale", str(time_base.denominator),
+            "-movflags", "+faststart", str(output)]
+    rc, _, error = run_cmd(cmd, timeout=3600)
+    adapted = _video_signature(output) if not rc else None
+    if (adapted is None or not _compatible(adapted, body_info)
+            or abs(adapted["duration"] - info["duration"]) > 1 / config.MONTAGE_FPS):
+        raise RuntimeError(f"前贴流规格适配失败：{error.strip()[-500:]}")
+    return output
 
 
 def _video_copy_cmd(concat_file: Path, body: Path, intro_source: Path,
                     has_intro_audio: bool, duration: float,
-                    keep_audio: bool, output: Path) -> list[str]:
-    """视频只读一次后 stream-copy；若需原声，独立合成 AAC 音轨。"""
-    cmd = [
-        config.FFMPEG, "-y", "-loglevel", "error", "-nostdin",
-        "-f", "concat", "-safe", "0", "-i", str(concat_file),
-    ]
+                    keep_audio: bool, output: Path, *, body_duration: float) -> list[str]:
+    """视频 stream-copy；音轨沿既有来源独立拼接，短原声不裁短画面。"""
+    cmd = [config.FFMPEG, "-y", "-loglevel", "error", "-nostdin",
+           "-f", "concat", "-safe", "0", "-auto_convert", "1", "-i", str(concat_file)]
     if keep_audio:
         cmd.extend(["-i", str(body)])
         if has_intro_audio:
@@ -54,52 +97,16 @@ def _video_copy_cmd(concat_file: Path, body: Path, intro_source: Path,
             cmd.extend(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"])
         graph = (
             f"[2:a:0]aresample=48000,aformat=channel_layouts=stereo,"
-            f"apad,atrim=duration={duration:.6f},asetpts=PTS-STARTPTS[a0];"
+            f"asetpts=PTS-STARTPTS,apad,atrim=duration={duration:.6f}[a0];"
             f"[1:a:0]aresample=48000,aformat=channel_layouts=stereo,"
-            f"asetpts=PTS-STARTPTS[a1];"
+            f"asetpts=PTS-STARTPTS,atrim=duration={body_duration:.6f}[a1];"
             f"[a0][a1]concat=n=2:v=0:a=1[a]"
         )
-        cmd.extend([
-            "-filter_complex", graph, "-map", "0:v:0", "-map", "[a]",
-            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-        ])
+        cmd += ["-filter_complex", graph, "-map", "0:v:0", "-map", "[a]",
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "128k"]
     else:
-        cmd.extend(["-map", "0:v:0", "-an", "-c:v", "copy"])
+        cmd += ["-map", "0:v:0", "-an", "-c:v", "copy"]
     return [*cmd, "-movflags", "+faststart", str(output)]
-
-
-def _legacy_concat_cmd(intro: Path, body: Path, source: Path,
-                       has_intro_audio: bool, duration: float,
-                       keep_audio: bool, crf: str, output: Path) -> list[str]:
-    """规格不兼容时保留原来的一次完整视频编码，且从不修改原正文。"""
-    cmd = [
-        config.FFMPEG, "-y", "-loglevel", "error", "-nostdin",
-        "-i", str(intro), "-i", str(body), "-i", str(source),
-        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
-    ]
-    graph = ("[0:v]setsar=1,setpts=PTS-STARTPTS[v0];"
-             "[1:v]setsar=1,setpts=PTS-STARTPTS[v1];")
-    if keep_audio:
-        first = "2:a:0" if has_intro_audio else "3:a:0"
-        graph += (
-            f"[{first}]aresample=48000,aformat=channel_layouts=stereo,"
-            f"apad,atrim=duration={duration},asetpts=PTS-STARTPTS[a0];"
-            "[1:a:0]aresample=48000,aformat=channel_layouts=stereo,"
-            "asetpts=PTS-STARTPTS[a1];"
-            "[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"
-        )
-    else:
-        graph += "[v0][v1]concat=n=2:v=1:a=0[v]"
-    cmd.extend(["-filter_complex", graph, "-map", "[v]"])
-    if keep_audio:
-        cmd.extend(["-map", "[a]", "-c:a", "aac", "-b:a", "128k"])
-    else:
-        cmd.append("-an")
-    return [
-        *cmd, "-c:v", "libx264", "-preset", "veryfast", "-crf", crf,
-        "-pix_fmt", "yuv420p", "-r", str(config.MONTAGE_FPS),
-        "-movflags", "+faststart", str(output),
-    ]
 
 
 def prepend(video: Path, folder: Path, *, seed: int, canvas: tuple[int, int],
@@ -113,20 +120,14 @@ def prepend(video: Path, folder: Path, *, seed: int, canvas: tuple[int, int],
     item = _probe_one(source)
     if item is None or item.duration <= 0:
         raise RuntimeError(f"前贴无法探测：{source.name}")
-
-    # 原文件时长不是整帧时向下对齐；不可为了凑帧越过素材终点或克隆末帧。
-    duration = math.floor(item.duration * config.MONTAGE_FPS) / config.MONTAGE_FPS
-    if duration <= 0:
-        raise RuntimeError(f"前贴没有完整的视频帧：{source.name}")
-    segment = {
-        "item": item, "offset": 0.0, "take": duration,
-        "dedup_seed": derive_seed(seed, "intro", source.name),
-    }
+    body_info = _video_signature(video)
+    if body_info is None or (keep_audio and not body_info["has_audio"]):
+        raise RuntimeError("完整正文的视频流或原声音轨不可用")
+    # 完整读取前贴；输出帧数由已有 CFR 预算量化，不再 floor 丢掉边界末帧。
+    segment = {"item": item, "offset": 0.0, "take": item.duration,
+               "dedup_seed": derive_seed(seed, "intro", source.name)}
     if stickers:
         segment["sticker"] = str(rng.choice(stickers))
-
-    from .dedup import _video_duration
-
     with tempfile.TemporaryDirectory(prefix="intro_", dir=video.parent) as td:
         folder_tmp = Path(td)
         intro = folder_tmp / "intro.mp4"
@@ -134,52 +135,33 @@ def prepend(video: Path, folder: Path, *, seed: int, canvas: tuple[int, int],
         if not concat_clips([segment], intro, canvas=canvas,
                             fps=config.MONTAGE_FPS, crf=crf)["ok"]:
             raise RuntimeError("前贴去重/贴纸处理失败")
-        # 用实际完成编码的视频流时长计算拼接，不用源文件音轨或容器的总时长。
-        duration = _video_duration(intro)
-        body_duration = _video_duration(video)
-        if duration <= 0 or body_duration <= 0:
-            raise RuntimeError("前贴或正文没有有效视频时长")
-        expected = duration + body_duration
-        tolerance = 2 / config.MONTAGE_FPS
-
-        signature = _video_signature(intro)
-        if signature is not None and signature == _video_signature(video):
-            concat_list = folder_tmp / "concat.txt"
-            paths = []
-            for part in (intro, video):
-                escaped = str(part.resolve()).replace("'", "'\\''")
-                paths.append(f"file '{escaped}'")
-            concat_list.write_text("\n".join(paths) + "\n", encoding="utf-8")
-            cmd = _video_copy_cmd(concat_list, video, source, item.has_audio,
-                                  duration, keep_audio, combined)
-            rc, _, error = run_cmd(cmd, timeout=3600)
-            if rc == 0 and combined.is_file() and combined.stat().st_size >= 1024:
-                actual = _video_duration(combined)
-                if abs(actual - expected) <= tolerance:
-                    os.replace(combined, video)
-                    log("  [前贴] 兼容 H.264 无损拼接，正文视频流未重新编码")
-                    return {
-                        "source": str(source), "duration": duration,
-                        "dedup_seed": segment["dedup_seed"],
-                        "sticker": segment.get("sticker"),
-                        "sticker_applied": segment.get("sticker_applied", False),
-                    }
-            log(f"  [前贴] 流复制不可用，回退兼容编码：{error.strip()[-240:] if error else '时长/产物不匹配'}")
-            combined.unlink(missing_ok=True)
-
-        cmd = _legacy_concat_cmd(intro, video, source, item.has_audio,
-                                 duration, keep_audio, crf, combined)
+        intro = _adapt_intro(intro, body_info, folder_tmp / "adapted.mp4", crf)
+        intro_info = _video_signature(intro)
+        if intro_info is None:
+            raise RuntimeError("前贴视频流不可用")
+        duration = intro_info["duration"]
+        expected = duration + body_info["duration"]
+        concat_list = folder_tmp / "concat.txt"
+        paths = []
+        for part in (intro, video):
+            raw = str(part.resolve())
+            if "\n" in raw or "\r" in raw:
+                raise ValueError("拼接素材路径不能包含换行")
+            escaped = raw.replace("'", "'\\''")
+            paths.append(f"file '{escaped}'")
+        concat_list.write_text("\n".join(paths) + "\n", encoding="utf-8")
+        cmd = _video_copy_cmd(concat_list, video, source, item.has_audio,
+                              duration, keep_audio, combined,
+                              body_duration=body_info["duration"])
         rc, _, error = run_cmd(cmd, timeout=3600)
-        if rc or not combined.is_file() or combined.stat().st_size < 1024:
-            raise RuntimeError(f"前贴与正文拼接失败: {error.strip()[-500:]}")
-        actual = _video_duration(combined)
-        if actual <= 0 or abs(actual - expected) > tolerance:
-            raise RuntimeError("前贴拼接后时长异常")
+        actual = _video_signature(combined) if not rc else None
+        if (actual is None or not combined.is_file() or combined.stat().st_size < 1024
+                or abs(actual["duration"] - expected) > 2 / config.MONTAGE_FPS
+                or actual["nb_frames"] != intro_info["nb_frames"] + body_info["nb_frames"]
+                or actual["has_audio"] != keep_audio):
+            raise RuntimeError(f"前贴拼接流/帧数/时长校验失败，正文保持不变：{error.strip()[-500:]}")
         os.replace(combined, video)
-
-    return {
-        "source": str(source), "duration": duration,
-        "dedup_seed": segment["dedup_seed"],
-        "sticker": segment.get("sticker"),
-        "sticker_applied": segment.get("sticker_applied", False),
-    }
+        log("  [前贴] 视频流复制拼接，已完成正文未重新编码")
+    return {"source": str(source), "duration": duration,
+            "dedup_seed": segment["dedup_seed"], "sticker": segment.get("sticker"),
+            "sticker_applied": segment.get("sticker_applied", False)}

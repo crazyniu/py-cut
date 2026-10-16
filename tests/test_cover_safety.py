@@ -127,7 +127,7 @@ class CoverSafetyTests(unittest.TestCase):
                     "stream=height": "1280"}
             with mock.patch.object(subtitle, "probe_scalar",
                                    side_effect=lambda p, entry: info[entry]), \
-                 mock.patch.object(subtitle, "_grab_frame", return_value=False), \
+                 mock.patch.object(subtitle, "grab_frames", side_effect=subtitle.FrameExtractionError("missing frame")), \
                  mock.patch.object(subtitle, "log"):
                 self.assertEqual(subtitle.process_clip(model, clip), "review")
             self.assertFalse(subtitle._marker(clip).exists())
@@ -144,7 +144,7 @@ class CoverSafetyTests(unittest.TestCase):
                     "stream=height": "1280"}
             with mock.patch.object(subtitle, "probe_scalar",
                                    side_effect=lambda p, entry: info[entry]), \
-                 mock.patch.object(subtitle, "_grab_frame", return_value=True), \
+                 mock.patch.object(subtitle, "grab_frames", side_effect=lambda clip,times,folder,**kw:[folder/f"f{i}.jpg" for i in range(len(times))]), \
                  mock.patch.object(subtitle.cv2, "imread", return_value=object()), \
                  mock.patch.object(subtitle, "log"):
                 self.assertEqual(subtitle.process_clip(model, clip), "nosub")
@@ -168,7 +168,7 @@ class CoverSafetyTests(unittest.TestCase):
                     ask_vision=mock.Mock(return_value={"frames": [dict(r or {}, frame=i) for i,r in enumerate(responses)]}))
                 with mock.patch.object(subtitle, "probe_scalar",
                                        side_effect=lambda p, entry: info[entry]), \
-                     mock.patch.object(subtitle, "_grab_frame", return_value=True), \
+                     mock.patch.object(subtitle, "grab_frames", side_effect=lambda clip,times,folder,**kw:[folder/f"f{i}.jpg" for i in range(len(times))]), \
                      mock.patch.object(subtitle.cv2, "imread", return_value=object()), \
                      mock.patch.object(subtitle, "log"):
                     self.assertEqual(subtitle.process_clip(model, clip), "review")
@@ -186,7 +186,7 @@ class CoverSafetyTests(unittest.TestCase):
                     {"frames": [{"frame":i,"has_subtitle":False} for i in range(3)]}]))
             with mock.patch.object(subtitle, "probe_scalar",
                                    side_effect=lambda p, entry: info[entry]), \
-                 mock.patch.object(subtitle, "_grab_frame", return_value=True), \
+                 mock.patch.object(subtitle, "grab_frames", side_effect=lambda clip,times,folder,**kw:[folder/f"f{i}.jpg" for i in range(len(times))]), \
                  mock.patch.object(subtitle.cv2, "imread", return_value=object()), \
                  mock.patch.object(subtitle, "cover_clip", return_value=True) as cover, \
                  mock.patch.object(subtitle, "log"):

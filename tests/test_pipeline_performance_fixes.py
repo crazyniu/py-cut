@@ -113,7 +113,7 @@ def test_subtitle_reuses_full_probe_if_available(tmp_path):
     frame = np.zeros((16, 16, 3), np.uint8)
     with mock.patch.object(montage_clips, "_probe_one", return_value=info) as probed, \
          mock.patch.object(subtitle, "probe_scalar", side_effect=AssertionError("redundant probe")), \
-         mock.patch.object(subtitle, "_grab_frame", return_value=True), \
+         mock.patch.object(subtitle, "grab_frames", side_effect=lambda clip, times, folder, **kw: [folder / f"f{i}.jpg" for i in range(len(times))]), \
          mock.patch.object(subtitle.cv2, "imread", return_value=frame):
         assert subtitle.detect_region(model, path, samples=3) is None
     probed.assert_called_once_with(path)
