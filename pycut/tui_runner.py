@@ -186,6 +186,19 @@ def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
     tui._safe_add(stdscr, body + 3, 2,
                   f"[{'█' * filled}{'░' * (width - filled)}] {done * 100 // total}%", w, color)
     y = body + 5
+    if not finished and status in ("running", "stopping"):
+        if status == "stopping":
+            activity = "正在停止当前处理，请稍候"
+        else:
+            phase = progress.get("混剪合成", {}).get("completed")
+            action = {0: "正在准备素材", 1: "正在组合视频画面", 2: "正在合成视频画面",
+                      3: "正在添加字幕", 4: "正在加入原声", 5: "正在检查并保存"}.get(phase, "正在准备素材")
+            attempted = progress.get("裂变生成", {}).get("completed", 0)
+            current = min(total, batch["completed"] + attempted + 1)
+            dots = "." * (int(time.monotonic() * 2) % 3 + 1)
+            activity = f"第 {current} 个视频 · {action}{dots}"
+        tui._safe_add(stdscr, body + 4, 2, activity, w, "info")
+        y += 1
     logs = [line for line in history if not parse(line)]
     errors = [line for line in logs if re.search(r"\[(?:[^\]]*(?:失败|错误)|已停止)\]", line)]
     if not show_details and status != "error":
