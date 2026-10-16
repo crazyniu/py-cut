@@ -106,10 +106,14 @@ def sample_frames(path: Path | str, n: int = DEFAULT_SAMPLES) -> list[np.ndarray
         idx = 0
         last = indices[-1]
         while idx <= last:
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                break               # 实际帧数比元数据少，提前结束
+            # grab 顺序解码但不把未选中的帧拷回 Python；仅目标帧 retrieve。
+            # 不使用关键帧随机 seek，以免 B 帧/非精确跳转改变 pHash/PSNR 口径。
+            if not cap.grab():
+                break
             if idx in wanted:
+                ok, frame = cap.retrieve()
+                if not ok or frame is None:
+                    break
                 frames.append(frame)
             idx += 1
     finally:
@@ -172,6 +176,8 @@ def _pick_indices(total: int, n: int) -> list[int]:
         return []
     if total <= n:
         return list(range(total))
+    if n == 1:
+        return [0]
     step = (total - 1) / (n - 1)
     return sorted({min(total - 1, int(round(i * step))) for i in range(n)})
 

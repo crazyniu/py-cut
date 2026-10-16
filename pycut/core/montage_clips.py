@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import random
 import shutil
@@ -289,7 +290,8 @@ def _drop_duplicates(items: list[ClipItem]) -> tuple[list[ClipItem], int]:
 
 
 def scan_library(root=None, min_dur=None, max_dur=None,
-                 workers=None, allow_landscape: bool = False) -> list[ClipItem]:
+                 workers=None, allow_landscape: bool = False,
+                 stats: dict | None = None) -> list[ClipItem]:
     """递归扫描片段库，默认只返回竖屏且时长合规的素材。
 
     当 allow_landscape=True 时不执行横竖屏过滤（会由 fit_filter
@@ -320,6 +322,8 @@ def scan_library(root=None, min_dur=None, max_dur=None,
 
     files = _collect_files(root)
     if not files:
+        if stats is not None:
+            stats.update(files=0, portrait=0, landscape=0, bad=0, short=0, duplicates=0)
         log(f"[混剪B] 片段库里没有视频文件: {root}")
         return []
 
@@ -355,6 +359,13 @@ def scan_library(root=None, min_dur=None, max_dur=None,
             items.append(it)
 
     items, n_dup = _drop_duplicates(items)
+    if stats is not None:
+        stats.update(
+            files=len(files),
+            portrait=sum(it is not None and it.width / it.height <= ratio_max for it in results),
+            landscape=sum(it is not None and it.width / it.height > ratio_max for it in results),
+            bad=n_bad, short=n_short, duplicates=n_dup,
+        )
 
     log(f"  可用 {len(items)} 条  |  横屏排除 {n_land}  太短排除 {n_short}  "
         f"重复拷贝排除 {n_dup}  探测失败 {n_bad}  |  "
@@ -566,9 +577,8 @@ def _seg_cmd(src: Path, offset: float, take: float, out: Path,
         pre.append("hflip")
     if pre:
         chain = ",".join(pre + [chain])
-    if frames is not None:
-        # 累计舍入的帧预算可避免多片拼接后产生每段一帧的时长漂移。
-        chain += ",tpad=stop_mode=clone:stop_duration=1"
+    # 不使用 tpad 克隆末帧：源文件提前结束时宁可截短并触发时长校验，
+    # 不能把静止末帧冒充真实视频素材。
     filters = []
     if seam_fade > 0:
         from .montage_transitions import seam_fade_filters
@@ -611,10 +621,10 @@ def _seg_cmd(src: Path, offset: float, take: float, out: Path,
 
 def _normalize_segments(items: list[dict], canvas, fps, crf: str,
                         seam_fade: float = 0.0) -> list[Path]:
-    """阶段1：每段按 offset/take 双 seek 精确截取，并统一成一致的流参数。
+    """每段只编码一次；较多段时有限并发，拼接顺序仍由片段原索引决定。
 
-    统一后的段才能喂给 concat demuxer——这正是本模块不用 inpoint/outpoint 的原因。
-    任一分段失败立即停止，并把实际编码错误交给 concat_clips 汇总。
+    源剩余时长不足时只裁短，不重复末帧。累计输出帧预算按实际裁短时长计算，
+    后续 concat/调用方仍严格校验目标时长，素材不足不会发布缩水成片。
     """
     segdir = _seg_dir("seg")
     try:
@@ -623,7 +633,7 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
     except OSError as e:
         raise RuntimeError(f"无法创建分段目录 {segdir}: {e}") from e
 
-    segs: list[Path] = []
+    jobs = []
     planned_seconds = 0.0
     assigned_frames = 0
     frame_rate = float(fps or config.MONTAGE_FPS)
@@ -633,36 +643,76 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
             continue
         seg = segdir / f"{i:04d}.mp4"
         speed = float(d.get("speed") or 1.0)
-        # 关键：`take` 是**成片里该段占多长**；加速后源素材要取更久，
-        # 否则 setpts 压缩后段长会不足，成片总时长就会短于目标。
-        src_take = float(d["take"]) * (speed if speed > 1.0 else 1.0)
+        multiplier = speed if speed > 1.0 else 1.0
+        wanted = float(d["take"]) * multiplier
+        available = max(0.0, float(it.duration) - float(d.get("offset") or 0.0))
+        # FFmpeg 的 -t 保留三位小数；向下量化以免格式化进位超出源末尾。
+        src_take = math.floor(min(wanted, available) * 1000 + 1e-7) / 1000
+        if src_take <= 0:
+            raise RuntimeError(f"分段 {i + 1}/{len(items)} 源视频没有剩余时长: {it.path}")
+        if src_take < wanted - EPS:
+            # 向下取毫秒，避免 float/seek 进位再次越过源末尾。
+            d["take"] = min(float(d["take"]),
+                            math.floor(src_take / multiplier * 1000) / 1000)
+            if d["take"] <= 0:
+                raise RuntimeError(f"分段 {i + 1}/{len(items)} 源视频不足一毫秒: {it.path}")
+            src_take = math.floor(d["take"] * multiplier * 1000 + 1e-7) / 1000
+
         planned_seconds += float(d["take"])
         cumulative_frames = round(planned_seconds * frame_rate)
         frames = max(1, cumulative_frames - assigned_frames)
         assigned_frames = cumulative_frames
         timeout = min(ENC_TIMEOUT_MAX,
                       max(ENC_TIMEOUT_MIN, int(src_take * ENC_TIMEOUT_PER_SEC)))
-        rc, _o, err = run_cmd(
-            _seg_cmd(it.path, d["offset"], src_take, seg, canvas, fps, crf,
-                     mirror=bool(d.get("mirror")), speed=speed, frames=frames,
-                     **({"dedup_seed": d["dedup_seed"]} if "dedup_seed" in d else {}),
-                     sticker=Path(d["sticker"]) if d.get("sticker") else None,
-                     sticker_seed=i * 7919 + 13,
-                     seam_fade=seam_fade if len(items) > 1 else 0.0,
-                     first=i == 0, last=i == len(items) - 1),
-            timeout=timeout)
+        cmd = _seg_cmd(
+            it.path, d["offset"], src_take, seg, canvas, fps, crf,
+            mirror=bool(d.get("mirror")), speed=speed, frames=frames,
+            **({"dedup_seed": d["dedup_seed"]} if "dedup_seed" in d else {}),
+            sticker=Path(d["sticker"]) if d.get("sticker") else None,
+            sticker_seed=i * 7919 + 13,
+            seam_fade=seam_fade if len(items) > 1 else 0.0,
+            first=i == 0, last=i == len(items) - 1)
+        jobs.append((i, d, seg, src_take, speed, frames, timeout, cmd))
+
+    def encode(job):
+        i, d, seg, src_take, speed, frames, timeout, cmd = job
+        rc, _o, err = run_cmd(cmd, timeout=timeout)
         if rc != 0 or not seg.is_file() or seg.stat().st_size < 1024:
             msg = err.strip()[:4000] or "输出缺失或文件过小"
             raise RuntimeError(
-                f"分段 {i + 1}/{len(items)} 截取失败: {it.path}; "
+                f"分段 {i + 1}/{len(items)} 截取失败: {d['item'].path}; "
                 f"offset={d['offset']:.3f}s take={src_take:.3f}s "
                 f"speed={speed:.3f} frames={frames} canvas={canvas} "
                 f"fps={frame_rate:g} rc={rc}\n{msg}")
+        return i, seg
 
+    # 小批次保持串行，避免线程/多个编码器启动开销；较多段最多两个编码任务。
+    # 子任务失败会等已启动 FFmpeg 退出再清理，不能提前删除它们正在写的文件。
+    segments: dict[int, Path] = {}
+    if len(jobs) < 6:
+        for job in jobs:
+            index, path = encode(job)
+            segments[index] = path
+    else:
+        with futures.ThreadPoolExecutor(max_workers=2) as executor:
+            pending = {executor.submit(encode, job): job[0] for job in jobs}
+            first_error = None
+            for future in futures.as_completed(pending):
+                try:
+                    index, path = future.result()
+                    segments[index] = path
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+                    for waiting in pending:
+                        waiting.cancel()
+            if first_error is not None:
+                raise first_error
+
+    for i, d, *_ in jobs:
         if d.get("sticker"):
             d["sticker_applied"] = True
-        segs.append(seg)
-    return segs
+    return [segments[job[0]] for job in jobs]
 
 
 def build_concat_cmd(items: list[dict], out: Path, canvas=None, fps=None,

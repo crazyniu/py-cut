@@ -220,12 +220,14 @@ def run_pipeline(opts: MontageOptions) -> dict:
     if not r.get("ok") or not base.is_file():
         log(f"  [失败] 拼接失败: {r.get('error') or '产物未生成'}")
         result["error"] = "步骤B拼接失败"
+        _unlink(base)
         return result
     base_duration = _duration(base)
     frame_tolerance = 1.0 / config.MONTAGE_FPS + 0.01
     if abs(base_duration - target) > frame_tolerance:
         result["error"] = (f"步骤B时长错误：基准 {target:.3f}s，拼接 {base_duration:.3f}s")
         log(f"  [失败] {result['error']}")
+        _unlink(base)
         return result
     log(f"  步骤B 产出: {base.name}  {_size(base)}  {base_duration:.3f}s")
     result["base"] = str(base)
@@ -413,6 +415,9 @@ def run_pipeline(opts: MontageOptions) -> dict:
 
     finally:
         _unlink(working)
+        _unlink(staged)
+        _unlink(base)
+        result["base"] = ""  # 完整混剪不向调用者返回已删除的中间文件路径
 
 def _prepare_subtitles(srt, canvas: tuple[int, int], duration: float) -> Path:
     """生成保留话术时间轴的 ASS，调用者负责结束后清理。"""

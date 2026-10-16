@@ -95,22 +95,20 @@ def register(subparsers) -> None:
 
 
 def _probe_library(clip_dir: Path, allow_landscape: bool, workers: int) -> int:
-    """--probe：只统计素材库规模，用来回答「有多少素材可用」。"""
-    from ..core.montage_clips import scan_library  # noqa: PLC0415
+    """一次扫描获取素材规模和横竖屏统计，不重新逐文件启动 ffprobe。"""
+    from ..core.montage_clips import scan_library
 
     log(f"[探测] 片段库: {clip_dir}")
-    from ..core.montage_clips import _collect_files
-    all_files = _collect_files(clip_dir)
-    log(f"  文件总数(含横屏): {len(all_files)}")
-
+    stats: dict = {}
+    items = scan_library(clip_dir, workers=workers, allow_landscape=allow_landscape,
+                         stats=stats)
+    log(f"  文件总数(含横屏): {stats.get('files', 0)}")
     if allow_landscape:
-        items = scan_library(clip_dir, workers=workers, allow_landscape=True)
         log(f"  可用: {len(items)} 条")
     else:
-        # 只用竖屏：先按侧边比过滤，再按时长过滤，两次统计便于看清各过滤掉了多少
-        items = scan_library(clip_dir, workers=workers)
-        portrait = [p for p in all_files if _is_portrait(p)]
-        log(f"  其中竖屏 9:16: {len(portrait)} 条（横屏 {len(all_files) - len(portrait)} 条已排除）")
+        portrait = stats.get("portrait", 0)
+        landscape = stats.get("landscape", 0)
+        log(f"  其中竖屏 9:16: {portrait} 条（横屏 {landscape} 条已排除）")
         log(f"  竖屏且时长合规: {len(items)} 条")
     if not items:
         log("  [错误] 没有可用素材")
@@ -118,11 +116,10 @@ def _probe_library(clip_dir: Path, allow_landscape: bool, workers: int) -> int:
 
     durs = sorted(i.duration for i in items)
     if durs:
-        import statistics  # noqa: PLC0415
-        total = sum(durs)
+        import statistics
         log(f"  时长: 最短 {durs[0]:.1f}s  中位 {statistics.median(durs):.1f}s  "
             f"最长 {durs[-1]:.1f}s")
-        log(f"  总容量: {total / 60:.1f} 分钟")
+        log(f"  总容量: {sum(durs) / 60:.1f} 分钟")
     res = {f"{i.width}x{i.height}" for i in items}
     log(f"  分辨率: {' '.join(sorted(res))}")
     return 0

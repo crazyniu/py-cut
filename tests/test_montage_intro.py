@@ -48,5 +48,49 @@ class IntroTests(unittest.TestCase):
             self.assertEqual(video.read_bytes(), b'original')
 
 
+    def test_compatible_video_stream_is_copied_without_reencoding_body(self):
+        from unittest import mock
+        from pycut.core import montage_intro
+        from pycut.core.utils import run_cmd
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            folder=root/'prefixes';folder.mkdir()
+            source=folder/'prefix.mp4'
+            main=root/'main.mp4'
+            for path,seconds in ((source,1),(main,2)):
+                subprocess.run(['ffmpeg','-y','-loglevel','error','-f','lavfi','-i',
+                                f'testsrc2=size=180x320:rate=30:duration={seconds}',
+                                '-an','-c:v','libx264','-preset','veryfast','-crf','20',
+                                '-pix_fmt','yuv420p','-r','30','-fps_mode','cfr',str(path)],check=True)
+            before=cv2.VideoCapture(str(main))
+            original_frames=[]
+            while True:
+                ok,frame=before.read()
+                if not ok:break
+                original_frames.append(frame)
+            before.release()
+            with mock.patch.object(montage_intro,'run_cmd',wraps=run_cmd) as calls:
+                report=prepend(main,folder,seed=45,canvas=(180,320),
+                               stickers=[],crf='20',keep_audio=False)
+            assert report is not None
+            cmd_calls=[call.args[0] for call in calls.call_args_list]
+            self.assertTrue(any('-f' in cmd and 'concat' in cmd and
+                                '-c:v' in cmd and cmd[cmd.index('-c:v')+1]=='copy'
+                                for cmd in cmd_calls))
+            self.assertFalse(any('-c:v' in cmd and cmd[cmd.index('-c:v')+1]=='libx264'
+                                 for cmd in cmd_calls), 'video stream copy should not fallback')
+            self.assertAlmostEqual(_video_duration(main),3,delta=.07)
+            merged=cv2.VideoCapture(str(main))
+            merged_frames=[]
+            while True:
+                ok,frame=merged.read()
+                if not ok:break
+                merged_frames.append(frame)
+            merged.release()
+            self.assertGreaterEqual(len(merged_frames),len(original_frames))
+            for a,b in zip(merged_frames[-len(original_frames):],original_frames):
+                self.assertTrue(np.array_equal(a,b))
+
+
 if __name__ == '__main__':
     unittest.main()

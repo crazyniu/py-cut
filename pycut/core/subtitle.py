@@ -58,17 +58,24 @@ def detect_region(llm: LLMClient, clip: Path,
     """
     if samples < 1:
         raise RuntimeError("至少需要抽取一帧进行字幕检测")
-    dur_s = probe_scalar(clip, "format=duration")
-    if not dur_s:
-        raise RuntimeError("无法探测视频时长")
-    dur = float(dur_s)
-    if dur <= 0:
-        raise RuntimeError("视频时长无效")
-    w_s = probe_scalar(clip, "stream=width")
-    h_s = probe_scalar(clip, "stream=height")
-    if not w_s or not h_s:
-        raise RuntimeError("无法探测视频分辨率")
-    W, H = int(w_s), int(h_s)
+    # 编码与检测共用已有 ffprobe 元数据缓存，避免每轮 3 次探测；
+    # 只在文件尚未落盘（例如注入假帧的单测）或探测异常时兼容旧封装。
+    from .montage_clips import _probe_one
+    info = _probe_one(clip) if Path(clip).is_file() else None
+    if info is not None:
+        dur, W, H = info.duration, info.width, info.height
+    else:
+        dur_s = probe_scalar(clip, "format=duration")
+        if not dur_s:
+            raise RuntimeError("无法探测视频时长")
+        dur = float(dur_s)
+        if dur <= 0:
+            raise RuntimeError("视频时长无效")
+        w_s = probe_scalar(clip, "stream=width")
+        h_s = probe_scalar(clip, "stream=height")
+        if not w_s or not h_s:
+            raise RuntimeError("无法探测视频分辨率")
+        W, H = int(w_s), int(h_s)
 
     deadline = time.monotonic() + DETECT_TIMEOUT
     boxes: list[list[float]] = []

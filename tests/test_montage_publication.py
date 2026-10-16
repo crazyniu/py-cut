@@ -85,6 +85,7 @@ class MontagePublicationTests(unittest.TestCase):
                 self.assertEqual(result["final_duration"], 10.0)
             self.assertEqual(list(out_dir.glob("*.working_*.mp4")), [])
             self.assertEqual(list(out_dir.glob("*.stage_*.mp4")), [])
+            self.assertEqual(list((root / "tmp").glob("base_*.mp4")), [])
 
     def test_failed_subtitle_render_preserves_previous_final(self):
         self._exercise("subtitle")
