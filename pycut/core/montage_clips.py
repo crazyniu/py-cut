@@ -335,6 +335,7 @@ def scan_library(root=None, min_dur=None, max_dur=None,
         f"时长门槛 >={lo:.1f}s（上限 {hi:.1f}s 仅取用时截，不丢素材）")
 
     t0 = time.time()
+    progress("背景素材扫描", 0, len(files), detail="开始读取视频时长与画面规格")
     results: list[ClipItem | None] = [None] * len(files)
     with futures.ThreadPoolExecutor(max_workers=nw) as ex:
         futs = {ex.submit(_probe_one, p): i for i, p in enumerate(files)}
@@ -346,6 +347,9 @@ def scan_library(root=None, min_dur=None, max_dur=None,
                 results[i] = fut.result()
             except Exception as e:             # noqa: BLE001 单文件失败不影响整批
                 log(f"  [探测异常] {files[i].name}: {type(e).__name__} {e}")
+            if done % 20 == 0 or done == len(files):
+                progress("背景素材扫描", done, len(files),
+                         detail=f"已探测 {done}/{len(files)} 个素材")
             if done % 100 == 0 or done == len(files):
                 log(f"  进度 {done}/{len(files)}")
 
@@ -361,6 +365,8 @@ def scan_library(root=None, min_dur=None, max_dur=None,
         else:
             items.append(it)
 
+    progress("背景素材扫描", len(files), len(files),
+             detail="元数据探测结束，正在检查重复文件")
     items, n_dup = _drop_duplicates(items)
     if stats is not None:
         stats.update(
@@ -370,6 +376,8 @@ def scan_library(root=None, min_dur=None, max_dur=None,
             bad=n_bad, short=n_short, duplicates=n_dup,
         )
 
+    progress("背景素材扫描", len(files), len(files),
+             detail=f"素材检查完成，可用 {len(items)} 条")
     log(f"  可用 {len(items)} 条  |  横屏排除 {n_land}  太短排除 {n_short}  "
         f"重复拷贝排除 {n_dup}  探测失败 {n_bad}  |  "
         f"总容量 {sum(i.duration for i in items) / 60:.1f} 分钟"
