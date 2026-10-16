@@ -27,7 +27,7 @@ def _valid(payload: str) -> bool:
             duration = float(data.get('format', {}).get('duration', 0))
         return (int(video.get('width', 0)) > 0 and int(video.get('height', 0)) > 0
                 and math.isfinite(duration) and duration > 0)
-    except (ValueError, TypeError, OverflowError, AttributeError, StopIteration):
+    except (ValueError, TypeError, OverflowError, AttributeError, StopIteration, RecursionError):
         return False
 
 

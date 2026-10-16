@@ -3,7 +3,6 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
-import sqlite3
 import pytest
 from pycut import config
 from pycut.core import probe_cache as cache
@@ -71,3 +70,34 @@ def test_parallel_reads_and_writes_then_warm_read(fixture):
     calls=run.call_count
     for _ in range(3):cache.cached_probe(source,args,30,run)
     assert run.call_count==calls
+
+
+def test_cache_is_reused_by_new_process(fixture):
+    import subprocess
+    import sys
+    source,tool,args=fixture
+    cache.cached_probe(source,args,30,lambda *a,**k:(0,PAYLOAD,''))
+    code='''import sys
+from pathlib import Path
+from pycut import config
+from pycut.core.probe_cache import cached_probe
+config.MONTAGE_TMP=Path(sys.argv[1])
+def forbidden(*args,**kwargs): raise AssertionError('warm cache launched ffprobe')
+result=cached_probe(Path(sys.argv[2]),[sys.argv[3],'-of','json',sys.argv[2]],30,forbidden)
+assert result[0]==0
+'''
+    result=subprocess.run([sys.executable,'-c',code,str(config.MONTAGE_TMP),str(source),str(tool)],capture_output=True,text=True,timeout=10)
+    assert result.returncode==0,result.stderr
+
+
+def test_same_size_edit_with_preserved_mtime_is_invalidated_by_ctime(fixture):
+    import os
+    source,tool,args=fixture
+    run=mock.Mock(return_value=(0,PAYLOAD,''))
+    cache.cached_probe(source,args,30,run)
+    before=source.stat()
+    source.write_bytes(b'other')
+    os.utime(source,ns=(before.st_atime_ns,before.st_mtime_ns))
+    assert source.stat().st_size==before.st_size
+    cache.cached_probe(source,args,30,run)
+    assert run.call_count==2
