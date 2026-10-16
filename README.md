@@ -196,6 +196,8 @@ cp .env.example .env
 ./run.sh cover --gateway backup --no-fallback
 ```
 
+话术目录中只有一支视频时，CLI 可省略 `--source`；多支时通过 TUI 多选或用 `--source` 明确选择。
+
 `slice` 命令和切片向导已移除；切片来自用户准备的文件。字幕擦除使用视觉模型检测字幕边界，由 FFmpeg 叠加单层毛玻璃并保留原声；不是恢复字幕后面的原始画面。
 
 ## 扩展能力与需求文档
