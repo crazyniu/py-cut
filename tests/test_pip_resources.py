@@ -131,11 +131,11 @@ def test_restored_per_segment_standard_variation_is_deterministic(tmp_path, cont
 
     def render(command, timeout):
         Path(command[-1]).write_bytes(b"generated" * 500)
-        return 0, "", "pycut.complete=1\\n"
+        return 0, "", "pycut.complete=1\n"
 
     def command(seed):
-        with mock.patch.object(pip, "probe_video", return_value=info), \\
-             mock.patch.object(pip, "run_cmd", side_effect=render):
+        with (mock.patch.object(pip, "probe_video", return_value=info),
+              mock.patch.object(pip, "run_cmd", side_effect=render)):
             return pip.build_pip_cmd(tmp_path / "base.mp4", entries,
                                      output_file, seed=seed)
 
