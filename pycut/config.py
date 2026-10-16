@@ -60,10 +60,14 @@ FFMPEG = _media_tool("ffmpeg")
 FFPROBE = _media_tool("ffprobe")
 
 SRC_DIR = _path("PYCUT_SOURCE_DIR", PROJECT_ROOT / "materials" / "source")
-CLIP_DIR = _path("PYCUT_CLIP_DIR", PROJECT_ROOT / "materials" / "background")
-PIP_DIR = _path("PYCUT_PIP_DIR", SRC_DIR.parent / "切片")
+from .settings import directories as _directories
+CLIP_DIRS = _directories(os.environ.get("PYCUT_CLIP_DIR", ""))
+PIP_DIRS = _directories(os.environ.get("PYCUT_PIP_DIR", ""))
+INTRO_DIRS = _directories(os.environ.get("PYCUT_INTRO_DIR", ""))
+CLIP_DIR = CLIP_DIRS[0] if CLIP_DIRS else PROJECT_ROOT / "materials" / "background"
+PIP_DIR = PIP_DIRS[0] if PIP_DIRS else SRC_DIR.parent / "切片"
 REFERENCE_DIR = _path("PYCUT_REFERENCE_DIR", PROJECT_ROOT / "materials" / "reference")
-INTRO_DIR = _path("PYCUT_INTRO_DIR", PROJECT_ROOT / "materials" / "intro")
+INTRO_DIR = INTRO_DIRS[0] if INTRO_DIRS else PROJECT_ROOT / "materials" / "intro"
 OUTPUT_DIR = _path("PYCUT_OUTPUT_DIR", PROJECT_ROOT / "output")
 DESKTOP = Path.home() / "Desktop"
 OUT_FACE = PIP_DIR / "有人脸"
@@ -235,7 +239,7 @@ DEDUP_AUDIO_RATE = 44100
 # ---------------------------------------------------------------------------
 MONTAGE_SRC = REFERENCE_DIR / "1.mp4"
 MONTAGE_CLIP_DIR = CLIP_DIR
-MONTAGE_DEDUP_DIR = _path("PYCUT_PIP_DIR", OUTPUT_DIR / "去重")                                # 步骤C 画中画素材
+MONTAGE_DEDUP_DIR = PIP_DIRS[0] if PIP_DIRS else OUTPUT_DIR / "去重"  # 旧单目录调用兼容
 MONTAGE_OUT = OUTPUT_DIR / "混剪"
 MONTAGE_TMP = Path("/tmp/pycut_montage")   # 中间产物（步骤B 结果），不进桌面
 
