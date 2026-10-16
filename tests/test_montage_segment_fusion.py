@@ -20,7 +20,8 @@ def test_effect_order_double_seek_and_frame_budget(tmp_path):
     graph = cmd[cmd.index('-filter_complex') + 1]
     old_graph = old[old.index('-filter_complex') + 1]
     assert graph.index('setpts=PTS/1.15000') < graph.index('hflip')
-    assert graph.index('tpad=') < graph.index('geq=') < graph.index('fade=')
+    assert 'tpad=' not in graph  # 源视频提前结束时不克隆末帧
+    assert graph.index('geq=') < graph.index('fade=')
     assert old_graph.replace('[0:v]', '[segment]') in graph
     assert 'fade=t=in:st=0.400000:d=0.200000' in graph
     assert 'fade=t=out:st=2.200000:d=0.200000' in graph
