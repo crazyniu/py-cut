@@ -101,3 +101,27 @@ def test_same_size_edit_with_preserved_mtime_is_invalidated_by_ctime(fixture):
     assert source.stat().st_size==before.st_size
     cache.cached_probe(source,args,30,run)
     assert run.call_count==2
+
+
+def test_library_discovers_added_removed_and_modified_files_and_shares_pip_cache(tmp_path,monkeypatch):
+    from pycut.core import montage_clips as clips, montage_pip as pip
+    library=tmp_path/'library';library.mkdir()
+    first=library/'a.mp4';first.write_bytes(b'first')
+    second=library/'b.mp4';second.write_bytes(b'second video')
+    tool=tmp_path/'probe';tool.write_bytes(b'binary')
+    monkeypatch.setattr(config,'MONTAGE_TMP',tmp_path/'cache')
+    monkeypatch.setattr(clips,'FFPROBE',str(tool))
+    run=mock.Mock(return_value=(0,PAYLOAD,''))
+    monkeypatch.setattr(clips,'run_cmd',run)
+    paths=lambda items:{item.path for item in items}
+    assert paths(clips.scan_library(library))=={first,second}
+    assert run.call_count==2
+    first.unlink()
+    third=library/'c.mp4';third.write_bytes(b'third content')
+    assert paths(clips.scan_library(library))=={second,third}
+    assert run.call_count==3  # only the newly discovered file
+    second.write_bytes(b'modified')
+    assert paths(clips.scan_library(library))=={second,third}
+    assert run.call_count==4
+    assert paths(pip.scan_dedup_pool(library))=={second,third}
+    assert run.call_count==4  # no second ffprobe pass for PIP
