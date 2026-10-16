@@ -57,13 +57,21 @@ def _redact(line: str, argv: list[str]) -> str:
     return line
 
 
-def _safe_log_line(line: str, argv: list[str]) -> str:
-    """Strip terminal controls, redact full secrets, then cap the visible line.
+def _safe_log_line_full(line: str, argv: list[str]) -> str:
+    """Redact complete secrets before either terminal or on-disk truncation."""
+    line = _redact(_sanitize(line, truncate=False), argv)
+    for key_name in ("PYCUT_MAIN_KEY", "PYCUT_BACKUP_KEY", "DEEPSEEK_API_KEY"):
+        secret = os.environ.get(key_name, "")
+        if secret and secret in line:
+            if len(secret) < 4:
+                return "[日志已隐藏：包含敏感参数]"
+            line = line.replace(secret, "********")
+    return line
 
-    Truncating first can split a secret at the length boundary and reveal
-    almost its entire prefix because _redact can no longer match the key.
-    """
-    return _cap_log_line(_redact(_sanitize(line, truncate=False), argv))
+
+def _safe_log_line(line: str, argv: list[str]) -> str:
+    """Display log: redact before the 4096-character limit, never split secrets."""
+    return _cap_log_line(_safe_log_line_full(line, argv))
 
 
 def _display_command(argv: list[str]) -> str:
@@ -146,7 +154,65 @@ def _montage_plan(argv_list: list[list[str]]) -> dict | None:
             counts.append(max(1, int(number)))
         except ValueError:
             return None
-    return {"counts": counts, "total": sum(counts), "completed": 0, "started_at": time.monotonic()}
+    return {"counts": counts, "total": sum(counts), "completed": 0,
+            "files": [], "started_at": time.monotonic()}
+
+
+def _init_montage_log(batch: dict, argv_list: list[list[str]]) -> None:
+    """Create one collision-safe session log in the configured montage output root."""
+    roots = []
+    for argv in argv_list:
+        out_dir = None
+        for i, arg in enumerate(argv):
+            if arg == "--out-dir" and i + 1 < len(argv):
+                out_dir = argv[i + 1]
+            elif arg.startswith("--out-dir="):
+                out_dir = arg.partition("=")[2]
+        if out_dir:
+            roots.append(Path(out_dir).expanduser().resolve())
+    # TUI always supplies --out-dir; do not create an unrelated log on a guessed path.
+    if len(roots) != len(argv_list) or len(set(roots)) != 1:
+        return
+    root = roots[0]
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        for number in range(100):
+            suffix = f"-{number}" if number else ""
+            path = root / f"pycut-{stamp}-{os.getpid()}{suffix}.log"
+            try:
+                with path.open("x", encoding="utf-8") as output:
+                    output.write(f"[会话开始] {time.strftime('%Y-%m-%d %H:%M:%S')} · 输出根目录 {root}\n")
+                batch["log_path"] = str(path)
+                return
+            except FileExistsError:
+                continue
+        batch["log_error"] = f"无法创建日志：同名文件过多（{root}）"
+    except OSError as exc:
+        batch["log_error"] = f"无法在输出目录写入日志：{exc}"
+
+
+def _append_run_log(batch: dict | None, message: str) -> None:
+    """Flush every CLI line on disk; an I/O failure never changes media success."""
+    if not batch or not batch.get("log_path"):
+        return
+    try:
+        with Path(batch["log_path"]).open("a", encoding="utf-8") as output:
+            output.write(time.strftime("[%Y-%m-%d %H:%M:%S] ") + message[:65536] + "\n")
+    except (OSError, UnicodeError) as exc:
+        batch["log_error"] = f"日志写入中断：{type(exc).__name__}: {exc}"
+        batch.pop("log_path", None)
+
+
+def _record_montage_file(batch: dict | None, event: dict) -> None:
+    """Only the successful, validated final-stage event confirms a published file."""
+    if (batch is not None and event.get("stage") == "混剪合成"
+            and event.get("completed") == 5 and event.get("success", 0) > 0
+            and isinstance(event.get("file"), str) and event["file"]):
+        path = event["file"]
+        files = batch.setdefault("files", [])
+        if path not in files:
+            files.append(path)
 
 
 def _finished_videos(events: dict, planned: int) -> int:
@@ -204,19 +270,38 @@ def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
             activity = f"第 {current} 个视频 · {action}{dots}"
         tui._safe_add(stdscr, body + 4, 2, activity, w, "info")
         y += 1
+    elif finished and batch.get("files"):
+        tui._safe_add(stdscr, body + 4, 2,
+                      "最新成片：" + batch["files"][-1], w, "good")
+        y += 1
+    if batch.get("log_path"):
+        tui._safe_add(stdscr, y, 2, "日志文件：" + batch["log_path"], w, "accent")
+        y += 1
+    if batch.get("log_error"):
+        tui._safe_add(stdscr, y, 2, "[日志警告] " + batch["log_error"], w, "warn")
+        y += 1
     logs = [line for line in history if not parse(line)]
     errors = [line for line in logs if re.search(r"\[(?:[^\]]*(?:失败|错误)|已停止)\]", line)]
     if not show_details and status != "error":
         logs = errors
-    if logs and (show_details or errors or status == "error"):
-        tui._safe_add(stdscr, y - 1, 2, "错误日志" if not show_details else "日志", w, "bad" if errors or status == "error" else "dim")
+    # Finished paths remain visible by default; the full list can scroll on small screens.
+    visible = (["成片文件：" + path for path in batch.get("files", [])] if finished else []) + logs
+    if visible:
+        label = "生成文件与日志" if finished else "实时日志 · ↑↓/PgUp/PgDn 滚动（L 收起）"
+        if status == "error" and not show_details:
+            label = "错误日志"
+        elif not show_details and not finished:
+            label = "错误日志"
+        tui._safe_add(stdscr, y - 1, 2, label, w,
+                      "bad" if errors or status == "error" else "dim")
         rows = max(0, h - y - 2)
-        offset = min(offset, max(0, len(logs) - rows))
-        start = max(0, len(logs) - rows - offset)
-        for i, line in enumerate(logs[start:start + rows]):
+        offset = min(offset, max(0, len(visible) - rows))
+        start = max(0, len(visible) - rows - offset)
+        for i, line in enumerate(visible[start:start + rows]):
             tui._safe_add(stdscr, y + i, 2, line, w, "dim")
     tui._footer(stdscr,
-                "Enter/Esc 返回主菜单 · Q 退出 · L 日志" if finished else "X 中止 · Ctrl+C 中断 · L 日志",
+                "Enter/Esc 返回 · Q 退出 · ↑↓/PgUp/PgDn 滚动 · L 日志" if finished
+                else "X 中止 · Ctrl+C 中断 · ↑↓/PgUp/PgDn 滚动 · L 日志",
                 "Enter返回  Q退出  L日志" if finished else "X中止  L日志")
     stdscr.refresh()
     return offset
@@ -348,7 +433,9 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
         assert proc.stdout is not None
         try:
             for line in proc.stdout:
-                events.put(_safe_log_line(line.rstrip("\r\n"), argv))
+                message = _safe_log_line_full(line.rstrip("\r\n"), argv)
+                _append_run_log(batch, message)
+                events.put(_cap_log_line(message))
         except (OSError, UnicodeError) as exc:
             # A successful child exit is not success if its output stream failed.
             message = _safe_log_line(f"[日志读取失败] {type(exc).__name__}: {exc}", argv)
@@ -364,7 +451,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
     started_at = time.monotonic()
     progress = {}  # A new child must not inherit the previous command’s stages.
     offset = 0
-    show_details = False
+    show_details = batch is not None  # Montage shows a live scrolling task log by default.
     interrupted_at: float | None = None
     last_error = 0
     stdscr.timeout(120)
@@ -377,7 +464,10 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
                     if event:
                         progress.pop(event["stage"], None)
                         progress[event["stage"]] = event
+                        _record_montage_file(batch, event)
                     else:
+                        if offset:
+                            offset = min(600, offset + 1)  # Keep manual scroll anchored.
                         history.append(line)
                 except queue.Empty:
                     break
@@ -386,6 +476,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
                 last_error = int(rc) or (2 if read_errors else 0)
                 for message in read_errors:
                     history.append(message)
+                    _append_run_log(batch, message)
                 break
             _draw(stdscr, argv, index, total, history, offset,
                   "stopping" if interrupted_at is not None else "running", progress, time.monotonic() - started_at, show_details, batch=batch)
@@ -421,6 +512,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
                 if event:
                     progress.pop(event["stage"], None)
                     progress[event["stage"]] = event
+                    _record_montage_file(batch, event)
                 else:
                     history.append(line)
             except queue.Empty:
@@ -450,10 +542,13 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
     executed = 0
     results = []
     batch = _montage_plan(argv_list)
+    if batch is not None:
+        _init_montage_log(batch, argv_list)
     for i, argv in enumerate(argv_list, 1):
         last_argv = argv
         executed = i
         history.append(f"━━ 任务 {i}/{len(argv_list)}：{argv[0]} ━━")
+        _append_run_log(batch, f"━━ 任务 {i}/{len(argv_list)}：{_display_command(argv)} ━━")
         task_history: deque[str] = deque(maxlen=600)
         if batch is not None:
             batch["current_planned"] = batch["counts"][i - 1]
@@ -461,6 +556,7 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
         else:
             code, cancelled = _run_one(stdscr, argv, i, len(argv_list), task_history)
         history.extend(task_history)
+        _append_run_log(batch, f"[任务结束] {i}/{len(argv_list)} · 退出码 {code} · 中断 {cancelled}")
         results.append({"command": argv[0], "code": code or (130 if cancelled else 0),
                         "cancelled": cancelled,
                         "events": {e["stage"]: e for line in task_history if (e := parse(line))}})
@@ -475,10 +571,12 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
 
     status = "cancelled" if cancelled else ("error" if code else "success")
     label = {"cancelled": "已中断", "error": "失败", "success": "成功"}[status]
-    history.append(
-        f"[执行结果] {label} · 已运行 {executed}/{len(argv_list)} 项 · "
-        f"跳过 {len(argv_list) - executed} 项 · 退出码 {code}"
-    )
+    summary = (f"[执行结果] {label} · 已运行 {executed}/{len(argv_list)} 项 · "
+               f"跳过 {len(argv_list) - executed} 项 · 退出码 {code}")
+    history.append(summary)
+    _append_run_log(batch, summary)
+    if batch is not None and batch.get("log_path"):
+        history.append("[日志文件] " + batch["log_path"])
     if status == "success" and any(e.get("review") for r in results for e in r["events"].values()):
         status = "review"
     import curses

@@ -408,8 +408,9 @@ def run_pipeline(opts: MontageOptions) -> dict:
             log(f"  [报告失败] 成片已生成，但参数报告无法保存：{exc}")
         finally:
             _unlink(manifest_tmp)
-        progress("混剪合成", 5, 5, success=1, detail="成片规格检查与发布完成", output=str(final.parent))
-        log(f"  成片: {final.name}  {_size(final)}  {duration:.2f}s")
+        progress("混剪合成", 5, 5, success=1, detail="成片规格检查与发布完成",
+                 output=str(final.parent), file=str(final.resolve()))
+        log(f"  成片: {final.resolve()}  {_size(final)}  {duration:.2f}s")
 
         return result
 
