@@ -298,15 +298,17 @@ def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
             label = "错误日志"
         elif not show_details and not finished:
             label = "错误日志"
-        # Draw the header on its own row, not over the log-file location.
-        tui._safe_add(stdscr, y, 2, label, w,
+        # Reuse the spare separator row on compact terminals; with a log
+        # path or warning that row is occupied, so use the next row instead.
+        header_y = y if batch.get("log_path") or batch.get("log_error") else y - 1
+        tui._safe_add(stdscr, header_y, 2, label, w,
                       "bad" if errors or status == "error" else "dim")
-        y += 1
-        rows = max(0, h - y - 2)
+        first_row = header_y + 1
+        rows = max(0, h - first_row - 2)
         offset = min(offset, max(0, len(visible) - rows))
         start = max(0, len(visible) - rows - offset)
         for i, line in enumerate(visible[start:start + rows]):
-            tui._safe_add(stdscr, y + i, 2, line, w, "dim")
+            tui._safe_add(stdscr, first_row + i, 2, line, w, "dim")
     tui._footer(stdscr,
                 "Enter/Esc 返回 · Q 退出 · ↑↓/PgUp/PgDn 滚动 · L 日志" if finished
                 else "X 中止 · Ctrl+C 中断 · ↑↓/PgUp/PgDn 滚动 · L 日志",
