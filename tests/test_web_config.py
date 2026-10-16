@@ -20,7 +20,7 @@ class ConfigTests(unittest.TestCase):
             folder.mkdir()
             settings.save({'PYCUT_CLIP_DIR':str(folder), 'PYCUT_MAIN_KEY':''})
             self.assertEqual(settings.read_env()['PYCUT_MAIN_KEY'], 'original')
-            self.assertEqual(settings.read_env()['PYCUT_CLIP_DIR'], str(folder))
+            self.assertEqual(settings.directories(settings.read_env()['PYCUT_CLIP_DIR']), [folder])
             self.assertIn('# keep\nOTHER=value', path.read_text())
             before = path.read_bytes()
             with self.assertRaises(ValueError):
@@ -71,7 +71,7 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as error:
                 urllib.request.urlopen(req)
             feedback = json.loads(error.exception.read())
-            self.assertEqual(feedback['problems'], ['背景切片目录不存在或无法访问'])
+            self.assertEqual(feedback['problems'], [f'混剪切片目录第 1 项不存在或无法访问：{Path(td, "missing")}'])
             self.assertEqual(before, Path(td, '.env').read_bytes())
             req = urllib.request.Request(url+'api/config', b'{', headers, method='POST')
             with self.assertRaises(urllib.error.HTTPError) as error:
@@ -109,8 +109,8 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(data['error'], '目录不存在')
 
     def test_missing_configuration_never_enters_processing(self):
-        with mock.patch.object(config, 'refresh'), mock.patch.object(settings, 'effective', return_value={}), mock.patch.object(web_config, 'start', return_value='http://localhost/'), mock.patch.object(tui, '_flash'), mock.patch.object(tui, '_wizard_slice') as wizard:
-            self.assertIsNone(tui._run_feature_wizard(None, 'slice', 100))
+        with mock.patch.object(config, 'refresh'), mock.patch.object(settings, 'effective', return_value={}), mock.patch.object(web_config, 'start', return_value='http://localhost/'), mock.patch.object(tui, '_flash'), mock.patch.object(tui, '_wizard_cover') as wizard:
+            self.assertIsNone(tui._run_feature_wizard(None, 'cover', 100))
             wizard.assert_not_called()
 
     def test_legacy_key_status_and_external_precedence(self):
@@ -119,7 +119,7 @@ class ConfigTests(unittest.TestCase):
             values = settings.effective()
             self.assertEqual(values['PYCUT_MAIN_KEY'], 'legacy-secret')
             self.assertEqual(values['PYCUT_CLIP_DIR'], 'external')
-            self.assertIn('背景切片目录', settings.overrides())
+            self.assertIn('混剪切片目录', settings.overrides())
 
 
 

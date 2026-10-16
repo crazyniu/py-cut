@@ -15,6 +15,13 @@ from pycut.commands import slice_cmd
 from pycut.core import scan
 
 
+def slice_parser():
+    import argparse
+    parser = argparse.ArgumentParser()
+    slice_cmd.register(parser.add_subparsers(dest="command"))
+    return parser
+
+
 class Screen:
     """仅实现这些用例所用的 curses stdscr 协议。"""
 
@@ -61,6 +68,10 @@ class TUIRegression(unittest.TestCase):
     def setUp(self):
         self.attr = mock.patch.object(tui, "_attr", return_value=0)
         self.attr.start()
+        for name, value in [('CLIP_DIRS', [Path('/tmp/clips')]), ('PIP_DIRS', [])]:
+            patcher = mock.patch.object(config, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self.attr.stop()
@@ -90,30 +101,23 @@ class TUIRegression(unittest.TestCase):
         files = [Path("/tmp/a.mp4")]
         with mock.patch.object(tui, "_pick_dir", side_effect=["/tmp", "/tmp", "/tmp", None, None, None]), \
              mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 2), \
-             mock.patch.object(tui, "list_videos_flat", return_value=files), \
+             mock.patch.object(tui, "list_videos_recursive", return_value=files), \
              mock.patch.object(tui, "_multi_select", return_value=None), \
              mock.patch.object(tui, "_confirm") as confirm:
             self.assertIsNone(tui._wizard_montage(Screen(), 100))
             confirm.assert_not_called()
 
-    def test_slice_preview_matches_cli_max_depth_and_mp4_only(self):
-        files = [Path("/tmp/a.mp4"), Path("/tmp/a.mov"), Path("/tmp/b.MP4")]
-        def confirm(scr, lines, toggles, output):
-            self.assertEqual(lines[-1][1], "2 个")
-            output[:] = [False, True]
-            return True
-        with mock.patch.object(config, "SRC_DIR", Path("/tmp")), \
-             mock.patch.object(scan, "list_videos_recursive", return_value=files), \
-             mock.patch.object(tui, "_confirm", side_effect=confirm):
-            commands = tui._wizard_slice(Screen(), 100)
-        slice_args = cli.build_parser().parse_args(commands[0])
-        dedup_args = cli.build_parser().parse_args(commands[1])
-        self.assertEqual(slice_args.max_depth, 3)
-        self.assertTrue(slice_args.no_sub)
-        self.assertTrue(slice_args.out_dir)
-        self.assertEqual(dedup_args.src_dir, slice_args.out_dir)
-        self.assertFalse(dedup_args.all)
-        self.assertTrue(dedup_args.force)
+    def test_user_clip_preview_filters_mp4_and_uses_all_configured_roots(self):
+        from pycut import settings
+        paths = [Path('/first'), Path('/second')]
+        files = [Path('/first/a.mp4'), Path('/second/a.mov'), Path('/second/b.MP4')]
+        with mock.patch.object(config, 'CLIP_DIRS', paths), \
+             mock.patch.object(tui, 'list_videos_recursive', return_value=files) as scan_mock, \
+             mock.patch.object(tui, '_confirm', return_value=True) as confirm:
+            commands = tui._wizard_cover(Screen(), 100)
+        scan_mock.assert_called_once_with(paths, max_depth=None, raise_on_error=True)
+        self.assertEqual(dict(confirm.call_args.args[1])['MP4 数量'], '2')
+        self.assertEqual(settings.directories(commands[0][2]), paths)
 
     def test_scan_max_depth_ignores_deep_and_hidden_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -137,13 +141,13 @@ class TUIRegression(unittest.TestCase):
             (near / "near.mp4").write_bytes(b"")
             (far / "far.mp4").write_bytes(b"")
             (near / "other.mov").write_bytes(b"")
-            opts = cli.build_parser().parse_args([
+            opts = slice_parser().parse_args([
                 "slice", "--src-dir", str(root), "--max-depth", "3",
             ])
             with mock.patch.object(config, "SRC_DIR", root):
                 self.assertEqual(slice_cmd._pick_files(opts), [near / "near.mp4"])
             self.assertEqual(
-                cli.build_parser().parse_args(["slice"]).max_depth, None,
+                slice_parser().parse_args(["slice"]).max_depth, None,
             )
 
     def test_safe_render_does_not_split_wide_characters(self):
@@ -180,7 +184,7 @@ class TUIRegression(unittest.TestCase):
         self.assertEqual(tui_runner.run_jobs.__name__, "run_jobs")
 
     def test_home_number_shortcut_dispatches_selected_wizard(self):
-        s = Screen(keys=[ord("4")])
+        s = Screen(keys=[ord("3")])
         with mock.patch.object(tui.curses, "curs_set"), \
              mock.patch.object(tui, "_run_feature_wizard",
                                return_value=[["montage"]]) as wizard:

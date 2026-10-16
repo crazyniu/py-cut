@@ -1,6 +1,6 @@
 """无需外部视频、ffmpeg、网络或 API 密钥的 TUI 端到端交互回归。
 
-覆盖四个处理向导的 CLI 映射、目录导航、键盘菜单、取消/窄窗口与任务循环。
+覆盖三个处理向导的 CLI 映射、目录导航、键盘菜单、取消/窄窗口与任务循环。
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from pycut import cli, config, tui, tui_runner
+from pycut import settings, cli, config, tui, tui_runner
 
 
 class FakeScreen:
@@ -62,6 +62,10 @@ class TUIIntegrationTests(unittest.TestCase):
         patch = mock.patch.object(tui, "_attr", return_value=0)
         patch.start()
         self.addCleanup(patch.stop)
+        for name, value in [('PIP_DIRS', []), ('CLIP_DIRS', [Path('/tmp/clips')])]:
+            patcher = mock.patch.object(config, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_native_directory_picker_unicode_and_cancel(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -94,23 +98,21 @@ class TUIIntegrationTests(unittest.TestCase):
         for wizard, command in ((tui._wizard_cover, "cover"),
                                 (tui._wizard_dedup, "dedup")):
             with self.subTest(command=command), \
-                 mock.patch.object(config, "CLIP_DIR", Path("/tmp/videos")), \
-                 mock.patch.object(tui, "count_videos_recursive", return_value=3), \
-                 mock.patch("pycut.core.scan.list_videos_recursive",
+                 mock.patch.object(config, "CLIP_DIRS", [Path("/tmp/videos")]), \
+                 mock.patch.object(tui, "list_videos_recursive",
                             return_value=[Path("/tmp/videos/clip.mp4"),
                                           Path("/tmp/videos/not-supported.mov")]), \
                  mock.patch.object(tui, "_confirm", return_value=True):
                 result = wizard(FakeScreen(), 100)
-                self.assertEqual(result, [[command, "--src-dir", "/tmp/videos"]])
+                self.assertEqual(result, [[command, "--src-dir", settings.encoded_directories([Path("/tmp/videos")])]])
                 args = cli.build_parser().parse_args(result[0])
                 self.assertEqual(args.command, command)
-                self.assertEqual(args.src_dir, "/tmp/videos")
+                self.assertEqual(settings.directories(args.src_dir), [Path("/tmp/videos")])
 
     def test_no_video_short_circuits_before_confirm(self):
         for wizard in (tui._wizard_cover, tui._wizard_dedup):
             with self.subTest(wizard=wizard.__name__), \
-                 mock.patch("pycut.core.scan.list_videos_recursive", return_value=[]), \
-                 mock.patch.object(tui, "count_videos_recursive", return_value=0), \
+                 mock.patch.object(tui, "list_videos_recursive", return_value=[]), \
                  mock.patch.object(tui, "_flash") as flash, \
                  mock.patch.object(tui, "_confirm") as confirm:
                 self.assertIsNone(wizard(FakeScreen(), 100))
@@ -122,11 +124,12 @@ class TUIIntegrationTests(unittest.TestCase):
         second = Path("/tmp/video/second.mp4")
         selection = ([first, second], {str(first): 12, str(second): 2})
         with mock.patch.dict("os.environ", {"PYCUT_PIP_DIR": "/tmp/pip"}), \
-             mock.patch.object(config, "MONTAGE_CLIP_DIR", Path("/tmp/clips")), \
-             mock.patch.object(config, "MONTAGE_DEDUP_DIR", Path("/tmp/pip")), \
+             mock.patch("pycut.settings.problems", return_value=[]), \
+             mock.patch.object(config, "CLIP_DIRS", [Path("/tmp/clips")]), \
+             mock.patch.object(config, "PIP_DIRS", [Path("/tmp/pip")]), \
              mock.patch("pycut.core.montage_clips._collect_files", side_effect=[[first] * 4, [second] * 3]), \
              mock.patch.object(tui, "_count_sticker_images", return_value=1), \
-             mock.patch.object(tui, "list_videos_flat", return_value=[first, second]), \
+             mock.patch.object(tui, "list_videos_recursive", return_value=[first, second]), \
              mock.patch.object(tui, "_multi_select", return_value=selection), \
              mock.patch.object(tui, "_set_fission_counts", return_value=True), \
              mock.patch.object(tui, "_confirm", return_value=True):
@@ -136,8 +139,8 @@ class TUIIntegrationTests(unittest.TestCase):
             args = cli.build_parser().parse_args(argv)
             self.assertEqual(args.command, "montage")
             self.assertEqual(args.source, str(source))
-            self.assertEqual(args.clip_dir, "/tmp/clips")
-            self.assertEqual(args.dedup_dir, "/tmp/pip")
+            self.assertEqual(settings.directories(args.clip_dir), [Path("/tmp/clips")])
+            self.assertEqual(settings.directories(args.dedup_dir), [Path("/tmp/pip")])
             self.assertEqual(args.fission, count)
 
     def test_montage_defaults_to_online_stickers_without_extra_picker(self):
@@ -152,7 +155,7 @@ class TUIIntegrationTests(unittest.TestCase):
                  mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 2), \
                  mock.patch.object(tui, "_count_sticker_images",
                                    side_effect=[0, 1]), \
-                 mock.patch.object(tui, "list_videos_flat", return_value=[video]), \
+                 mock.patch.object(tui, "list_videos_recursive", return_value=[video]), \
                  mock.patch.object(tui, "_multi_select", return_value=selection), \
                  mock.patch.object(tui, "_set_fission_counts", return_value=True), \
              mock.patch.object(tui, "_confirm", return_value=True):
@@ -164,7 +167,7 @@ class TUIIntegrationTests(unittest.TestCase):
         picker.assert_not_called()
 
     def test_montage_cancel_before_confirm_never_builds_jobs(self):
-        with mock.patch.object(tui, "list_videos_flat", return_value=[Path("reference.mp4")]), \
+        with mock.patch.object(tui, "list_videos_recursive", return_value=[Path("reference.mp4")]), \
              mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 4), \
              mock.patch.object(tui, "_confirm") as confirm, \
              mock.patch.object(tui, "_multi_select", return_value=None) as multi:
@@ -175,7 +178,7 @@ class TUIIntegrationTests(unittest.TestCase):
     def test_only_processing_features_are_accessible_from_main_menu(self):
         self.assertEqual(
             [key for key, _, _ in tui.FEATURES],
-            ["slice", "cover", "dedup", "montage"],
+            ["cover", "dedup", "montage"],
         )
         # The former search shortcut "5" must not dispatch an unavailable item.
         with mock.patch.object(tui.curses, "curs_set"), \

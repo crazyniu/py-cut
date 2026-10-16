@@ -40,7 +40,7 @@ def test_gateways_present():
 
 
 def test_cli_registers_commands():
-    assert set(cli.list_commands()) >= {"slice", "cover"}
+    assert set(cli.list_commands()) == {"cover", "dedup", "montage"}
     parser = cli.build_parser()
     # 每个命令模块都应暴露 register / run
     for mod in (slice_cmd, cover_cmd):
@@ -48,8 +48,10 @@ def test_cli_registers_commands():
         assert hasattr(mod, "run")
 
 
-def test_slice_subparser_has_key_args():
-    parser = cli.build_parser()
+def test_internal_slice_subparser_has_key_args():
+    import argparse
+    parser = argparse.ArgumentParser()
+    slice_cmd.register(parser.add_subparsers(dest='command'))
     # 通过解析验证 slice 子命令参数齐全
     ns = parser.parse_args(["slice", "--dry-run", "--gateway", "backup"])
     assert ns.command == "slice"
@@ -70,17 +72,17 @@ def test_dedup_registered():
     assert ns.command == "dedup" and ns.all is True and ns.preset == "aggressive"
     # dedup 支持 --src-dir 递归扫描
     ns2 = cli.build_parser().parse_args(["dedup", "--src-dir", "/tmp"])
-    assert ns2.src_dir == "/tmp"
+    assert ns2.src_dir == ["/tmp"]
 
 
 def test_tui_wizard_structure():
-    """向导式 TUI 结构：4 个处理功能、内部目录读取、混剪裂变。"""
+    """向导式 TUI 结构：3 个处理功能、内部目录读取、混剪裂变。"""
     import pycut.tui as tui  # noqa: PLC0415
     from pycut.core import scan  # noqa: PLC0415
 
-    # 主菜单仅有 4 个视频处理功能，不提供独立“查素材”页面
+    # 主菜单仅有 3 个视频处理功能，不提供独立“查素材”页面
     names = [f[1] for f in tui.FEATURES]
-    assert names == ["切片", "字幕擦除", "去重", "混剪"]
+    assert names == ["字幕擦除", "去重", "混剪"]
     # 目录扫描工具
     assert hasattr(scan, "count_videos_recursive")
     assert hasattr(scan, "list_videos_flat")

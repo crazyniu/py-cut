@@ -1,4 +1,5 @@
 """画中画可选：未配置 PYCUT_PIP_DIR 不扫描/不渲染；勾选才校验并复用 --no-pip。"""
+import os
 from pathlib import Path
 from unittest import mock
 
@@ -13,9 +14,9 @@ def _selection(source):
 
 def _wizard_env(background, pip, source, confirm_side_effect=None):
     """构造 montage 向导环境，返回 (jobs, flash, confirm_mock, collect)。"""
-    with mock.patch.object(config, 'MONTAGE_CLIP_DIR', background), \
-         mock.patch.object(config, 'MONTAGE_DEDUP_DIR', pip), \
-         mock.patch.object(tui, 'list_videos_flat', return_value=[source]), \
+    with mock.patch.object(config, 'CLIP_DIRS', [background]), \
+         mock.patch.object(config, 'PIP_DIRS', [pip] if settings.directories(os.environ.get('PYCUT_PIP_DIR', '')) else []), \
+         mock.patch.object(tui, 'list_videos_recursive', return_value=[source]), \
          mock.patch.object(tui, '_multi_select', return_value=_selection(source)), \
          mock.patch.object(tui, '_set_fission_counts', return_value=True), \
          mock.patch.object(tui, '_confirm', side_effect=confirm_side_effect
@@ -64,7 +65,7 @@ def test_montage_with_pip_dir_checked_passes_dedup_dir(tmp_path):
     with mock.patch.dict('os.environ', {'PYCUT_PIP_DIR': str(pip)}):
         jobs, flash, confirm = _wizard_env(background, pip, source)
     args = cli.build_parser().parse_args(jobs[0])
-    assert args.dedup_dir == str(pip)
+    assert settings.directories(args.dedup_dir) == [pip]
     assert args.no_pip is False
     assert confirm.call_args.args[2][0][2] is True
     flash.assert_not_called()
@@ -108,7 +109,7 @@ def test_montage_checking_pip_without_config_is_rejected(tmp_path):
         jobs, flash, confirm = _wizard_env(background, pip, source,
                                            confirm_side_effect=check)
     assert jobs is None
-    assert '未配置 PYCUT_PIP_DIR' in flash.call_args.args[1]
+    assert '画中画素材不可用' in flash.call_args.args[1]
 
 
 @pytest.mark.parametrize('enabled', [False, True])
@@ -125,8 +126,8 @@ def test_montage_back_keeps_pip_choice_and_fission_count(tmp_path, enabled):
         values[:] = [toggles[0][2]]
         return True
 
-    with mock.patch.dict('os.environ', {'PYCUT_PIP_DIR': str(tmp_path)}), \
-         mock.patch.object(tui, 'list_videos_flat', return_value=[source]), \
+    with mock.patch.object(config, 'CLIP_DIRS', [tmp_path]), mock.patch.object(config, 'PIP_DIRS', [tmp_path]), mock.patch.dict('os.environ', {'PYCUT_PIP_DIR': str(tmp_path)}), \
+         mock.patch.object(tui, 'list_videos_recursive', return_value=[source]), \
          mock.patch.object(tui, '_multi_select', return_value=selection) as select, \
          mock.patch.object(tui, '_set_fission_counts', return_value=True) as counts, \
          mock.patch.object(tui, '_confirm', side_effect=confirm), \
@@ -145,8 +146,7 @@ def test_montage_back_keeps_pip_choice_and_fission_count(tmp_path, enabled):
 
 def test_settings_pip_dir_is_optional_but_validated_when_set(tmp_path):
     # 留空不再报「尚未配置」。
-    assert settings.problems({'PYCUT_SOURCE_DIR': str(tmp_path),
-                              'PYCUT_REFERENCE_DIR': str(tmp_path),
+    assert settings.problems({'PYCUT_REFERENCE_DIR': str(tmp_path),
                               'PYCUT_CLIP_DIR': str(tmp_path),
                               'PYCUT_OUTPUT_DIR': str(tmp_path),
                               'PYCUT_PIP_DIR': ''}) == []
