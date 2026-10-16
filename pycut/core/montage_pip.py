@@ -448,12 +448,30 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
         for left, right in zip(entries, entries[1:])) and abs(
             entries[-1]["start"] + entries[-1]["duration"] - info.duration) <= 1 / fps + .002
     rng = random.Random(seed)
+    if seed is not None:
+        # PR #115 曾为提速删除画中画原有的 standard 几何/像素扰动。
+        # 恢复段级去重，但继续在小窗上处理并保留单次全画面 overlay，
+        # 不恢复原先每段 2 路全画面阴影/羽化链。
+        from .dedup import montage_variation
+        from .dedup_presets import derive_seed
+        log(f"  [画中画去重] standard 几何/像素扰动已启用 · {len(entries)} 段（片段独立 seed）")
     labels = []
     for i, e in enumerate(entries):
-        # 仅轻量镜像；不做独立去重、逐像素模糊/羽化、阴影或噪声。
-        mirror = "hflip," if seed is not None and rng.random() < .3 else ""
+        # 跟当前版本一样以 30% 的概率镜像，原标准档默认不会再做镜像，
+        # 故不会出现两次 hflip 恰好抵消的情况。
+        mirror = "hflip" if seed is not None and rng.random() < .3 else ""
         spatial = (f"scale={pip_w}:{pip_h}:force_original_aspect_ratio=increase,"
-                   f"crop={pip_w}:{pip_h},setsar=1,{mirror}")
+                   f"crop={pip_w}:{pip_h},setsar=1")
+        if seed is not None:
+            # 复用独立 dedup 和混剪背景已经在用的滤镜生成器，不改变
+            # PiP 段长、FPS、音轨或每段的随机镜头选择。
+            _params, variation = montage_variation(
+                pip_w, pip_h, derive_seed(seed, "pip", i))
+            if variation:
+                spatial += f",{variation},setsar=1"
+        if mirror:
+            spatial += f",{mirror}"
+        spatial += ","
         if continuous:
             # 用累计边界量化帧数，不能逐段独立取整后累积时长误差。
             start_frame = round(e["start"] * fps)
