@@ -55,3 +55,29 @@ def test_same_named_script_videos_are_distinguishable(tmp_path):
     with mock.patch.object(config, 'REFERENCE_DIR', tmp_path):
         assert tui._reference_label(tmp_path / 'a' / '1.mp4') == 'a/1.mp4'
         assert tui._reference_label(tmp_path / 'b' / '1.mp4') == 'b/1.mp4'
+
+
+def test_cli_checks_only_libraries_it_will_actually_use(tmp_path):
+    from pycut.commands import cover_cmd, montage_cmd
+    values = {'PYCUT_CLIP_DIR': str(tmp_path), 'PYCUT_REFERENCE_DIR': '/missing',
+              'PYCUT_PIP_DIR': '[invalid', 'PYCUT_INTRO_DIR': '[invalid'}
+    with mock.patch.object(settings, 'effective', return_value=values), \
+         mock.patch.object(config, 'CLIP_DIRS', [tmp_path]), \
+         mock.patch.object(cover_cmd, 'run', return_value=0) as cover:
+        assert cli.main(['cover']) == 0
+        assert settings.directories(cover.call_args.args[0].src_dir) == [tmp_path]
+    with mock.patch.object(settings, 'effective', return_value=values), \
+         mock.patch.object(montage_cmd, 'run', return_value=0) as montage:
+        args = ['montage', '--source', str(tmp_path / 'a.mp4'),
+                '--clip-dir', str(tmp_path), '--no-pip']
+        assert cli.main(args + ['--intro-dir', '']) == 0
+        montage.assert_called_once()
+        montage.reset_mock()
+        assert cli.main(args) == 2  # malformed enabled default must not become an empty library
+        montage.assert_not_called()
+
+
+def test_malformed_environment_list_keeps_configuration_service_importable():
+    with mock.patch.dict('os.environ', {'PYCUT_INTRO_DIR': '[invalid'}):
+        assert config._configured_directories('PYCUT_INTRO_DIR') == []
+        assert settings.problems({'PYCUT_INTRO_DIR': '[invalid'}, require_all=False)

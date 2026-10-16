@@ -56,18 +56,33 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    # 显式输入仍兼容脚本；省略输入时统一从项目配置读取。
-    explicit_input = any(getattr(args, key, None) for key in ("file", "src_dir", "source", "clip_dir"))
-    if not explicit_input and not getattr(args, "all", False):
-        from . import config, settings
-        keys = ('PYCUT_CLIP_DIR',) if args.command in ('cover', 'dedup') else ('PYCUT_REFERENCE_DIR', 'PYCUT_CLIP_DIR', 'PYCUT_OUTPUT_DIR')
-        errors = settings.problems(settings.effective(), keys=keys)
-        if errors:
-            log("[配置未完成] " + "；".join(errors))
-            log("请启动 TUI，复制顶部设置地址到浏览器配置；也可编辑项目根目录 .env")
-            return 2
-        if args.command in ("cover", "dedup"):
-            args.src_dir = settings.encoded_directories(config.CLIP_DIRS)
+    # Validate only configured libraries this invocation actually uses. Explicit
+    # arguments override .env, and disabled optional libraries never block tasks.
+    from . import config, settings
+    keys = []
+    use_configured_clips = args.command in ('cover', 'dedup') and not (args.file or args.src_dir)
+    if use_configured_clips:
+        keys.append('PYCUT_CLIP_DIR')
+    if args.command == 'montage':
+        probe = bool(args.probe)
+        if not args.source and not probe:
+            keys.append('PYCUT_REFERENCE_DIR')
+        if args.clip_dir is None and (probe or args.step != 'a'):
+            keys.append('PYCUT_CLIP_DIR')
+        if not probe and args.step != 'a':
+            if not args.no_pip and args.dedup_dir is None:
+                keys.append('PYCUT_PIP_DIR')
+            if args.intro_dir is None:
+                keys.append('PYCUT_INTRO_DIR')
+        if not args.out_dir:
+            keys.append('PYCUT_OUTPUT_DIR')
+    errors = settings.problems(settings.effective(), keys=keys)
+    if errors:
+        log("[配置未完成] " + "；".join(errors))
+        log("请启动 TUI，复制顶部设置地址到浏览器配置；也可编辑项目根目录 .env")
+        return 2
+    if use_configured_clips:
+        args.src_dir = settings.encoded_directories(config.CLIP_DIRS)
 
     func = getattr(args, "func", None)
     if func is None:

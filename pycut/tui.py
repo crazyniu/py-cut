@@ -765,9 +765,11 @@ def _library_summary(paths: list[Path]) -> str:
 
 def _wizard_cover(stdscr, w: int) -> list[list[str]] | None:
     from . import settings
+    from .core.output_paths import without_outputs
     paths = config.CLIP_DIRS
     files = [p for p in list_videos_recursive(paths, max_depth=None, raise_on_error=True)
              if p.suffix.lower() == ".mp4"]
+    files = without_outputs(files, paths, "字幕查重")
     if not files:
         _flash(stdscr, "混剪切片目录及其子目录没有 MP4：" + _library_summary(paths), "bad")
         return None
@@ -780,9 +782,11 @@ def _wizard_cover(stdscr, w: int) -> list[list[str]] | None:
 
 def _wizard_dedup(stdscr, w: int) -> list[list[str]] | None:
     from . import settings
+    from .core.output_paths import without_outputs
     paths = config.CLIP_DIRS
     files = [p for p in list_videos_recursive(paths, max_depth=None, raise_on_error=True)
              if p.suffix.lower() == ".mp4"]
+    files = without_outputs(files, paths, "去重")
     if not files:
         _flash(stdscr, "混剪切片目录及其子目录没有 MP4：" + _library_summary(paths), "bad")
         return None
@@ -807,9 +811,11 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     """Choose script-folder videos, then quantities and optional PIP."""
     from . import settings
     from .core.montage_clips import _collect_files, VIDEO_EXTS
+    from .core.output_paths import montage_output
     clips = config.CLIP_DIRS
     pips = config.PIP_DIRS
     intros = config.INTRO_DIRS
+    output = config.MONTAGE_OUT if os.environ.get("PYCUT_OUTPUT_DIR", "").strip() else montage_output(config.REFERENCE_DIR)
     clip_files = {p.resolve() for root in clips for p in _collect_files(root)}
     if not clip_files:
         _flash(stdscr, "未找到混剪切片：" + _library_summary(clips)
@@ -843,7 +849,7 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
                  ("前贴目录", _library_summary(intros) if intros else "未配置，跳过"),
                  ("规格", "720×1280 · 9:16"),
                  ("原声", "正文使用话术原声，前贴保留自身原声"),
-                 ("输出", str(config.MONTAGE_OUT)),
+                 ("输出", str(output)),
                  ("生成数量", f"{len(chosen)} 个话术，共 {sum(fission[str(f)] for f in chosen)} 支成片")]
         lines += [(f"话术 {i}", f"{_reference_label(src)} × {fission[str(src)]}")
                   for i, src in enumerate(chosen, 1)]
@@ -859,7 +865,7 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
         for src in chosen:
             argv = ["montage", "--source", str(src),
                     "--clip-dir", settings.encoded_directories(clips),
-                    "--out-dir", str(config.MONTAGE_OUT),
+                    "--out-dir", str(output),
                     "--intro-dir", settings.encoded_directories(intros),
                     "--fission", str(fission[str(src)])]
             if values[0]:

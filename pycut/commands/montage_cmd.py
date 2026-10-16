@@ -237,7 +237,8 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     if not args.source:
         from ..core.scan import list_videos_recursive
         try:
-            candidates = list_videos_recursive(config.REFERENCE_DIR, max_depth=None, raise_on_error=True)
+            candidates = [p for p in list_videos_recursive(config.REFERENCE_DIR, max_depth=None, raise_on_error=True)
+                          if p.parent.resolve() != config.REFERENCE_DIR.resolve()]
         except (ValueError, OSError) as exc:
             log(f"[错误] 无法读取话术目录：{exc}")
             return 2
