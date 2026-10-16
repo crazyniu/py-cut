@@ -174,12 +174,18 @@ def _init_montage_log(batch: dict, argv_list: list[list[str]]) -> None:
     if len(roots) != len(argv_list) or len(set(roots)) != 1:
         return
     root = roots[0]
+    # Video folders contain only published media. Keep diagnostics outside out/.
+    # Typical: /剪辑/out/混剪 -> /剪辑/logs/混剪.
+    log_root = (root.parent.parent / "logs" / root.name
+                if root.parent.name.lower() == "out"
+                else root.parent / (root.name + "_logs"))
     try:
         root.mkdir(parents=True, exist_ok=True)
+        log_root.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         for number in range(100):
             suffix = f"-{number}" if number else ""
-            path = root / f"pycut-{stamp}-{os.getpid()}{suffix}.log"
+            path = log_root / f"pycut-{stamp}-{os.getpid()}{suffix}.log"
             try:
                 with path.open("x", encoding="utf-8") as output:
                     output.write(f"[会话开始] {time.strftime('%Y-%m-%d %H:%M:%S')} · 输出根目录 {root}\n")
@@ -187,9 +193,9 @@ def _init_montage_log(batch: dict, argv_list: list[list[str]]) -> None:
                 return
             except FileExistsError:
                 continue
-        batch["log_error"] = f"无法创建日志：同名文件过多（{root}）"
+        batch["log_error"] = f"无法创建日志：同名文件过多（{log_root}）"
     except OSError as exc:
-        batch["log_error"] = f"无法在输出目录写入日志：{exc}"
+        batch["log_error"] = f"无法在日志目录写入日志：{exc}"
 
 
 def _append_run_log(batch: dict | None, message: str) -> None:
@@ -219,6 +225,25 @@ def _finished_videos(events: dict, planned: int) -> int:
     # Only this event confirms complete, checked output files. Internal steps
     # and attempted/failed variants must never increase the finished count.
     return min(planned, events.get("裂变生成", {}).get("success", 0))
+
+
+def _current_montage_stage(events: dict) -> dict | None:
+    """Return measured activity of the current phase, not guessed overall %."""
+    phase = events.get("混剪合成", {}).get("completed", 0)
+    if phase == 1:
+        # Both pools are scanned before background encoding. The most recent
+        # event wins so a completed scan cannot conceal a later active stage.
+        names = ("背景素材扫描", "画中画素材扫描", "背景片段编码")
+    elif phase == 2:
+        names = ("画中画编码",)
+    else:
+        return None
+    for name in reversed(events):
+        if name in names:
+            event = events[name]
+            if isinstance(event.get("total"), int) and event["total"] > 0:
+                return {"stage": name, **event}
+    return None
 
 
 def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
@@ -275,6 +300,28 @@ def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
             activity = f"第 {current} 个视频 · {action}{dots}"
         tui._safe_add(stdscr, body + 4, 2, activity, w, "info")
         y += 1
+        current_stage = _current_montage_stage(progress)
+        if current_stage is not None and y < h - 3:
+            count = min(current_stage["completed"], current_stage["total"])
+            maximum = current_stage["total"]
+            name = current_stage["stage"]
+            detail = current_stage.get("detail", "")
+            tui._safe_add(stdscr, y, 2,
+                          f"当前阶段 · {name} {count}/{maximum}（{count * 100 // maximum}%） "
+                          f"{detail}", w, "info")
+            y += 1
+            if y < h - 4 and h >= 20:
+                segment_width = max(8, min(36, w - 15))
+                blocks = count * segment_width // maximum
+                tui._safe_add(stdscr, y, 2,
+                              f"[{'█' * blocks}{'░' * (segment_width - blocks)}] "
+                              f"{count * 100 // maximum}% · 本阶段", w, "info")
+                y += 1
+        elif y < h - 3:
+            detail = progress.get("混剪合成", {}).get("detail")
+            if detail:
+                tui._safe_add(stdscr, y, 2, "当前任务 · " + detail, w, "dim")
+                y += 1
     elif finished and output_dirs:
         tui._safe_add(stdscr, body + 4, 2,
                       "输出目录：" + output_dirs[-1], w, "good")
@@ -472,6 +519,13 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
                     line = events.get_nowait()
                     event = parse(line)
                     if event:
+                        # Each new variant must not show the previous video's
+                        # completed segment/frame counters as current progress.
+                        if (event["stage"] == "混剪合成"
+                                and event.get("completed") == 0):
+                            for stale in ("背景素材扫描", "画中画素材扫描",
+                                          "背景片段编码", "画中画编码"):
+                                progress.pop(stale, None)
                         progress.pop(event["stage"], None)
                         progress[event["stage"]] = event
                         _record_montage_file(batch, event)
@@ -520,6 +574,11 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
                 line = events.get_nowait()
                 event = parse(line)
                 if event:
+                    if (event["stage"] == "混剪合成"
+                            and event.get("completed") == 0):
+                        for stale in ("背景素材扫描", "画中画素材扫描",
+                                      "背景片段编码", "画中画编码"):
+                            progress.pop(stale, None)
                     progress.pop(event["stage"], None)
                     progress[event["stage"]] = event
                     _record_montage_file(batch, event)

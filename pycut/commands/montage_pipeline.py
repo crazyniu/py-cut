@@ -377,38 +377,8 @@ def run_pipeline(opts: MontageOptions) -> dict:
             return result
         result["final"] = str(final)
         result["final_duration"] = duration
-        # 保存实际参数，不能把画面扰动或 pHash 当作暗水印已经去除的证据。
-        import json
-        from ..core.online_stickers import ATTRIBUTION, SOURCES
-        manifest = final.with_suffix(".json")
-        manifest_tmp = manifest.with_name(f"{manifest.name}.{os.getpid()}.tmp")
-        try:
-            manifest_tmp.write_text(json.dumps({
-                "seed": seed, "canvas": canvas, "fps": config.MONTAGE_FPS,
-                "source": str(opts.source), "duration": duration,
-                "reference_duration": target,
-                "intro": intro_report,
-                "subtitle_offset": intro_report["duration"] if intro_report else 0.0,
-                "audio": "reference" if result.get("audio") else "silent",
-                "subtitle_timing": "reference",
-                "background": [{k: p.get(k) for k in (
-                    "take", "offset", "dedup_seed", "dedup_params", "mirror",
-                    "speed", "sticker", "sticker_applied")} for p in picked],
-                "pip_variation_seed": seed if opts.use_pip else None,
-                "pip_effects": ("standard_geometry_pixel+optional_mirror"
-                                if opts.use_pip else None),
-                "transition_seconds": opts.seam_fade,
-                "sticker_sources": list(SOURCES) if opts.online_stickers else [],
-                "sticker_attribution": ATTRIBUTION if opts.online_stickers else None,
-                "dark_watermark": "not_verified",
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(manifest_tmp, manifest)
-            result["report"] = str(manifest)
-        except OSError as exc:
-            result["report_error"] = str(exc)
-            log(f"  [报告失败] 成片已生成，但参数报告无法保存：{exc}")
-        finally:
-            _unlink(manifest_tmp)
+        # Only the verified video is published here. No sidecar JSON is written.
+        # Diagnostics, including the actual seed, remain in the TUI run log.
         progress("混剪合成", 5, 5, success=1, detail="成片规格检查与发布完成",
                  output=str(final.parent), file=str(final.resolve()))
         log(f"  成片: {final.resolve()}  {_size(final)}  {duration:.2f}s")

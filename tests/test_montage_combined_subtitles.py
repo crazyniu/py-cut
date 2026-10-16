@@ -1,5 +1,4 @@
 """ASS is prepared before PIP encoding, burned once, and cleaned on every outcome."""
-import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -58,9 +57,8 @@ def test_pip_ass_is_burned_once_and_cleaned_with_atomic_publication(tmp_path,fai
         assert result['final']==str(final)
         audio.assert_called_once()
         assert final.read_bytes()!=b'previous-video'
-        manifest = json.loads(Path(result['report']).read_text(encoding='utf-8'))
-        assert manifest['pip_variation_seed'] == 7
-        assert manifest['pip_effects'] == 'standard_geometry_pixel+optional_mirror'
+        assert 'report' not in result
+        assert not final.with_suffix('.json').exists()
 
 
 def test_no_pip_keeps_separate_subtitle_step(tmp_path):
@@ -83,6 +81,5 @@ def test_no_pip_keeps_separate_subtitle_step(tmp_path):
         result=montage_pipeline.run_pipeline(opts)
     assert result['final']
     burn.assert_called_once()
-    manifest = json.loads(Path(result['report']).read_text(encoding='utf-8'))
-    assert manifest['pip_variation_seed'] is None
-    assert manifest['pip_effects'] is None
+    assert 'report' not in result
+    assert not Path(result['final']).with_suffix('.json').exists()

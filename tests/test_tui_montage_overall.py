@@ -26,7 +26,11 @@ def test_normal_dashboard_only_shows_total_finished_and_one_bar(size):
     assert '需要生成 30 个视频 · 已生成 7 个' in text
     assert '10 个话术视频' in text and '每个生成 3 条' in text and '23%' in text
     assert sum(t.startswith('[') and ('█' in t or '░' in t) for _,_,t in screen.printed) == 1
-    assert all(t not in text for t in ('2/5','2/3','合成画中画','technical filter log','流程'))
+    assert all(t not in text for t in ('2/5', '2/3', 'technical filter log', '流程'))
+    if size[0] >= 20:
+        assert '当前任务 · 合成画中画' in text
+    else:
+        assert '正在合成视频画面' in text  # Compact terminal shows activity only.
 
 
 def test_error_logs_visible_without_opening_details():
