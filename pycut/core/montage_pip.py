@@ -104,7 +104,7 @@ def _run_with_activity(cmd: list[str], timeout: int, *, interval: float = 10.0,
     def report() -> None:
         nonlocal last_frame
         last_log = started
-        while not finished.wait(0.6):
+        while not finished.wait(min(0.6, max(0.01, interval / 2))):
             if progress_file is not None:
                 measured = _encoded_frames(progress_file)
                 if measured is not None and measured > last_frame:
