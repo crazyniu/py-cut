@@ -20,13 +20,14 @@ def _jobs(folder: Path) -> list[list[str]]:
              "--out-dir", str(folder)]]
 
 
-def test_session_log_created_in_output_root_without_overwrite(tmp_path):
+def test_session_log_created_outside_video_root_without_overwrite(tmp_path):
     jobs = _jobs(tmp_path / "结果目录")
     first = tui_runner._montage_plan(jobs)
     tui_runner._init_montage_log(first, jobs)
     filename = Path(first["log_path"])
     assert filename.is_file()
-    assert filename.parent == jobs[0][-1] or str(filename.parent) == str(Path(jobs[0][-1]))
+    assert filename.parent == tmp_path / "结果目录_logs"
+    assert not list(Path(jobs[0][-1]).glob("*.log"))
     assert "会话开始" in filename.read_text(encoding="utf-8")
     tui_runner._append_run_log(first, "processing line")
     assert "processing line" in filename.read_text(encoding="utf-8")
@@ -73,7 +74,7 @@ def test_log_write_failure_reports_warning_and_keeps_media_flow(tmp_path):
     batch = tui_runner._montage_plan(jobs)
     tui_runner._init_montage_log(batch, jobs)
     assert "log_path" not in batch
-    assert "无法在输出目录写入日志" in batch["log_error"]
+    assert "无法在日志目录写入日志" in batch["log_error"]
     tui_runner._append_run_log(batch, "no crash")
 
 
@@ -193,11 +194,62 @@ def test_run_jobs_records_task_boundaries_and_interrupt_outcome(tmp_path):
          mock.patch.object(tui_runner, "_draw"), \
          mock.patch("curses.flushinp"):
         assert tui_runner.run_jobs(screen, jobs) == (130, False)
-    saved = list(tmp_path.glob("*.log"))
+    saved = list((tmp_path / (tmp_path.name + "_logs")).glob("*.log"))
     assert len(saved) == 1
     txt = saved[0].read_text(encoding="utf-8")
     assert "任务 1/1" in txt and "退出码 130" in txt and "[执行结果] 已中断" in txt
 
+
+
+
+def test_video_output_log_is_sibling_of_out_tree(tmp_path):
+    out_root = tmp_path / "剪辑" / "out" / "混剪"
+    jobs = _jobs(out_root)
+    batch = tui_runner._montage_plan(jobs)
+    tui_runner._init_montage_log(batch, jobs)
+    log_file = Path(batch["log_path"])
+    assert log_file.parent == tmp_path / "剪辑" / "logs" / "混剪"
+    assert log_file.exists()
+    assert not list(out_root.rglob("*.log"))
+
+
+def test_montage_stage_uses_latest_real_measurement_and_does_not_guess():
+    events = {"混剪合成": {"stage": "混剪合成", "completed": 1, "total": 5},
+              "背景素材扫描": {"stage": "背景素材扫描", "completed": 140, "total": 509},
+              "画中画素材扫描": {"stage": "画中画素材扫描", "completed": 12, "total": 25}}
+    assert tui_runner._current_montage_stage(events)["stage"] == "画中画素材扫描"
+    events["背景片段编码"] = {"stage": "背景片段编码", "completed": 8, "total": 32}
+    assert tui_runner._current_montage_stage(events)["completed"] == 8
+    events["混剪合成"] = {"stage": "混剪合成", "completed": 2, "total": 5}
+    assert tui_runner._current_montage_stage(events) is None
+    events["画中画编码"] = {"stage": "画中画编码", "completed": 900, "total": 3600}
+    assert tui_runner._current_montage_stage(events)["completed"] == 900
+
+
+@pytest.mark.parametrize("stage,number,total", [
+    ("背景素材扫描", 140, 509),
+    ("背景片段编码", 8, 32),
+    ("画中画编码", 900, 3600),
+])
+def test_montage_stage_has_its_own_real_progress_bar(stage, number, total):
+    screen = Screen(size=(29, 112))
+    jobs = _jobs(Path("/tmp/out"))
+    batch = tui_runner._montage_plan(jobs)
+    batch.update(current_planned=1)
+    phase = 2 if stage == "画中画编码" else 1
+    event = {"stage": stage, "completed": number, "total": total,
+             "detail": "实际完成计数"}
+    statuses = {"混剪合成": {"stage": "混剪合成", "completed": phase, "total": 5},
+                stage: event}
+    with mock.patch.object(tui, "_attr", return_value=0):
+        tui_runner._draw(screen, jobs[0], 1, 1, deque(["普通日志"]), 0,
+                         "running", statuses, batch=batch, show_details=True)
+    lines = "\n".join(text for _, _, text in screen.printed)
+    assert "已生成 0 个（成片完成率）" in lines
+    assert f"{stage} {number}/{total}" in lines
+    assert f"{number * 100 // total}% · 本阶段" in lines
+    assert sum(text.startswith("[") and ("█" in text or "░" in text)
+               for _, _, text in screen.printed) == 2
 
 # PiP: long FFmpeg calls report elapsed time and preserve the original command.
 def test_monitored_ffmpeg_heartbeat_and_exact_command_unchanged():
