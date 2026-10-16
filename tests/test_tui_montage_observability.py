@@ -96,7 +96,7 @@ def test_log_retains_long_errors_beyond_the_screen_cap(tmp_path):
     assert any("日志行已截断" in line for line in history)
 
 
-def test_montage_dashboard_displays_scrollable_logs_and_finished_paths(tmp_path):
+def test_montage_dashboard_displays_scrollable_logs_and_finished_directory(tmp_path):
     jobs = _jobs(tmp_path)
     batch = tui_runner._montage_plan(jobs)
     video = str(tmp_path / "子目录" / "1_1.mp4")
@@ -115,9 +115,71 @@ def test_montage_dashboard_displays_scrollable_logs_and_finished_paths(tmp_path)
         tui_runner._draw(screen, jobs[0], 1, 1, deque(), 0,
                          "success", batch=batch, results=[{}])
     ended = "\n".join(t for _, _, t in screen.printed)
-    assert "最新成片：" in ended and "1_1.mp4" in ended
-    assert "成片文件：" in ended
+    assert "输出目录：" + str(tmp_path / "子目录") in ended
+    assert "最新成片：" not in ended and "成片文件：" not in ended
+    assert "1_1.mp4" not in ended
     assert "100%" in ended
+
+
+def test_montage_result_deduplicates_folders_and_preserves_log_file(tmp_path):
+    jobs = _jobs(tmp_path)
+    first = tmp_path / "话术 甲"
+    second = tmp_path / "话术 乙"
+    files = [str(first / "1_1.mp4"), str(first / "1_2.mp4"),
+             str(second / "1_1.mp4")]
+    batch = tui_runner._montage_plan(jobs)
+    batch.update(completed=3, files=files,
+                 log_path=str(tmp_path / "pycut-run.log"))
+    screen = Screen(size=(32, 160))
+    with mock.patch.object(tui, "_attr", return_value=0):
+        tui_runner._draw(screen, jobs[0], 1, 1, deque(["[记录] 处理完成"]),
+                         0, "success", batch=batch, results=[{}],
+                         show_details=True)
+    rendered = "\n".join(text for _, _, text in screen.printed)
+    assert rendered.count("输出目录：" + str(first)) == 1
+    assert rendered.count("输出目录：" + str(second)) == 1
+    assert "最新成片：" not in rendered and "成片文件：" not in rendered
+    assert "1_1.mp4" not in rendered and "1_2.mp4" not in rendered
+    assert "日志文件：" + str(tmp_path / "pycut-run.log") in rendered
+    assert batch["files"] == files  # Only presentation changes, real files are retained.
+    log_y = next(y for y, _, text in screen.printed if text.startswith("日志文件："))
+    heading_y = next(y for y, _, text in screen.printed
+                     if text.startswith("其他输出目录与日志"))
+    assert heading_y > log_y  # Do not overwrite the end of the log-file path.
+
+
+def test_montage_result_uses_one_folder_and_keeps_log_heading_below(tmp_path):
+    jobs = _jobs(tmp_path)
+    directory = tmp_path / "目录 空格"
+    batch = tui_runner._montage_plan(jobs)
+    batch.update(completed=2, files=[str(directory / "1_1.mp4"),
+                                      str(directory / "1_2.mp4")],
+                 log_path=str(tmp_path / "run.log"))
+    screen = Screen(size=(30, 160))
+    with mock.patch.object(tui, "_attr", return_value=0):
+        tui_runner._draw(screen, jobs[0], 1, 1, deque(["普通日志"]),
+                         0, "success", batch=batch, results=[{}],
+                         show_details=True)
+    rendered = "\n".join(text for _, _, text in screen.printed)
+    assert rendered.count("输出目录：" + str(directory)) == 1
+    assert "1_1.mp4" not in rendered and "1_2.mp4" not in rendered
+    log_y = next(y for y, _, text in screen.printed if text.startswith("日志文件："))
+    title_y = next(y for y, _, text in screen.printed if text == "详细日志")
+    assert title_y > log_y
+
+
+def test_montage_failure_without_published_file_has_no_output_directory(tmp_path):
+    jobs = _jobs(tmp_path)
+    batch = tui_runner._montage_plan(jobs)
+    batch.update(completed=0, files=[], log_path=str(tmp_path / "run.log"))
+    screen = Screen(size=(28, 120))
+    with mock.patch.object(tui, "_attr", return_value=0):
+        tui_runner._draw(screen, jobs[0], 1, 1, deque(["[失败] 没有完成成片"]),
+                         0, "error", batch=batch, results=[{}])
+    rendered = "\n".join(text for _, _, text in screen.printed)
+    assert "输出目录：" not in rendered
+    assert "错误日志" in rendered and "没有完成成片" in rendered
+    assert "日志文件：" + str(tmp_path / "run.log") in rendered
 
 
 def test_run_jobs_records_task_boundaries_and_interrupt_outcome(tmp_path):
