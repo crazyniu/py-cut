@@ -278,7 +278,11 @@ def test_feathered_pip_has_real_soft_edges_and_shadow(tmp_path, continuous):
                                 canvas=(160, 284), fps=30, seed=None)
     graph = command[command.index("-filter_complex") + 1]
     assert graph.count("boxblur=") == (1 if continuous else 2)
-    assert "[bg][styledmerged]overlay=" in graph if continuous else True
+    if continuous:
+        assert graph.count("[bg][styledmerged]overlay=") == 1
+    else:
+        assert "[bg][styledseg0]overlay=" in graph
+        assert "[v0][styledseg1]overlay=" in graph
     video = cv2.VideoCapture(str(final))
     frames = []
     try:
