@@ -251,6 +251,86 @@ def test_montage_stage_has_its_own_real_progress_bar(stage, number, total):
     assert sum(text.startswith("[") and ("█" in text or "░" in text)
                for _, _, text in screen.printed) == 2
 
+
+def test_background_and_pip_scans_report_actual_file_counts():
+    from types import SimpleNamespace
+    from pycut.core import montage_clips
+    import pycut.core.montage_pip as pip
+    files = [Path(f"/tmp/shot{i:03d}.mp4") for i in range(43)]
+    info = SimpleNamespace(duration=2, width=160, height=284, path=Path("/tmp/shot0.mp4"))
+    with mock.patch.object(montage_clips, "_collect_files", return_value=files), \
+         mock.patch.object(montage_clips, "_probe_one", return_value=info), \
+         mock.patch.object(montage_clips, "_drop_duplicates", side_effect=lambda xs: (xs, 0)), \
+         mock.patch.object(montage_clips, "progress") as stage:
+        assert len(montage_clips.scan_library(Path("/tmp/media"))) == 43
+    counts = [(call.args[1], call.args[2]) for call in stage.call_args_list
+              if call.args[0] == "背景素材扫描"]
+    assert (0, 43) in counts and (20, 43) in counts and (40, 43) in counts
+    assert counts[-1] == (43, 43)
+    pip_files = files[:23]
+    with mock.patch.object(pip, "_iter_mp4", return_value=iter(pip_files)), \
+         mock.patch.object(pip, "_probe_duration", return_value=3), \
+         mock.patch.object(montage_clips, "_drop_duplicates", side_effect=lambda xs: (xs, 0)), \
+         mock.patch.object(pip, "progress") as stage:
+        assert len(pip.scan_dedup_pool(Path("/tmp/media"))) == 23
+    counts = [(call.args[1], call.args[2]) for call in stage.call_args_list
+              if call.args[0] == "画中画素材扫描"]
+    assert (0, 23) in counts and (20, 23) in counts
+    assert counts[-1] == (23, 23)
+
+
+def test_ffmpeg_progress_uses_encoded_frame_count_and_cleans_temp():
+    import os
+    import pycut.core.montage_pip as pip
+    actual_paths = []
+
+    def encoder(command, timeout):
+        assert "-stats_period" in command and "-progress" in command
+        assert command[-1] == "render.mp4"
+        destination = Path(command[command.index("-progress") + 1])
+        actual_paths.append(destination)
+        destination.write_text("frame= 100\nprogress=continue\n", encoding="utf-8")
+        time.sleep(0.8)
+        destination.write_text("frame= 200\nprogress=end\n", encoding="utf-8")
+        return (0, "", "")
+
+    with mock.patch.dict(os.environ, {"PYCUT_PROGRESS": "1"}), \
+         mock.patch.object(pip, "run_cmd", side_effect=encoder), \
+         mock.patch.object(pip, "progress") as stage, \
+         mock.patch.object(pip, "log"):
+        assert pip._run_with_activity(["ffmpeg", "-y", "render.mp4"], 30,
+                                       interval=10, total_frames=360) == (0, "", "")
+    assert len(actual_paths) == 1 and not actual_paths[0].exists()
+    reports = [(c.args[1], c.args[2]) for c in stage.call_args_list
+               if c.args[0] == "画中画编码"]
+    assert reports[0] == (0, 360)
+    assert (100, 360) in reports
+    assert reports[-1] == (200, 360)
+    assert all(completed < total for completed, total in reports)
+
+
+def test_ffmpeg_progress_error_cleans_temp_without_reporting_success():
+    import os
+    import pycut.core.montage_pip as pip
+    paths = []
+
+    def encoder(command, timeout):
+        file = Path(command[command.index("-progress") + 1])
+        paths.append(file)
+        file.write_text("frame=360\nprogress=end\n", encoding="utf-8")
+        return (2, "", "encoder failed")
+
+    with mock.patch.dict(os.environ, {"PYCUT_PROGRESS": "1"}), \
+         mock.patch.object(pip, "run_cmd", side_effect=encoder), \
+         mock.patch.object(pip, "progress") as stage, \
+         mock.patch.object(pip, "log"):
+        assert pip._run_with_activity(["ffmpeg", "render.mp4"], 30,
+                                       total_frames=360) == (2, "", "encoder failed")
+    assert len(paths) == 1 and not paths[0].exists()
+    reports = [c.args[1] for c in stage.call_args_list if c.args[0] == "画中画编码"]
+    assert reports[0] == 0 and max(reports) == 359
+
+
 # PiP: long FFmpeg calls report elapsed time and preserve the original command.
 def test_monitored_ffmpeg_heartbeat_and_exact_command_unchanged():
     command = ["ffmpeg", "-hide_banner", "-i", "video.mp4", "output.mp4"]
