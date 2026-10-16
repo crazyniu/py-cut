@@ -180,7 +180,7 @@ def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
         text += f" · 已用时 {int(elapsed // 60)}分{int(elapsed % 60)}秒"
     tui._safe_add(stdscr, body, 2, text, w, color, curses.A_BOLD)
     tui._safe_add(stdscr, body + 1, 2, f"已选 {len(counts)} 个话术视频 · {per_video}", w, "text")
-    tui._safe_add(stdscr, body + 2, 2, f"需要生成 {total} 个视频 · 已生成 {done} 个", w, "text", curses.A_BOLD)
+    tui._safe_add(stdscr, body + 2, 2, f"需要生成 {total} 个视频 · 已生成 {done} 个（成片完成率）", w, "text", curses.A_BOLD)
     width = max(8, min(36, w - 15))
     filled = done * width // total
     tui._safe_add(stdscr, body + 3, 2,
@@ -196,6 +196,11 @@ def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
             attempted = progress.get("裂变生成", {}).get("completed", 0)
             current = min(total, batch["completed"] + attempted + 1)
             dots = "." * (int(time.monotonic() * 2) % 3 + 1)
+            segment = progress.get("背景片段编码", {}) if phase == 1 else {}
+            count = segment.get("total", 0)
+            if count:
+                completed = min(count, segment.get("completed", 0))
+                action = f"背景片段已编码 {completed}/{count}（{completed * 100 // count}%）"
             activity = f"第 {current} 个视频 · {action}{dots}"
         tui._safe_add(stdscr, body + 4, 2, activity, w, "info")
         y += 1
