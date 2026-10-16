@@ -394,8 +394,9 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 "background": [{k: p.get(k) for k in (
                     "take", "offset", "dedup_seed", "dedup_params", "mirror",
                     "speed", "sticker", "sticker_applied")} for p in picked],
-                "pip_variation_seed": None,
-                "pip_effects": "light_mirror" if opts.use_pip else None,
+                "pip_variation_seed": seed if opts.use_pip else None,
+                "pip_effects": ("standard_geometry_pixel+optional_mirror"
+                                if opts.use_pip else None),
                 "transition_seconds": opts.seam_fade,
                 "sticker_sources": list(SOURCES) if opts.online_stickers else [],
                 "sticker_attribution": ATTRIBUTION if opts.online_stickers else None,
