@@ -155,7 +155,8 @@ def test_restored_per_segment_standard_variation_is_deterministic(tmp_path, cont
     first = filtergraph(command(2026))
     assert first == filtergraph(command(2026))
     assert first != filtergraph(command(2027))
-    assert any(name in first for name in ("eq=", "noise=", "colorchannelmixer="))
+    # Static feather uses geq=lum; require an actual dedup pixel effect, not the mask.
+    assert any(name in first for name in (",eq=", ",noise=", ",colorchannelmixer="))
     # Continuous mode: only one full-size overlay; static styling adds
     # one small compositing overlay. Gap mode has one pair per visible segment.
     assert first.count("overlay=") == (2 if continuous else 4)
@@ -172,7 +173,7 @@ def test_restored_per_segment_standard_variation_is_deterministic(tmp_path, cont
     # The old public API with no seed still doesn't inject extra perturbation.
     plain = filtergraph(command(None))
     assert all(name not in plain for name in
-               ("eq=", "noise=", "colorchannelmixer=", "unsharp="))
+               (",eq=", ",noise=", ",colorchannelmixer=", ",unsharp="))
 
 
 @pytest.mark.skipif(
