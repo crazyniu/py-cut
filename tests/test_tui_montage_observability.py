@@ -135,7 +135,7 @@ def test_montage_result_deduplicates_folders_and_preserves_log_file(tmp_path):
         tui_runner._draw(screen, jobs[0], 1, 1, deque(["[记录] 处理完成"]),
                          0, "success", batch=batch, results=[{}],
                          show_details=True)
-    rendered = "\\n".join(text for _, _, text in screen.printed)
+    rendered = "\n".join(text for _, _, text in screen.printed)
     assert rendered.count("输出目录：" + str(first)) == 1
     assert rendered.count("输出目录：" + str(second)) == 1
     assert "最新成片：" not in rendered and "成片文件：" not in rendered
@@ -160,7 +160,7 @@ def test_montage_result_uses_one_folder_and_keeps_log_heading_below(tmp_path):
         tui_runner._draw(screen, jobs[0], 1, 1, deque(["普通日志"]),
                          0, "success", batch=batch, results=[{}],
                          show_details=True)
-    rendered = "\\n".join(text for _, _, text in screen.printed)
+    rendered = "\n".join(text for _, _, text in screen.printed)
     assert rendered.count("输出目录：" + str(directory)) == 1
     assert "1_1.mp4" not in rendered and "1_2.mp4" not in rendered
     log_y = next(y for y, _, text in screen.printed if text.startswith("日志文件："))
@@ -176,7 +176,7 @@ def test_montage_failure_without_published_file_has_no_output_directory(tmp_path
     with mock.patch.object(tui, "_attr", return_value=0):
         tui_runner._draw(screen, jobs[0], 1, 1, deque(["[失败] 没有完成成片"]),
                          0, "error", batch=batch, results=[{}])
-    rendered = "\\n".join(text for _, _, text in screen.printed)
+    rendered = "\n".join(text for _, _, text in screen.printed)
     assert "输出目录：" not in rendered
     assert "错误日志" in rendered and "没有完成成片" in rendered
     assert "日志文件：" + str(tmp_path / "run.log") in rendered
