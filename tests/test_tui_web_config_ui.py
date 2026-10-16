@@ -43,10 +43,10 @@ def test_labels_and_directory_fields_preserve_existing_protocol():
 
 def test_mobile_layout_and_footer_have_focus_safe_space():
     page = web_config.page()
-    assert '@media(max-width:520px)' in page
-    assert '@media(max-width:760px)' in page
-    assert 'calc(var(--savebar-height) + 48px)' in page
-    assert 'scroll-margin-bottom:calc(var(--savebar-height) + 32px)' in page
+    assert '@media(max-width:430px)' in page
+    assert '@media(max-width:680px)' in page
+    assert 'calc(var(--savebar-height) + 44px)' in page
+    assert 'scroll-margin-bottom:calc(var(--savebar-height) + 30px)' in page
     assert '.directory-row input{grid-column:1/-1}' in page
     assert '.directory-list:empty:before' in page
 
