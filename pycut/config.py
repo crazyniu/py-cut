@@ -61,9 +61,17 @@ FFPROBE = _media_tool("ffprobe")
 
 SRC_DIR = _path("PYCUT_SOURCE_DIR", PROJECT_ROOT / "materials" / "source")
 from .settings import directories as _directories
-CLIP_DIRS = _directories(os.environ.get("PYCUT_CLIP_DIR", ""))
-PIP_DIRS = _directories(os.environ.get("PYCUT_PIP_DIR", ""))
-INTRO_DIRS = _directories(os.environ.get("PYCUT_INTRO_DIR", ""))
+def _configured_directories(key: str) -> list[Path]:
+    try:
+        return _directories(os.environ.get(key, ""))
+    except ValueError:
+        # Keep the settings service usable so malformed .env lists can be fixed.
+        # settings.problems reports the invalid value before any task is run.
+        return []
+
+CLIP_DIRS = _configured_directories("PYCUT_CLIP_DIR")
+PIP_DIRS = _configured_directories("PYCUT_PIP_DIR")
+INTRO_DIRS = _configured_directories("PYCUT_INTRO_DIR")
 CLIP_DIR = CLIP_DIRS[0] if CLIP_DIRS else PROJECT_ROOT / "materials" / "background"
 PIP_DIR = PIP_DIRS[0] if PIP_DIRS else SRC_DIR.parent / "切片"
 REFERENCE_DIR = _path("PYCUT_REFERENCE_DIR", PROJECT_ROOT / "materials" / "reference")

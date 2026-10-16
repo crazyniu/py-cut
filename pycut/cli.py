@@ -10,12 +10,11 @@ import argparse
 import sys
 
 from . import __version__
-from .commands import cover_cmd, dedup_cmd, montage_cmd, slice_cmd
+from .commands import cover_cmd, dedup_cmd, montage_cmd
 from .core.utils import log
 
 # 命令注册表：名称 -> 命令模块（含 register / run）。新增功能在此登记即可。
 COMMANDS = {
-    "slice": slice_cmd,
     "cover": cover_cmd,
     "dedup": dedup_cmd,
     "montage": montage_cmd,
@@ -25,7 +24,7 @@ COMMANDS = {
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pycut",
-        description="短视频智能处理工具箱（切片 / 混剪 / 转场 / 查重…）",
+        description="短视频处理工具箱（字幕擦除 / 去重 / 混剪；切片由用户提供）",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--version", action="version", version=f"pycut {__version__}")
     sub = p.add_subparsers(dest="command", metavar="<command>")
@@ -61,13 +60,14 @@ def main(argv: list[str] | None = None) -> int:
     explicit_input = any(getattr(args, key, None) for key in ("file", "src_dir", "source", "clip_dir"))
     if not explicit_input and not getattr(args, "all", False):
         from . import config, settings
-        errors = settings.problems(settings.effective())
+        keys = ('PYCUT_CLIP_DIR',) if args.command in ('cover', 'dedup') else ('PYCUT_REFERENCE_DIR', 'PYCUT_CLIP_DIR', 'PYCUT_OUTPUT_DIR')
+        errors = settings.problems(settings.effective(), keys=keys)
         if errors:
             log("[配置未完成] " + "；".join(errors))
-            log("请直接启动运行脚本，配置网页会自动打开；也可编辑项目根目录 .env")
+            log("请启动 TUI，复制顶部设置地址到浏览器配置；也可编辑项目根目录 .env")
             return 2
         if args.command in ("cover", "dedup"):
-            args.src_dir = str(config.CLIP_DIR)
+            args.src_dir = settings.encoded_directories(config.CLIP_DIRS)
 
     func = getattr(args, "func", None)
     if func is None:
