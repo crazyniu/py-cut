@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import ExitStack
 
 from .. import config
 from .ffmpeg import FFMPEG, probe_video
@@ -54,6 +55,8 @@ PIP_MIN_SHOT = 0.8         # 短于此就不放（闪一下看不清，也白占
 PIP_X264_PRESET = "veryfast"
 PIP_CRF_DEFAULT = "20"
 # 多输入时不能让每路解码/每个滤镜各自按 CPU 数扩张线程。
+# Keep small jobs inline; larger continuous jobs use bounded lossless small clips.
+PIP_INLINE_LIMIT = 32
 PIP_DECODER_THREADS = 1
 PIP_FILTER_THREADS = 1
 PIP_ENCODER_THREADS = min(4, os.cpu_count() or 1)
@@ -530,6 +533,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     cmd: list[str] = [FFMPEG, "-y", "-loglevel", "error", "-nostdin",
                       "-filter_complex_threads", str(PIP_FILTER_THREADS),
                       "-threads", str(PIP_DECODER_THREADS), "-i", str(base)]
+    base_inputs = list(cmd)
     for e in entries:
         cmd += ["-ss", _ms(e["offset"]), "-t", _ms(e["duration"]),
                 "-threads", str(PIP_DECODER_THREADS), "-i", str(e["path"])]
@@ -542,7 +546,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     parts = [f"[0:v]{head}[bg]"]
     cur = "bg"
     # 连续模式先拼成一条小窗视频流，再与主画面叠加一次，避免每帧
-    # 顺次穿过几十个全画布 overlay。不产生额外的中间编码。
+    # 顺次穿过几十个全画布 overlay。大任务先做有界的无损小窗预处理。
     budget = max(1, round(info.duration * fps))
     continuous = abs(entries[0]["start"]) < .001 and all(
         abs(right["start"] - (left["start"] + left["duration"])) < .002
@@ -562,6 +566,8 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     shadow = max(2, int(pip_w * config.MONTAGE_PIP_SHADOW))
     shadow_alpha = float(config.MONTAGE_PIP_SHADOW_ALPHA)
     labels = []
+    prepared_segments = []
+    track_tail_start = 0
     for i, e in enumerate(entries):
         # 跟当前版本一样以 30% 的概率镜像，原标准档默认不会再做镜像，
         # 故不会出现两次 hflip 恰好抵消的情况。
@@ -585,10 +591,10 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
             frames = end_frame - start_frame
             if frames <= 0:
                 continue
-            parts.append(
-                f"[{i + 1}:v]fps={fps}:start_time=0:eof_action=pass,{spatial}"
-                f"trim=end_frame={frames},setpts=N/({fps}*TB)[pi{i}]"
-            )
+            chain = (f"fps={fps}:start_time=0:eof_action=pass,{spatial}"
+                     f"trim=end_frame={frames},setpts=N/({fps}*TB)")
+            prepared_segments.append((e, chain, frames))
+            parts.append(f"[{i + 1}:v]{chain}[pi{i}]")
             labels.append(f"[pi{i}]")
         else:
             start = e["start"]
@@ -608,13 +614,15 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
             )
             cur = f"v{i}"
     if continuous:
-        # 分支只记录最后一帧的到达，不编码、不重复解码、不写整帧。
+        # 在真实帧流内标记末帧，不分出 select/nullsink 独立消费分支。
+        # 独立分支可能提前拉取整条小窗流，迫使可见分支缓存整片帧。
         # 主画面等长不能证明画中画完整；缺真实帧时不靠 tpad 蒙混过关。
         parts.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[piptrack]")
-        parts.append("[piptrack]split[pipvisible][pipcheck]")
-        parts.append(f"[pipcheck]select='eq(n,{budget - 1})',"
-                     f"metadata=mode=add:key=pycut.complete:value=1,"
-                     f"metadata=mode=print:file='pipe\\:2',nullsink")
+        track_tail_start = len(parts)
+        parts.append(f"[piptrack]metadata=mode=add:key=pycut.complete:value=1:"
+                     f"enable='eq(n,{budget - 1})',"
+                     f"metadata=mode=print:key=pycut.complete:file='pipe\\:2':"
+                     f"enable='eq(n,{budget - 1})'[pipvisible]")
         styled = _style_small_pip(
             parts, "pipvisible", "merged", pip_w, pip_h, fps,
             budget, 0.0, feather, shadow, shadow_alpha)
@@ -631,6 +639,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
         f" / 右上角留白 x={margin_x} y={margin_y}"
         f" / 羽化 {feather}px / 阴影 {shadow}px")
 
+    input_end = len(cmd)
     cmd += [
         "-filter_complex", fcomplex,
         "-map", "[vout]",
@@ -648,7 +657,23 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     timeout = min(ENC_TIMEOUT_MAX,
                   max(ENC_TIMEOUT_MIN, int(info.duration * ENC_TIMEOUT_PER_SEC)))
     try:
-        rc, _out, err = _run_with_activity(cmd, timeout=timeout, total_frames=budget)
+        with ExitStack() as resources:
+            if continuous and len(entries) > PIP_INLINE_LIMIT:
+                from .montage_pip_track import prepare_track
+                directory = Path(resources.enter_context(
+                    tempfile.TemporaryDirectory(prefix="pycut_pip_track_")))
+                log(f"  [画中画] {len(entries)} 段采用逐段无损小窗预处理，"
+                    "同时仅解码 1 条原素材；最终仅叠加 2 路视频")
+                track = prepare_track(prepared_segments, directory, fps=fps,
+                                      ffmpeg=FFMPEG, run=_run_with_activity,
+                                      timeout=timeout)
+                final_parts = [parts[0], f"[1:v]setpts=N/({fps}*TB)[piptrack]",
+                               *parts[track_tail_start:]]
+                cmd = [*base_inputs, "-f", "concat", "-safe", "1",
+                       "-threads", str(PIP_DECODER_THREADS), "-i", str(track),
+                       *cmd[input_end:]]
+                cmd[cmd.index("-filter_complex") + 1] = ";".join(final_parts)
+            rc, _out, err = _run_with_activity(cmd, timeout=timeout, total_frames=budget)
         if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:
             raise RuntimeError(
                 f"画中画叠加失败 rc={rc}: "
