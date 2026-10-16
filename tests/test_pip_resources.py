@@ -31,9 +31,16 @@ def test_all_decoders_and_filter_encoder_threads_are_bounded(tmp_path):
     assert command[command.index('-filter_complex_threads')+1]=='1'
     assert command[command.index('libx264')+1:command.index('libx264')+3]==['-threads',str(pip.PIP_ENCODER_THREADS)]
     graph=command[command.index('-filter_complex')+1]
-    assert graph.count('overlay=')==1
+    # Exactly one full-canvas overlay; the other is a small padded PiP/shadow overlay.
+    assert graph.count('overlay=') == 2
+    assert graph.count('[bg][styledmerged]overlay=') == 1
     assert 'concat=n=60:v=1:a=0' in graph
-    assert all(name not in graph for name in ('geq=', 'boxblur=', 'colorchannelmixer=', 'format=rgba', 'noise=', 'eq='))
+    # Static mask/shadow generation happens *after* concatenating the 60 shots.
+    assert graph.count('geq=lum=') == 1
+    assert graph.count('boxblur=') == 1
+    assert graph.count('drawbox=') == 1
+    assert graph.count('loop=loop=179:size=1') == 2
+    assert all(name not in graph for name in ('tpad=', 'noise=', 'colorchannelmixer='))
     assert command.count('libx264')==1  # still one final encode
     assert command[command.index('-frames:v')+1]=='180'
 
@@ -106,7 +113,10 @@ def test_gap_mode_preserves_intervals_and_light_mirror_is_seeded(tmp_path):
         same=pip.build_pip_cmd(tmp_path/'base.mp4',entries,out,seed=1)
     graph=cmd[cmd.index('-filter_complex')+1]
     assert graph==same[same.index('-filter_complex')+1]
-    assert graph.count('overlay=')==2 and 'concat=' not in graph
+    # Two intervals: each gets one small compositing overlay and one main overlay.
+    assert graph.count('overlay=') == 4 and 'concat=' not in graph
+    assert graph.count('boxblur=') == 2
+    assert graph.count('geq=lum=') == 2
     assert 'hflip' in graph and 'between(t,3.000' in graph
 
 # Regression DEV-467: PiP standard geometry/pixel variation was removed in PR #115.
@@ -145,10 +155,14 @@ def test_restored_per_segment_standard_variation_is_deterministic(tmp_path, cont
     first = filtergraph(command(2026))
     assert first == filtergraph(command(2026))
     assert first != filtergraph(command(2027))
-    assert any(name in first for name in ("eq=", "noise=", "colorchannelmixer="))
-    # No separate per-segment full-frame overlays or the expensive old shadow/geq.
-    assert first.count("overlay=") == (1 if continuous else 2)
-    assert all(name not in first for name in ("geq=", "boxblur=", "tpad="))
+    # Static feather uses geq=lum; require an actual dedup pixel effect, not the mask.
+    assert any(name in first for name in (",eq=", ",noise=", ",colorchannelmixer="))
+    # Continuous mode: only one full-size overlay; static styling adds
+    # one small compositing overlay. Gap mode has one pair per visible segment.
+    assert first.count("overlay=") == (2 if continuous else 4)
+    assert first.count("geq=lum=") == (1 if continuous else 2)
+    assert first.count("boxblur=") == (1 if continuous else 2)
+    assert "tpad=" not in first
     small_w = pip._even(info.width * config.MONTAGE_PIP_SCALE)
     small_h = pip._even(small_w * 16 / 9)
     for i in range(len(entries)):
@@ -159,7 +173,7 @@ def test_restored_per_segment_standard_variation_is_deterministic(tmp_path, cont
     # The old public API with no seed still doesn't inject extra perturbation.
     plain = filtergraph(command(None))
     assert all(name not in plain for name in
-               ("eq=", "noise=", "colorchannelmixer=", "unsharp="))
+               (",eq=", ",noise=", ",colorchannelmixer=", ",unsharp="))
 
 
 @pytest.mark.skipif(
@@ -222,3 +236,79 @@ def test_restored_pip_variation_visible_in_decoded_short_video(tmp_path):
         control = original[frame_num][25:85, 99:146]
         restored = affected[frame_num][25:85, 99:146]
         assert np.count_nonzero(cv2.absdiff(control, restored)) > 0
+
+
+@pytest.mark.skipif(
+    not (shutil.which("ffmpeg") and shutil.which("ffprobe")),
+    reason="real feather and shadow QA needs FFmpeg",
+)
+@pytest.mark.parametrize("continuous", [True, False])
+def test_feathered_pip_has_real_soft_edges_and_shadow(tmp_path, continuous):
+    """Encode and fully decode the real compositor; check corners, halo and gaps."""
+    import subprocess
+
+    ffmpeg = shutil.which("ffmpeg")
+    background = tmp_path / "background.mp4"
+    shot = tmp_path / "small.mp4"
+    final = tmp_path / "composed.mp4"
+
+    def make(path, color):
+        run = subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+             "-f", "lavfi", "-i", f"color=c={color}:s=160x284:r=30:d=2",
+             "-an", "-c:v", "libx264", "-preset", "veryfast",
+             "-pix_fmt", "yuv420p", str(path)],
+            capture_output=True, timeout=45,
+        )
+        assert run.returncode == 0, run.stderr.decode("utf-8", "replace")
+
+    make(background, "gray")
+    make(shot, "red")
+    if continuous:
+        entries = [
+            dict(item=pip.PipItem(shot, 2), start=0, duration=1, offset=0, allow_short=True),
+            dict(item=pip.PipItem(shot, 2), start=1, duration=1, offset=0.4, allow_short=True),
+        ]
+    else:
+        entries = [
+            dict(item=pip.PipItem(shot, 2), start=0.3, duration=0.6, offset=0, allow_short=True),
+            dict(item=pip.PipItem(shot, 2), start=1.2, duration=0.6, offset=0.4, allow_short=True),
+        ]
+
+    command = pip.build_pip_cmd(background, entries, final,
+                                canvas=(160, 284), fps=30, seed=None)
+    graph = command[command.index("-filter_complex") + 1]
+    assert graph.count("boxblur=") == (1 if continuous else 2)
+    if continuous:
+        assert graph.count("[bg][styledmerged]overlay=") == 1
+    else:
+        assert "[bg][styledseg0]overlay=" in graph
+        assert "[v0][styledseg1]overlay=" in graph
+    video = cv2.VideoCapture(str(final))
+    frames = []
+    try:
+        while True:
+            ok, frame = video.read()
+            if not ok:
+                break
+            assert frame.shape[:2] == (284, 160)
+            frames.append(frame)
+    finally:
+        video.release()
+    assert len(frames) == 60
+    # 160 wide / pip48 wide / 12px right margin -> original PiP starts at x=100.
+    # Pixel x=99 is just outside the PiP and should receive the soft shadow.
+    active = frames[15]
+    bg = active[65, 85].astype(float).mean()
+    halo = active[65, 99].astype(float).mean()
+    assert bg - halo >= 2, (bg, halo)
+    # Center of PiP is red; feathered leftmost edge is visibly softer.
+    center = active[65, 124]
+    edge = active[65, 100]
+    assert int(center[2]) > int(center[1]) + 45
+    assert int(edge[2]) < int(center[2]) - 20
+    if not continuous:
+        # Gap is truly empty: no lingering PiP or shadow outside enable windows.
+        gap = frames[32]
+        assert abs(gap[65, 124].astype(float).mean() -
+                   gap[65, 85].astype(float).mean()) <= 3

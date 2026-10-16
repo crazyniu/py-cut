@@ -279,6 +279,47 @@ def _ms(v: float) -> str:
     return f"{ms // 1000}.{ms % 1000:03d}"
 
 
+def _style_small_pip(parts: list[str], source: str, tag: str,
+                     width: int, height: int, fps: int, frames: int,
+                     start: float, feather: int, shadow: int,
+                     shadow_alpha: float) -> str:
+    """Add a feathered PiP with a blurred shadow, entirely at small-window size.
+
+    Feather/shadow geometry is constant for a batch. Render each static mask
+    *once* with FFmpeg and use a finite one-frame loop for the segment's
+    frame budget. Never clone or extend the actual PiP video frames.
+    The only additional overlay operates on the (small) padded shadow canvas.
+    """
+    frames = max(1, int(frames))
+    pts = f"setpts=N/({fps}*TB)+{_ms(start)}/TB"
+    fade = (f"(min(1\\,min(X\\,W-1-X)/{feather})"
+            f"+min(1\\,min(Y\\,H-1-Y)/{feather}))/2")
+    duration = 1.0 / fps
+    parts.append(
+        f"color=c=white:s={width}x{height}:r={fps}:d={duration:.9f},"
+        f"format=gray,geq=lum='255*{fade}',"
+        f"loop=loop={frames - 1}:size=1:start=0,{pts}[mask{tag}]"
+    )
+    parts.append(
+        f"color=c=black@0:s={width + 2 * shadow}x{height + 2 * shadow}:"
+        f"r={fps}:d={duration:.9f},format=rgba,"
+        f"drawbox=x={shadow}:y={shadow}:w={width}:h={height}:"
+        f"color=black@{shadow_alpha:.2f}:t=fill:replace=1,"
+        f"boxblur=lr=1:lp=0:cr=1:cp=0:ar={shadow}:ap=1,"
+        f"loop=loop={frames - 1}:size=1:start=0,{pts}[shadow{tag}]"
+    )
+    parts.append(f"[{source}]format=rgba[raw{tag}]")
+    parts.append(
+        f"[raw{tag}][mask{tag}]"
+        f"alphamerge=shortest=1:repeatlast=0[feather{tag}]"
+    )
+    parts.append(
+        f"[shadow{tag}][feather{tag}]overlay=x={shadow}:y={shadow}:"
+        f"format=auto:shortest=1:eof_action=endall:repeatlast=0[styled{tag}]"
+    )
+    return f"styled{tag}"
+
+
 def _clamp_entries(timeline: list[dict]) -> list[dict]:
     """把时间轴条目整理成可执行的输入列表，并按素材实际剩余时长截短。
 
@@ -455,6 +496,11 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
         from .dedup import montage_variation
         from .dedup_presets import derive_seed
         log(f"  [画中画去重] standard 几何/像素扰动已启用 · {len(entries)} 段（片段独立 seed）")
+    # Historical PiP feather/shadow values restored; draw them on the PiP-sized
+    # stream, never as extra full-screen overlays for every input segment.
+    feather = max(6, int(pip_w * config.MONTAGE_PIP_FEATHER))
+    shadow = max(2, int(pip_w * config.MONTAGE_PIP_SHADOW))
+    shadow_alpha = float(config.MONTAGE_PIP_SHADOW_ALPHA)
     labels = []
     for i, e in enumerate(entries):
         # 跟当前版本一样以 30% 的概率镜像，原标准档默认不会再做镜像，
@@ -488,8 +534,15 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
             start = e["start"]
             end = start + max(0.0, e["duration"] - 0.001)
             parts.append(f"[{i + 1}:v]{spatial}setpts=PTS-STARTPTS+{_ms(start)}/TB[pi{i}]")
+            styled = _style_small_pip(
+                parts, f"pi{i}", f"seg{i}", pip_w, pip_h, fps,
+                max(1, round(e["duration"] * fps) + 1), start,
+                feather, shadow, shadow_alpha)
+            # The padded shadow extends beyond the unchanged PiP picture
+            # boundaries. Compensate its padding so the picture stays aligned.
             parts.append(
-                f"[{cur}][pi{i}]overlay=x=W-w-{margin_x}:y={margin_y}"
+                f"[{cur}][{styled}]"
+                f"overlay=x=W-w-{margin_x}+{shadow}:y={margin_y}-{shadow}"
                 f":enable='between(t,{_ms(start)},{_ms(end)})'"
                 f":eof_action=pass:repeatlast=0:shortest=0[v{i}]"
             )
@@ -502,14 +555,21 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
         parts.append(f"[pipcheck]select='eq(n,{budget - 1})',"
                      f"metadata=mode=add:key=pycut.complete:value=1,"
                      f"metadata=mode=print:file='pipe\\:2',nullsink")
-        parts.append(f"[bg][pipvisible]overlay=x=W-w-{margin_x}:y={margin_y}"
-                     f":eof_action=pass:repeatlast=0:shortest=0[vmerged]")
+        styled = _style_small_pip(
+            parts, "pipvisible", "merged", pip_w, pip_h, fps,
+            budget, 0.0, feather, shadow, shadow_alpha)
+        # This is still the sole full-size overlay in the continuous mode.
+        parts.append(
+            f"[bg][{styled}]"
+            f"overlay=x=W-w-{margin_x}+{shadow}:y={margin_y}-{shadow}"
+            f":eof_action=pass:repeatlast=0:shortest=0[vmerged]")
         cur = "vmerged"
     parts.append(f"[{cur}]{subtitle_filter}[vout]")
     fcomplex = ";".join(parts)
 
     log(f"  [画中画] {len(entries)} 段/ 画中画 {pip_w}x{pip_h}"
-        f" / 右上角留白 x={margin_x} y={margin_y}")
+        f" / 右上角留白 x={margin_x} y={margin_y}"
+        f" / 羽化 {feather}px / 阴影 {shadow}px")
 
     cmd += [
         "-filter_complex", fcomplex,

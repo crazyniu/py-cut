@@ -285,6 +285,10 @@ MONTAGE_PIP_SCALE = 0.30            # 截图布局：216×384 的固定竖屏小
 MONTAGE_PIP_MARGIN = 0.08           # 距右边留白比例
 MONTAGE_PIP_TOP_MARGIN = 0.075      # 距上边留白比例
 MONTAGE_PIP_CONTINUOUS = True       # 画中画首尾相接（不设空档，实测设空档会有 19% 时间没有）
+# 恢复 PR #115 前的视觉参数；羽化/投影只在小窗上生成，不做逐段全画幅 overlay。
+MONTAGE_PIP_FEATHER = 0.22          # 边缘羽化宽度 = 小窗宽度的 22%
+MONTAGE_PIP_SHADOW = 0.035         # 投影扩散 = 小窗宽度的 3.5%
+MONTAGE_PIP_SHADOW_ALPHA = 0.45    # 投影不透明度
 MONTAGE_STICKER_DIR = _path("PYCUT_STICKER_DIR", DESKTOP / "混剪_贴纸")   # 贴纸素材目录（png/jpg/webp）
 # 贴纸叠加（用户要求：背面半透明 + 四角透明，让贴纸融进主画面而不是硬贴上去）
 MONTAGE_STICKER_CHANCE = 0.65      # 每个片段叠贴纸的概率（用户要求「给主画面增加贴纸」，
