@@ -242,7 +242,7 @@ def _current_montage_stage(events: dict) -> dict | None:
         if name in names:
             event = events[name]
             if isinstance(event.get("total"), int) and event["total"] > 0:
-                return event
+                return {"stage": name, **event}
     return None
 
 
