@@ -66,7 +66,7 @@ class SinglePassPipTests(unittest.TestCase):
             builder.assert_called_once()
             runner.assert_not_called()  # 构造函数本身已经执行 FFmpeg，不能再运行 argv
             if fail:
-                self.assertEqual(result.get("error"), "步骤C 失败")
+                self.assertEqual(result.get("error"), "步骤C 画中画叠加失败: PiP render failed")
                 self.assertEqual(final.read_bytes(), b"old good result" * 200)
             else:
                 self.assertNotIn("error", result)

@@ -6,15 +6,15 @@
 三个公开函数各管一段：
     `scan_dedup_pool`     —— 递归扫描去重素材池，按最短时长过滤
     `plan_pip_timeline`   —— 在成片时间轴上规划互不重叠的画中画区间
-    `build_pip_cmd`       —— 拼并执行 ffmpeg 命令（多条`-i` + 一条 filter_complex）
+    `build_pip_cmd`       —— 连续小窗流拼接、单次叠加及可选字幕，一次编码输出
 
 关键实现要点（都是踩过才知道的）：
   * **画中画必须用 `-ss/-t` 输入侧截取**：每个画中画是独立输入，各自 seek 互不干扰；
     输出侧 seek 会先解全部帧，47 条素材下慢到不可用。
   * **`setpts=PTS-STARTPTS+起点`不可省**：overlay 是拿主流时间戳去队列里配对的
     次流帧，不做时间平移的话，等enable 打开时次流已经播完了（黑屏/错位）。
-  * **`enable='between(t,起,止)'` 精确到区间**：这是「同一时刻只有一个画中画」的
-    实现方式——不靠多条命令拼，靠同一条filter_complex 里串联多个 overlay。
+  * **连续模式先 concat 小窗流，再 overlay 一次**；只有间隔模式按各自
+    `enable='between(t,起,止)'` 显示，保留用户显式留白。
   * **不得拉伸变形**：画中画用 `scale=宽:-2`，`-2` = 按源宽高比自动取偶数高。
   * **分辨率不得改变**：base 已是基准尺寸，只在尺寸不符时才插 `scale`，
     否则就是 AGENTS.md 里记的「二次重采样，白丢清晰度」。
@@ -48,6 +48,10 @@ PIP_MIN_SHOT = 0.8         # 短于此就不放（闪一下看不清，也白占
 # 编码参数
 PIP_X264_PRESET = "veryfast"
 PIP_CRF_DEFAULT = "20"
+# 多输入时不能让每路解码/每个滤镜各自按 CPU 数扩张线程。
+PIP_DECODER_THREADS = 1
+PIP_FILTER_THREADS = 1
+PIP_ENCODER_THREADS = min(4, os.cpu_count() or 1)
 ENC_TIMEOUT_PER_SEC = 20
 ENC_TIMEOUT_MIN = 240
 ENC_TIMEOUT_MAX = 3600
@@ -306,15 +310,26 @@ def _tmp_path(out: Path) -> Path:
     return out.with_name(f"{out.stem}.{os.getpid()}{TMP_SUFFIX}{out.suffix}")
 
 
+def _ffmpeg_error(stderr: str) -> str:
+    """保留首个根因和结束上下文，不只剩 Nothing was written。"""
+    lines = stderr.strip().splitlines()
+    if not lines:
+        return "无 FFmpeg 错误输出"
+    if len(lines) > 32:
+        lines = lines[:24] + [f"… 中间省略 {len(lines) - 32} 行 …"] + lines[-8:]
+    return "\n" + "\n".join(lines)
+
+
 def _encode_cmd(base: Path, tmp: Path, fcomplex: str,
                 crf: str, fps: int) -> list[str]:
     return [
         FFMPEG, "-y", "-loglevel", "error", "-nostdin",
-        "-i", str(base),
+        "-filter_complex_threads", str(PIP_FILTER_THREADS),
+        "-threads", str(PIP_DECODER_THREADS), "-i", str(base),
         "-filter_complex", fcomplex,
         "-map", "[vout]",
         "-an",                              # 最终成片必须静音
-        "-c:v", "libx264", "-preset", PIP_X264_PRESET,
+        "-c:v", "libx264", "-threads", str(PIP_ENCODER_THREADS), "-preset", PIP_X264_PRESET,
         "-crf", str(crf),
         "-pix_fmt", "yuv420p",
         "-r", str(fps), "-fps_mode", "cfr",
@@ -325,7 +340,8 @@ def _encode_cmd(base: Path, tmp: Path, fcomplex: str,
 
 def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
                   canvas=None, scale=None, margin=None, fps=None,
-                  crf: str = PIP_CRF_DEFAULT, variation_seed: int | None = None) -> list[str]:
+                  crf: str = PIP_CRF_DEFAULT, seed: int | None = None,
+                  ass_path: Path | None = None) -> list[str]:
     """把画中画叠到 base 上，输出最终成片，返回**实际执行的** ffmpeg argv。
 
     `canvas`   —— 目标画布，默认取 base 自身的宽高（必须与 base 一致）
@@ -362,6 +378,12 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
                           else config.MONTAGE_PIP_TOP_MARGIN), lo=0)
     pip_h = _even(pip_w * 16 / 9)
 
+    subtitle_filter = "null"
+    if ass_path is not None:
+        from .montage_subtitles import _escape_filter_path
+        if not Path(ass_path).is_file():
+            raise ValueError(f"字幕文件不存在: {ass_path}")
+        subtitle_filter = f"subtitles=filename='{_escape_filter_path(ass_path)}'"
     entries = _clamp_entries(timeline)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = _tmp_path(out)
@@ -372,7 +394,13 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
             cmd = [FFMPEG, "-y", "-loglevel", "error", "-nostdin",
                    "-i", str(base), "-map", "0:v:0", "-an",
                    "-c:v", "copy", "-movflags", "+faststart", str(tmp)]
+            if ass_path is not None:
+                cmd = _encode_cmd(base, tmp,
+                                  f"[0:v]scale={W}:{H}:flags=bicubic,setsar=1[bg];[bg]{subtitle_filter}[vout]",
+                                  crf, fps)
             rc, _out, err = run_cmd(cmd, timeout=ENC_TIMEOUT_MAX)
+            if ass_path is not None and (rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024):
+                raise RuntimeError(f"画面与字幕合成失败 rc={rc}: {_ffmpeg_error(err)}")
             if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:
                 log(f"  [画中画] -c copy 转存失败（rc={rc}），回退重编码")
                 # 不能让 copy 失败留下的半成品成为回退编码的输出。
@@ -386,7 +414,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
                 if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:
                     raise RuntimeError(
                         f"转存 base 失败 rc={rc}: "
-                        f"{err.strip().splitlines()[-1] if err.strip() else '无输出'}")
+                        f"{_ffmpeg_error(err)}")
             os.replace(str(tmp), str(out))
             return cmd
         finally:
@@ -396,10 +424,11 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
 
     # --- 输入：base 是第0 路，每个画中画各自 -ss/-t 输入侧精确截取 ---
     cmd: list[str] = [FFMPEG, "-y", "-loglevel", "error", "-nostdin",
-                      "-i", str(base)]
+                      "-filter_complex_threads", str(PIP_FILTER_THREADS),
+                      "-threads", str(PIP_DECODER_THREADS), "-i", str(base)]
     for e in entries:
         cmd += ["-ss", _ms(e["offset"]), "-t", _ms(e["duration"]),
-                "-i", str(e["path"])]
+                "-threads", str(PIP_DECODER_THREADS), "-i", str(e["path"])]
 
     # --- base 链：只有尺寸与目标不一致时才scale（避免二次重采样）---
     head = "setsar=1"
@@ -408,63 +437,49 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
 
     parts = [f"[0:v]{head}[bg]"]
     cur = "bg"
-    # --- 四角阴影：尺寸不变，只让边缘融进主画面 ---
-    # 实测直接 overlay 是生硬矩形块。这里在 PiP 自身上加一圈渐变 alpha
-    # （边缘与四角最透明、中心不透明）+ 一层向外扩散的黑色投影，
-    # 让它看起来「浮」在主画面上而不是「贴」上去。
-    # 羽化带取画中画短边的 22%（太窄看不出融合，太宽会吃掉画面内容）。
-    fade = max(6, int(pip_w * (config.MONTAGE_PIP_FEATHER or 0.22)))
-    sh = max(2, int(pip_w * (config.MONTAGE_PIP_SHADOW or 0.035)))   # 投影扩散
-    # 边缘权重取两方向**平均**（不是连乘）：连乘会让「距边 100px、带宽 41px」
-    # 处权重只剩 0.41，画中画主体会被压得半透明。平均后中心恒为 1。
-    fw = (f"(min(1\\,min(X\\,W-1-X)/{fade})"
-          f"+min(1\\,min(Y\\,H-1-Y)/{fade}))/2")
+    # 连续模式先拼成一条小窗视频流，再与主画面叠加一次，避免每帧
+    # 顺次穿过几十个全画布 overlay。不产生额外的中间编码。
+    budget = max(1, round(info.duration * fps))
+    continuous = abs(entries[0]["start"]) < .001 and all(
+        abs(right["start"] - (left["start"] + left["duration"])) < .002
+        for left, right in zip(entries, entries[1:])) and abs(
+            entries[-1]["start"] + entries[-1]["duration"] - info.duration) <= 1 / fps + .002
+    rng = random.Random(seed)
+    labels = []
     for i, e in enumerate(entries):
-        start = e["start"]
-        # enable 的结束点同样截断：宁可区间略短，也不能让 overlay 在素材
-        # 已播完的瞬间还开着（那正是黑屏出现的时刻）。
-        end = start + min(e["duration"], e["duration"] - 0.001)
-        # PiP 本体：四角羽化的 alpha（尺寸不变，只改边缘透明度）。
-        # setpts=PTS-STARTPTS+起点**必须保留**：overlay 靠主流时间戳去次流队列
-        # 配对，不平移时间轴的话，等 enable 打开时次流早已播完 -> 黑屏/错位。
-        variation = ""
-        if variation_seed is not None:
-            from .dedup import montage_variation
-            from .dedup_presets import derive_seed
-            _params, chain = montage_variation(pip_w, pip_h, derive_seed(variation_seed, "pip", i))
-            variation = chain + ","
-        parts.append(
-            f"[{i + 1}:v]fps={fps},scale={pip_w}:{pip_h}:force_original_aspect_ratio=increase,"
-            f"crop={pip_w}:{pip_h},setsar=1,{variation}format=rgba,"
-            f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
-            f"a='alpha(X,Y)*{fw}',"
-            f"setpts=PTS-STARTPTS+{_ms(start)}/TB[pp{i}]"
-        )
-        # 投影层：同一张 PiP 的纯黑副本，向外扩散 sh 像素并整体压低 alpha
-        parts.append(
-            f"[pp{i}]split=2[pi{i}][ps{i}];"
-            # 纯黑副本 + 扩散（boxblur 产生柔和外扩）
-            f"[ps{i}]colorchannelmixer=rr=0:gg=0:bb=0,"
-            f"boxblur={sh}:1,format=rgba,"
-            f"geq=r='0':g='0':b='0':"
-            f"a='{float(config.MONTAGE_PIP_SHADOW_ALPHA or 0.45):.2f}'[sh{i}]"
-        )
-        # 把「投影」和「本体」预先合成为一路（hstack 不合适，这里用
-        # 两个 overlay 顺序作用于同一 enable 区间）：
-        # 先叠纯黑扩散副本（阴影），再叠羽化后的本体。只做一次最终 overlay，
-        # 避免两个 enable 区间重复计算带来的时序错位。
-        parts.append(
-            f"[{cur}][sh{i}]overlay=x=W-w-{margin_x}:y={margin_y}:"
-            f"enable='between(t,{_ms(start)},{_ms(end)})'"
-            f":eof_action=repeat:shortest=0[sv{i}]"
-        )
-        parts.append(
-            f"[sv{i}][pi{i}]overlay=x=W-w-{margin_x}:y={margin_y}"
-            f":enable='between(t,{_ms(start)},{_ms(end)})'"
-            f":eof_action=repeat:shortest=0[v{i}]"
-        )
-        cur = f"v{i}"
-    parts.append(f"[{cur}]null[vout]")
+        # 仅轻量镜像；不做独立去重、逐像素模糊/羽化、阴影或噪声。
+        mirror = "hflip," if seed is not None and rng.random() < .3 else ""
+        spatial = (f"scale={pip_w}:{pip_h}:force_original_aspect_ratio=increase,"
+                   f"crop={pip_w}:{pip_h},setsar=1,{mirror}")
+        if continuous:
+            # 用累计边界量化帧数，不能逐段独立取整后累积时长误差。
+            start_frame = round(e["start"] * fps)
+            end_frame = budget if i == len(entries) - 1 else round((e["start"] + e["duration"]) * fps)
+            frames = end_frame - start_frame
+            if frames <= 0:
+                continue
+            parts.append(
+                f"[{i + 1}:v]fps={fps},{spatial}setpts=PTS-STARTPTS,"
+                f"tpad=stop_mode=clone:stop={frames},trim=end_frame={frames},"
+                f"setpts=PTS-STARTPTS[pi{i}]"
+            )
+            labels.append(f"[pi{i}]")
+        else:
+            start = e["start"]
+            end = start + max(0.0, e["duration"] - 0.001)
+            parts.append(f"[{i + 1}:v]{spatial}setpts=PTS-STARTPTS+{_ms(start)}/TB[pi{i}]")
+            parts.append(
+                f"[{cur}][pi{i}]overlay=x=W-w-{margin_x}:y={margin_y}"
+                f":enable='between(t,{_ms(start)},{_ms(end)})'"
+                f":eof_action=repeat:shortest=0[v{i}]"
+            )
+            cur = f"v{i}"
+    if continuous:
+        parts.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[piptrack]")
+        parts.append(f"[bg][piptrack]overlay=x=W-w-{margin_x}:y={margin_y}"
+                     f":eof_action=repeat:shortest=0[vmerged]")
+        cur = "vmerged"
+    parts.append(f"[{cur}]{subtitle_filter}[vout]")
     fcomplex = ";".join(parts)
 
     log(f"  [画中画] {len(entries)} 段/ 画中画 {pip_w}x{pip_h}"
@@ -474,7 +489,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
         "-filter_complex", fcomplex,
         "-map", "[vout]",
         "-an",                              # 最终成片必须静音
-        "-c:v", "libx264", "-preset", PIP_X264_PRESET,
+        "-c:v", "libx264", "-threads", str(PIP_ENCODER_THREADS), "-preset", PIP_X264_PRESET,
         "-crf", str(crf),
         "-pix_fmt", "yuv420p",
         "-r", str(fps), "-fps_mode", "cfr",
@@ -491,7 +506,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
         if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:
             raise RuntimeError(
                 f"画中画叠加失败 rc={rc}: "
-                f"{err.strip().splitlines()[-1] if err.strip() else '无输出'}")
+                f"{_ffmpeg_error(err)}")
         os.replace(str(tmp), str(out))
     finally:
         if tmp.is_file():
