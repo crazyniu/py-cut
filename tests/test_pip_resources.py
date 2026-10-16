@@ -26,7 +26,7 @@ def test_all_decoders_and_filter_encoder_threads_are_bounded(tmp_path):
     with mock.patch.object(pip,'probe_video',return_value=SimpleNamespace(width=720,height=1280,duration=6)),mock.patch.object(pip,'run_cmd',side_effect=encode):
         command=pip.build_pip_cmd(tmp_path/'base.mp4',timeline(tmp_path/'clip.mp4'),out)
     inputs=[i for i,arg in enumerate(command) if arg=='-i']
-    assert len(inputs)==61
+    assert len(inputs)==2  # base + one lazily-read lossless small-window track
     assert all(command[i-2:i]==['-threads','1'] for i in inputs)
     assert command[command.index('-filter_complex_threads')+1]=='1'
     assert command[command.index('libx264')+1:command.index('libx264')+3]==['-threads',str(pip.PIP_ENCODER_THREADS)]
@@ -34,7 +34,8 @@ def test_all_decoders_and_filter_encoder_threads_are_bounded(tmp_path):
     # Exactly one full-canvas overlay; the other is a small padded PiP/shadow overlay.
     assert graph.count('overlay=') == 2
     assert graph.count('[bg][styledmerged]overlay=') == 1
-    assert 'concat=n=60:v=1:a=0' in graph
+    assert 'concat' in command and '[1:v]setpts=' in graph
+    assert 'nullsink' not in graph  # inline marker must not consume PiP ahead of overlay
     # Static mask/shadow generation happens *after* concatenating the 60 shots.
     assert graph.count('geq=lum=') == 1
     assert graph.count('boxblur=') == 1
