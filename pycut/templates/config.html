@@ -6,23 +6,158 @@
 
 #directories .fields{grid-template-columns:minmax(0,1fr);gap:28px}.multi-directory{padding-top:22px;border-top:1px solid var(--line)}.multi-directory legend{font-size:16px;font-weight:550;width:100%;display:flex;justify-content:space-between;margin-bottom:0}.multi-directory small{margin:0 0 12px}.directory-list{display:flex;flex-direction:column;gap:10px}.directory-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px}.directory-row .field-error{grid-column:1/-1;margin:0}.remove-directory,.add-directory{border:1px solid var(--line);background:transparent;color:var(--muted);padding:9px 12px}.remove-directory:hover{color:var(--error);border-color:var(--error)}.add-directory{color:var(--accent);margin-top:12px;padding:7px 14px}.add-directory:hover{border-color:var(--accent)}.directory-row input{min-width:0}.multi-directory legend .optional{align-self:center}.multi-directory .field-error{white-space:pre-line}
 @media(max-width:480px){.input-row{gap:6px}.browse{padding:9px 11px}.directory-row{grid-template-columns:minmax(0,1fr) auto;gap:7px}.directory-row input{grid-column:1/-1}.directory-row .browse,.directory-row .remove-directory{min-height:40px}.directory-row{padding-bottom:12px;border-bottom:1px solid var(--line)}}
+
+/* DEV-464: compact, responsive configuration workspace */
+:root{
+  --bg:#101820;--surface:#1b2a35;--fg:#ebf1f4;--muted:#a9b8c5;
+  --line:#344958;--panel:#16232d;--accent:#89dccb;--error:#ffb6aa;
+  --savebar-height:88px;
+}
+html{scroll-padding-bottom:calc(var(--savebar-height) + 36px)}
+body{min-width:320px}
+main{max-width:1190px;padding:26px 32px calc(var(--savebar-height) + 48px)}
+.top{padding:0 0 18px;margin-bottom:22px}
+.brand{font-size:22px;letter-spacing:-.045em}
+.local{display:inline-flex;align-items:center;gap:8px}
+.local:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent);flex-shrink:0}
+.intro{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:24px}
+h1{font-size:28px;margin:0 0 5px}
+.intro p{margin:0;font-size:14px;line-height:1.5}
+.page-state{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;border:1px solid var(--line);background:var(--panel);border-radius:100px;padding:5px 12px;color:var(--muted);font-size:12px}
+.page-state:before{content:"";height:7px;width:7px;border-radius:50%;background:currentColor}
+.page-state[data-state="ready"]{color:var(--accent);border-color:#2c6059}
+.page-state[data-state="dirty"],.page-state[data-state="warning"]{color:#f4c889;border-color:#75603f}
+.page-state[data-state="error"]{color:var(--error);border-color:#84554f}
+.workspace{grid-template-columns:194px minmax(0,1fr);gap:32px}
+aside{top:22px}
+nav{gap:5px}
+nav button{position:relative;min-height:44px;border-radius:9px;padding:10px 14px 10px 18px}
+nav button[aria-pressed=true]{color:var(--fg);background:#203440;border-color:#3e5866}
+nav button[aria-pressed=true]:before{content:"";position:absolute;left:0;top:11px;bottom:11px;width:3px;border-radius:3px;background:var(--accent)}
+.aside-note{margin:20px 10px 0;padding:17px 12px 0;border-top:1px solid var(--line);font-size:12px;line-height:1.7}
+.aside-note strong{font-weight:600;margin-bottom:5px}
+.aside-note code{display:block;overflow-wrap:anywhere}
+.panel{min-width:0}
+.panel[hidden]{display:none}
+.panel fieldset{min-width:0}
+.panel>fieldset>legend{font-size:19px;line-height:1.35;margin-bottom:6px}
+.section-copy{font-size:13px;line-height:1.55;margin:0 0 17px;max-width:70ch}
+#directories .fields{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+#llm .fields{gap:16px}
+#directories .field:has(#PYCUT_REFERENCE_DIR){grid-column:1/-1}
+#directories .multi-directory{grid-column:1/-1}
+.field:not(.multi-directory){padding:15px 16px;background:var(--panel);border:1px solid #2d414f;border-radius:11px}
+.field label{margin:0 0 9px;align-items:center;font-size:14px;font-weight:620}
+.field label:empty{display:none}
+.optional{font-size:11px;line-height:1.4;border:1px solid var(--line);border-radius:5px;padding:2px 7px;color:var(--muted);white-space:nowrap}
+.optional:empty{display:none}
+.optional.is-required{border-color:#396e63;color:var(--accent)}
+.field input{min-height:42px;border-radius:7px;padding:8px 12px;background:#1d2d39;border-color:#435866}
+.field input:focus{border-color:var(--accent);outline:2px solid #88daca60;outline-offset:0}
+.input-row{gap:8px;align-items:stretch}
+.browse,.remove-directory{min-height:42px;white-space:nowrap;border-radius:7px;padding:8px 12px}
+.browse:hover,.add-directory:hover{background:#24423f}
+.browse:disabled{opacity:.55;cursor:wait}
+.field small,.multi-directory small{line-height:1.5;color:var(--muted);font-size:12px}
+.field small{margin-top:8px}
+.multi-directory{min-width:0;padding:14px 16px 15px;border:1px solid #2d414f;border-radius:11px;background:var(--panel)}
+.multi-directory legend{width:auto;max-width:100%;display:flex;gap:12px;align-items:center;margin-bottom:0;padding:0 5px;font-size:14px;font-weight:630}
+.multi-directory legend .optional{align-self:center}
+.multi-directory small{margin:1px 0 11px}
+.directory-list{gap:7px;min-width:0}
+.directory-list:empty:before{content:"尚未添加目录";display:block;padding:10px 12px;border:1px dashed var(--line);color:var(--muted);font-size:12px;border-radius:7px}
+.directory-row{grid-template-columns:minmax(0,1fr) auto auto;gap:7px;align-items:start;min-width:0}
+.directory-row input{min-width:0}
+.directory-row .field-error{align-self:stretch}
+.remove-directory{border:1px solid #415363;color:var(--muted);background:transparent}
+.remove-directory:hover{background:#3d3031}
+.add-directory{margin-top:9px;padding:7px 12px;min-height:36px;border:1px dashed #52746f;color:var(--accent);border-radius:7px}
+.add-directory:hover{border-style:solid}
+.notice{border-radius:8px;padding:10px 12px;font-size:12px;background:#322b20;border-color:#665238;color:#f0cf9c;margin-bottom:16px}
+.field-error{font-size:12px;line-height:1.45}
+.bottom{z-index:12;padding:12px 32px calc(12px + env(safe-area-inset-bottom));border-color:#344c57;background:#1b2a35ef;box-shadow:0 -8px 30px #080f15b8;backdrop-filter:blur(14px)}
+.bottom-inner{max-width:1126px}
+#status{font-size:13px;line-height:1.4}
+.save-note{font-size:11px;margin-top:3px}
+.primary{min-height:42px;padding:8px 23px;border-radius:8px}
+.primary:disabled{opacity:.52}
+:where(input,button,.field){scroll-margin-bottom:calc(var(--savebar-height) + 32px)}
+@media(min-width:1090px){
+  #directories .multi-directory[data-key="PYCUT_PIP_DIR"],
+  #directories .multi-directory[data-key="PYCUT_INTRO_DIR"]{grid-column:auto}
+  #directories .multi-directory[data-key="PYCUT_PIP_DIR"] .directory-row,
+  #directories .multi-directory[data-key="PYCUT_INTRO_DIR"] .directory-row{
+    grid-template-columns:minmax(0,1fr) auto auto;gap:5px
+  }
+  #directories .multi-directory[data-key="PYCUT_PIP_DIR"] .browse,
+  #directories .multi-directory[data-key="PYCUT_INTRO_DIR"] .browse,
+  #directories .multi-directory[data-key="PYCUT_PIP_DIR"] .remove-directory,
+  #directories .multi-directory[data-key="PYCUT_INTRO_DIR"] .remove-directory{padding:8px}
+}
+@media(max-width:900px){
+  main{padding:22px 24px calc(var(--savebar-height) + 36px)}
+  .workspace{grid-template-columns:160px minmax(0,1fr);gap:24px}
+  #directories .fields{grid-template-columns:minmax(0,1fr)}
+  #directories .multi-directory{grid-column:1}
+}
+@media(max-width:760px){
+  .workspace{grid-template-columns:minmax(0,1fr);gap:20px}
+  aside{position:static}
+  nav{flex-direction:row;border-bottom:1px solid var(--line);padding-bottom:8px}
+  nav button{flex:1;text-align:center}
+  nav button[aria-pressed=true]:before{top:auto;bottom:-9px;left:20%;right:20%;height:3px;width:auto}
+  .aside-note{display:none}
+  .fields{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .bottom{padding-left:24px;padding-right:24px}
+}
+@media(max-width:520px){
+  main{padding:18px 16px calc(var(--savebar-height) + 36px)}
+  .top{padding-bottom:13px;margin-bottom:20px}
+  .brand{font-size:20px}
+  .local{font-size:11px}
+  .intro{align-items:start;gap:10px;margin-bottom:20px}
+  h1{font-size:24px}
+  .intro p{font-size:13px}
+  .page-state{font-size:11px;padding:4px 7px}
+  .fields,#llm .fields{grid-template-columns:minmax(0,1fr);gap:12px}
+  .field:not(.multi-directory),.multi-directory{padding:13px}
+  .directory-row{grid-template-columns:minmax(0,1fr) auto auto}
+  .directory-row input{grid-column:1/-1}
+  .directory-row .browse{grid-column:2}
+  .directory-row .remove-directory{grid-column:3}
+  .directory-row .field-error{grid-column:1/-1}
+  .bottom{padding:9px 16px calc(9px + env(safe-area-inset-bottom))}
+  .bottom-inner{gap:10px}
+  #status{font-size:12px}
+  .save-note{font-size:10px}
+  .primary{padding:8px 14px;min-height:40px}
+}
+@media(prefers-reduced-motion:no-preference){
+  nav button,.browse,.remove-directory,.add-directory,.primary{transition:background-color .12s,border-color .12s,color .12s}
+}
+
 </style></head>
 <body><main><header class="top"><span class="brand">pycut</span><span class="local">本机配置 · 自动读取 .env</span></header>
-<div class="intro"><h1>视频处理配置</h1><p>设置素材目录和 LLM 网关，保存后回到终端开始处理。</p></div>
+<div class="intro"><div><h1>视频处理配置</h1><p>配置本机视频素材目录和 LLM 网关，保存后返回终端执行任务。</p></div><span id="page-state" class="page-state" data-state="loading">正在读取</span></div>
 <div class="workspace"><aside><nav aria-label="配置分类"><button type="button" aria-pressed="true" aria-controls="directories" data-panel="directories">视频目录</button><button type="button" aria-pressed="false" aria-controls="llm" data-panel="llm">LLM 网关</button></nav><p class="aside-note"><strong>配置文件</strong><code id="location">正在读取…</code><br><br>也可以直接编辑 .env。每次开始任务都会重新读取配置。</p></aside>
 <form id="config"><div id="overrides" class="notice"></div><section id="directories" class="panel" aria-label="视频目录"><fieldset><legend>视频目录</legend><p class="section-copy">填写运行 pycut 这台机器上的目录路径，或点「选择…」打开系统文件夹窗口；相对路径以项目根目录为准。</p><div class="fields">DIRECTORY_FIELDS</div></fieldset></section><section id="llm" class="panel" aria-label="LLM 网关" hidden><fieldset><legend>LLM 网关</legend><p class="section-copy">用于人脸兜底和字幕定位。备用网关可选，密钥不会回显。</p><div class="fields">LLM_FIELDS</div></fieldset></section></form></div></main>
 <footer class="bottom"><div class="bottom-inner"><div class="status-wrap"><p id="status" role="status" aria-live="polite">正在读取配置…</p><div class="save-note">保存到项目 .env，处理任务开始时生效</div></div><button type="submit" form="config" id="save" class="primary" disabled>保存配置</button></div></footer>
 <script>
 const token=TOKEN_VALUE, labels=FIELD_LABELS, multiFields=MULTI_FIELDS, form=document.getElementById('config'), status=document.getElementById('status'), save=document.getElementById('save');
 let dirty=false,loading=true,saving=false,revision=0;
-function selectPanel(id){document.querySelectorAll('.panel').forEach(p=>p.hidden=p.id!==id);document.querySelectorAll('[data-panel]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.panel===id)));}
+const pageState=document.getElementById('page-state');
+function markState(label,kind){pageState.textContent=label;pageState.dataset.state=kind;}
+const bottom=document.querySelector('.bottom');
+function measureBottom(){document.documentElement.style.setProperty('--savebar-height',Math.ceil(bottom.getBoundingClientRect().height)+'px');}
+measureBottom();if('ResizeObserver' in window)new ResizeObserver(measureBottom).observe(bottom);
+function selectPanel(id){document.querySelectorAll('.panel').forEach(p=>p.hidden=p.id!==id);document.querySelectorAll('[data-panel]').forEach(b=>{const active=b.dataset.panel===id;b.setAttribute('aria-pressed',String(active));if(active)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});}
 document.querySelectorAll('[data-panel]').forEach(b=>b.addEventListener('click',()=>selectPanel(b.dataset.panel)));
 function showOverrides(fields){document.getElementById('overrides').textContent=fields.length?'外部环境变量优先：'+fields.join('、')+'。修改 .env 后，请移除对应环境变量并重启程序以生效。':'';}
 let directoryRowId=0;
 function directoryInputs(key){return Array.from(document.querySelector(`.directory-list[data-key="${key}"]`).querySelectorAll('input'));}
 function syncDirectories(key){const values=[...new Set(directoryInputs(key).map(input=>input.value.trim()).filter(Boolean))];form.elements[key].value=values.length?JSON.stringify(values):'';}
 function clearProblems(key){document.getElementById(key+'-error').textContent='';if(multiFields.includes(key)){document.querySelector(`.add-directory[data-key="${key}"]`).removeAttribute('aria-invalid');for(const input of directoryInputs(key)){input.removeAttribute('aria-invalid');document.getElementById(input.id+'-error').textContent='';}}else form.elements[key].removeAttribute('aria-invalid');}
-function changed(key){dirty=true;revision++;status.className='';status.textContent='有未保存的修改';save.disabled=loading||saving;if(key)clearProblems(key);}
+function changed(key){dirty=true;revision++;status.className='';status.textContent='有未保存的修改';markState('未保存','dirty');save.disabled=loading||saving;if(key)clearProblems(key);}
 function numberDirectoryRows(key){directoryInputs(key).forEach((input,i)=>{input.setAttribute('aria-label',`${labels[key]} 第${i+1}个目录`);input.closest('.directory-row').querySelector('.remove-directory').setAttribute('aria-label',`移除${labels[key]} 第${i+1}个目录`);});}
 function addDirectory(key,value='',focus=false){
  const list=document.querySelector(`.directory-list[data-key="${key}"]`),row=document.createElement('div');row.className='directory-row';
@@ -45,8 +180,8 @@ function showProblems(problems){
 }
 form.addEventListener('input',e=>{const key=e.target.dataset.key||e.target.name;if(multiFields.includes(key))syncDirectories(key);changed(key);});
 window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
-async function load(){try{const r=await fetch('/api/config',{headers:{'X-Config-Token':token}});if(!r.ok)throw Error('读取失败');const data=await r.json();for(const [k,v] of Object.entries(data.values)){if(multiFields.includes(k))loadDirectories(k,v);else if(form.elements[k])form.elements[k].value=v;}for(const k of data.configured_keys)form.elements[k].placeholder='已配置，留空保持不变';document.getElementById('location').textContent=data.path;showOverrides(data.overrides);showProblems(data.problems);status.textContent=data.problems.length?`还有 ${data.problems.length} 项待配置`:'目录已就绪，可以返回终端开始处理';loading=false;}catch(e){status.className='error';status.textContent='读取失败，请刷新页面重试';}save.disabled=loading||!dirty;}
-form.addEventListener('submit',async e=>{e.preventDefault();if(loading||saving)return;saving=true;save.disabled=true;save.textContent='正在保存…';status.className='';status.textContent='正在保存配置…';const submittedRevision=revision;try{multiFields.forEach(key=>{syncDirectories(key);loadDirectories(key,form.elements[key].value);});const values=Object.fromEntries(new FormData(form));const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json','X-Config-Token':token},body:JSON.stringify(values)});const data=await r.json();showProblems(data.problems||[]);if(!r.ok){const invalid=form.querySelector('[aria-invalid=true]');if(invalid){selectPanel(invalid.closest('.panel').id);invalid.focus();}throw Error(data.error);}dirty=revision!==submittedRevision;showOverrides(data.overrides);status.textContent=dirty?'配置已保存；还有新修改未保存':data.problems.length?`已保存；还有 ${data.problems.length} 项待配置`:'已保存，目录已就绪。返回终端即可开始';if(!dirty)for(const key of multiFields)loadDirectories(key,data.values?.[key]??form.elements[key].value);if(!dirty)for(const input of form.querySelectorAll('input[type=password]')){if(input.value)input.placeholder='已配置，留空保持不变';input.value='';}}catch(e){status.className='error';status.textContent=e.message==='Failed to fetch'?'连接中断，请确认程序仍在运行后重试':e.message;}finally{saving=false;save.textContent='保存配置';save.disabled=loading||!dirty;}});load();
+async function load(){try{const r=await fetch('/api/config',{headers:{'X-Config-Token':token}});if(!r.ok)throw Error('读取失败');const data=await r.json();for(const [k,v] of Object.entries(data.values)){if(multiFields.includes(k))loadDirectories(k,v);else if(form.elements[k])form.elements[k].value=v;}for(const k of data.configured_keys)form.elements[k].placeholder='已配置，留空保持不变';document.getElementById('location').textContent=data.path;showOverrides(data.overrides);showProblems(data.problems);status.textContent=data.problems.length?`还有 ${data.problems.length} 项待配置`:'配置已加载，可以返回终端开始处理';markState(data.problems.length?'待完善':'已加载',data.problems.length?'warning':'ready');loading=false;}catch(e){status.className='error';status.textContent='读取失败，请刷新页面重试';markState('读取失败','error');}save.disabled=loading||!dirty;}
+form.addEventListener('submit',async e=>{e.preventDefault();if(loading||saving)return;saving=true;save.disabled=true;save.textContent='正在保存…';status.className='';status.textContent='正在保存配置…';markState('保存中','loading');const submittedRevision=revision;try{multiFields.forEach(key=>{syncDirectories(key);loadDirectories(key,form.elements[key].value);});const values=Object.fromEntries(new FormData(form));const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json','X-Config-Token':token},body:JSON.stringify(values)});const data=await r.json();showProblems(data.problems||[]);if(!r.ok){const invalid=form.querySelector('[aria-invalid=true]');if(invalid){selectPanel(invalid.closest('.panel').id);invalid.focus();}throw Error(data.error);}dirty=revision!==submittedRevision;showOverrides(data.overrides);status.textContent=dirty?'配置已保存；还有新修改未保存':data.problems.length?`已保存；还有 ${data.problems.length} 项待配置`:'配置已保存，返回终端即可开始';markState(dirty?'未保存':data.problems.length?'待完善':'已保存',dirty?'dirty':data.problems.length?'warning':'ready');if(!dirty)for(const key of multiFields)loadDirectories(key,data.values?.[key]??form.elements[key].value);if(!dirty)for(const input of form.querySelectorAll('input[type=password]')){if(input.value)input.placeholder='已配置，留空保持不变';input.value='';}}catch(e){status.className='error';status.textContent=e.message==='Failed to fetch'?'连接中断，请确认程序仍在运行后重试':e.message;markState('保存失败','error');}finally{saving=false;save.textContent='保存配置';save.disabled=loading||!dirty;}});load();
 let picking=false;
 async function openBrowse(button,key){
  if(picking||loading||saving)return;
@@ -64,4 +199,5 @@ async function openBrowse(button,key){
  finally{picking=false;document.querySelectorAll('.browse').forEach(b=>b.disabled=false);button.removeAttribute('aria-busy');if(button.isConnected)button.focus();}
 }
 form.addEventListener('click',e=>{const button=e.target.closest('.browse');if(button)openBrowse(button,button.dataset.key);});
+window.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'){e.preventDefault();if(dirty&&!loading&&!saving)form.requestSubmit();}});
 </script></body></html>
