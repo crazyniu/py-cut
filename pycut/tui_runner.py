@@ -288,7 +288,9 @@ def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
     visible = (["成片文件：" + path for path in batch.get("files", [])] if finished else []) + logs
     if visible:
         label = "生成文件与日志" if finished else "实时日志 · ↑↓/PgUp/PgDn 滚动（L 收起）"
-        if not show_details and not finished:
+        if status == "error" and not show_details:
+            label = "错误日志"
+        elif not show_details and not finished:
             label = "错误日志"
         tui._safe_add(stdscr, y - 1, 2, label, w,
                       "bad" if errors or status == "error" else "dim")
