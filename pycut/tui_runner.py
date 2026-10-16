@@ -252,6 +252,11 @@ def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
     tui._safe_add(stdscr, body + 3, 2,
                   f"[{'█' * filled}{'░' * (width - filled)}] {done * 100 // total}%", w, color)
     y = body + 5
+    # UI shows containing folders; retain batch["files"] as real published files
+    # for diagnostics, and do not collapse distinct output directories.
+    output_dirs = (list(dict.fromkeys(str(Path(file).parent)
+                                     for file in batch.get("files", [])))
+                   if finished else [])
     if not finished and status in ("running", "stopping"):
         if status == "stopping":
             activity = "正在停止当前处理，请稍候"
@@ -270,9 +275,9 @@ def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
             activity = f"第 {current} 个视频 · {action}{dots}"
         tui._safe_add(stdscr, body + 4, 2, activity, w, "info")
         y += 1
-    elif finished and batch.get("files"):
+    elif finished and output_dirs:
         tui._safe_add(stdscr, body + 4, 2,
-                      "最新成片：" + batch["files"][-1], w, "good")
+                      "输出目录：" + output_dirs[-1], w, "good")
         y += 1
     if batch.get("log_path"):
         tui._safe_add(stdscr, y, 2, "日志文件：" + batch["log_path"], w, "accent")
@@ -284,16 +289,19 @@ def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
     errors = [line for line in logs if re.search(r"\[(?:[^\]]*(?:失败|错误)|已停止)\]", line)]
     if not show_details and status != "error":
         logs = errors
-    # Finished paths remain visible by default; the full list can scroll on small screens.
-    visible = (["成片文件：" + path for path in batch.get("files", [])] if finished else []) + logs
+    # Show each *other* result folder once; the latest one is already above.
+    visible = (["输出目录：" + path for path in output_dirs[:-1]] if finished else []) + logs
     if visible:
-        label = "生成文件与日志" if finished else "实时日志 · ↑↓/PgUp/PgDn 滚动（L 收起）"
+        label = "其他输出目录与日志" if finished and len(output_dirs) > 1 else (
+            "详细日志" if finished else "实时日志 · ↑↓/PgUp/PgDn 滚动（L 收起）")
         if status == "error" and not show_details:
             label = "错误日志"
         elif not show_details and not finished:
             label = "错误日志"
-        tui._safe_add(stdscr, y - 1, 2, label, w,
+        # Draw the header on its own row, not over the log-file location.
+        tui._safe_add(stdscr, y, 2, label, w,
                       "bad" if errors or status == "error" else "dim")
+        y += 1
         rows = max(0, h - y - 2)
         offset = min(offset, max(0, len(visible) - rows))
         start = max(0, len(visible) - rows - offset)
