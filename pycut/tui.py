@@ -550,7 +550,7 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
 # ---------------------------------------------------------------------------
 def _reference_label(source: Path) -> str:
     try:
-        return str(source.relative_to(config.REFERENCE_DIR))
+        return str(source.resolve().relative_to(config.REFERENCE_DIR.resolve()))
     except ValueError:
         return source.name
 
@@ -816,7 +816,7 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
                + "\n递归支持 " + "/".join(ext[1:].upper() for ext in VIDEO_EXTS), "bad")
         return None
     files = [p for p in list_videos_recursive(config.REFERENCE_DIR, max_depth=None, raise_on_error=True)
-             if p.parent != config.REFERENCE_DIR]
+             if p.parent.resolve() != config.REFERENCE_DIR.resolve()]
     if not files:
         _flash(stdscr, "话术目录的子文件夹中没有视频：" + str(config.REFERENCE_DIR)
                + "\n例如：a/1.mp4 和 a/1.srt", "bad")
