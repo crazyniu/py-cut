@@ -194,7 +194,7 @@ def test_run_jobs_records_task_boundaries_and_interrupt_outcome(tmp_path):
          mock.patch.object(tui_runner, "_draw"), \
          mock.patch("curses.flushinp"):
         assert tui_runner.run_jobs(screen, jobs) == (130, False)
-    saved = list((tmp_path / (tmp_path.name + "_logs")).glob("*.log"))
+    saved = list((tmp_path.parent / (tmp_path.name + "_logs")).glob("*.log"))
     assert len(saved) == 1
     txt = saved[0].read_text(encoding="utf-8")
     assert "任务 1/1" in txt and "退出码 130" in txt and "[执行结果] 已中断" in txt
