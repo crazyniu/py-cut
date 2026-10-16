@@ -24,23 +24,23 @@ def test_full_keyboard_flow_requires_count_after_selection():
     assert '5 支成片' in rendered
 
 
-def test_multi_video_counts_and_invalid_zero_are_not_silently_defaulted():
+def test_one_count_applies_to_all_videos_and_invalid_zero_is_rejected():
     chosen=[Path('/a.mp4'),Path('/中文 第二支.mp4')]
     counts={str(p):1 for p in chosen}
-    terminal=screen([ord('0'),10,127,ord('5'),10,ord('1'),ord('2'),10])
+    terminal=screen([ord('0'),10,127,ord('5'),10])
     with mock.patch.object(tui,'_attr',return_value=0):
         assert tui._set_fission_counts(terminal,chosen,counts)
-    assert list(counts.values())==[5,12]
+    assert list(counts.values())==[5,5]
     assert any('请输入 1～99' in c.args[2] for c in terminal.addstr.call_args_list)
 
 
-def test_cancel_second_count_preserves_first_and_returns_selection():
+def test_cancel_shared_count_preserves_all_previous_values():
     chosen=[Path('/a.mp4'),Path('/b.mp4')]
     counts={str(p):1 for p in chosen}
-    terminal=screen([ord('5'),10,27])
+    terminal=screen([ord('5'),27])
     with mock.patch.object(tui,'_attr',return_value=0):
         assert not tui._set_fission_counts(terminal,chosen,counts)
-    assert counts=={str(chosen[0]):5,str(chosen[1]):1}
+    assert counts=={str(chosen[0]):1,str(chosen[1]):1}
 
 
 def test_final_review_back_keeps_counts_and_requires_reconfirmation():
@@ -51,3 +51,14 @@ def test_final_review_back_keeps_counts_and_requires_reconfirmation():
         commands=tui._wizard_montage(terminal,100)
     assert cli.build_parser().parse_args(commands[0]).fission==7
     assert select.call_count==1
+
+
+def test_two_videos_have_one_shared_prompt_and_equal_commands():
+    chosen = [Path('/素材/a/1.mp4'), Path('/素材/b/1.mp4')]
+    counts = {str(p): 1 for p in chosen}
+    terminal = screen([])
+    with mock.patch.object(config, 'CLIP_DIRS', [Path('/clips')]), mock.patch.object(config, 'PIP_DIRS', []), mock.patch.object(tui, '_attr', return_value=0), mock.patch('pycut.core.montage_clips._collect_files', return_value=chosen), mock.patch.object(tui, 'list_videos_recursive', return_value=chosen), mock.patch.object(tui, '_multi_select', return_value=(chosen, counts)), mock.patch.object(tui, '_prompt_int', return_value=12) as prompt, mock.patch.object(tui, '_confirm', return_value=True) as confirm:
+        commands = tui._wizard_montage(terminal, 100)
+    prompt.assert_called_once()
+    assert [cli.build_parser().parse_args(command).fission for command in commands] == [12, 12]
+    assert '24 支成片' in confirm.call_args.args[1][0][1]

@@ -130,10 +130,87 @@ def _draw_results(stdscr, results: list[dict], total: int, status: str,
     return start
 
 
+def _montage_plan(argv_list: list[list[str]]) -> dict | None:
+    """Count planned outputs from the actual commands, never from stage totals."""
+    if not argv_list or any(not args or args[0] != "montage" for args in argv_list):
+        return None
+    counts = []
+    for args in argv_list:
+        number = "1"
+        for i, arg in enumerate(args):
+            if arg == "--fission" and i + 1 < len(args):
+                number = args[i + 1]
+            elif arg.startswith("--fission="):
+                number = arg.partition("=")[2]
+        try:
+            counts.append(max(1, int(number)))
+        except ValueError:
+            return None
+    return {"counts": counts, "total": sum(counts), "completed": 0, "started_at": time.monotonic()}
+
+
+def _finished_videos(events: dict, planned: int) -> int:
+    # Only this event confirms complete, checked output files. Internal steps
+    # and attempted/failed variants must never increase the finished count.
+    return min(planned, events.get("裂变生成", {}).get("success", 0))
+
+
+def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
+                  status: str, progress: dict, elapsed: float,
+                  show_details: bool, finished: bool) -> int:
+    import curses
+    h, w = stdscr.getmaxyx()
+    if tui._small_screen(stdscr):
+        return offset
+    stdscr.erase()
+    body = tui._frame(stdscr, "混剪进度" if not finished else "混剪结果")
+    counts = batch["counts"]
+    total = batch["total"]
+    done = batch["completed"]
+    if not finished:
+        done += _finished_videos(progress, batch["current_planned"])
+    done = min(total, done)
+    per_video = f"每个生成 {counts[0]} 条" if len(set(counts)) == 1 else "按已确认数量生成"
+    color = "good" if status == "success" else "bad" if status == "error" else "warn" if status in ("cancelled", "stopping", "review") else "info"
+    labels = {"running": "正在生成", "success": "全部生成完成", "error": "生成已停止 · 有视频未完成",
+              "cancelled": "已中断", "stopping": "正在停止", "review": "生成结束 · 有待复查项"}
+    text = labels.get(status, status)
+    if status == "running":
+        elapsed = time.monotonic() - batch["started_at"]
+        text += f" · 已用时 {int(elapsed // 60)}分{int(elapsed % 60)}秒"
+    tui._safe_add(stdscr, body, 2, text, w, color, curses.A_BOLD)
+    tui._safe_add(stdscr, body + 1, 2, f"已选 {len(counts)} 个话术视频 · {per_video}", w, "text")
+    tui._safe_add(stdscr, body + 2, 2, f"需要生成 {total} 个视频 · 已生成 {done} 个", w, "text", curses.A_BOLD)
+    width = max(8, min(36, w - 15))
+    filled = done * width // total
+    tui._safe_add(stdscr, body + 3, 2,
+                  f"[{'█' * filled}{'░' * (width - filled)}] {done * 100 // total}%", w, color)
+    y = body + 5
+    logs = [line for line in history if not parse(line)]
+    errors = [line for line in logs if re.search(r"\[(?:[^\]]*(?:失败|错误)|已停止)\]", line)]
+    if not show_details and status != "error":
+        logs = errors
+    if logs and (show_details or errors or status == "error"):
+        tui._safe_add(stdscr, y - 1, 2, "错误日志" if not show_details else "日志", w, "bad" if errors or status == "error" else "dim")
+        rows = max(0, h - y - 2)
+        offset = min(offset, max(0, len(logs) - rows))
+        start = max(0, len(logs) - rows - offset)
+        for i, line in enumerate(logs[start:start + rows]):
+            tui._safe_add(stdscr, y + i, 2, line, w, "dim")
+    tui._footer(stdscr,
+                "Enter/Esc 返回主菜单 · Q 退出 · L 日志" if finished else "X 中止 · Ctrl+C 中断 · L 日志",
+                "Enter返回  Q退出  L日志" if finished else "X中止  L日志")
+    stdscr.refresh()
+    return offset
+
+
 def _draw(stdscr, argv: list[str], index: int, total: int,
-          history: deque[str], offset: int, status: str, progress: dict | None = None, elapsed: float = 0, show_details: bool = False, results: list[dict] | None = None) -> int | None:
+          history: deque[str], offset: int, status: str, progress: dict | None = None, elapsed: float = 0, show_details: bool = False, results: list[dict] | None = None, batch: dict | None = None) -> int | None:
     import curses  # noqa: PLC0415
 
+    if batch is not None:
+        return _draw_montage(stdscr, batch, history, offset, status, progress or {},
+                             elapsed, show_details, results is not None)
     if results is not None:
         return _draw_results(stdscr, results, total, status, history, offset, show_details)
     h, w = stdscr.getmaxyx()
@@ -230,7 +307,7 @@ def _terminate(proc: subprocess.Popen, *, force: bool = False) -> None:
 
 
 def _run_one(stdscr, argv: list[str], index: int, total: int,
-             history: deque[str]) -> tuple[int, bool]:
+             history: deque[str], batch: dict | None = None) -> tuple[int, bool]:
     """在新的进程组中执行 CLI；只由主线程操作 curses。"""
     cmd = [sys.executable, str(_ROOT / "pycut.py"), *argv]
     try:
@@ -293,7 +370,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
                     history.append(message)
                 break
             _draw(stdscr, argv, index, total, history, offset,
-                  "stopping" if interrupted_at is not None else "running", progress, time.monotonic() - started_at, show_details)
+                  "stopping" if interrupted_at is not None else "running", progress, time.monotonic() - started_at, show_details, batch=batch)
             try:
                 k = stdscr.getch()
             except KeyboardInterrupt:
@@ -354,16 +431,23 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
     last_argv = argv_list[0] if argv_list else []
     executed = 0
     results = []
+    batch = _montage_plan(argv_list)
     for i, argv in enumerate(argv_list, 1):
         last_argv = argv
         executed = i
         history.append(f"━━ 任务 {i}/{len(argv_list)}：{argv[0]} ━━")
         task_history: deque[str] = deque(maxlen=600)
-        code, cancelled = _run_one(stdscr, argv, i, len(argv_list), task_history)
+        if batch is not None:
+            batch["current_planned"] = batch["counts"][i - 1]
+            code, cancelled = _run_one(stdscr, argv, i, len(argv_list), task_history, batch=batch)
+        else:
+            code, cancelled = _run_one(stdscr, argv, i, len(argv_list), task_history)
         history.extend(task_history)
         results.append({"command": argv[0], "code": code or (130 if cancelled else 0),
                         "cancelled": cancelled,
                         "events": {e["stage"]: e for line in task_history if (e := parse(line))}})
+        if batch is not None:
+            batch["completed"] += _finished_videos(results[-1]["events"], batch["current_planned"])
         if cancelled and not code:
             code = 130
         if code:
@@ -388,7 +472,7 @@ def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
     show_details = False
     stdscr.timeout(-1)
     while True:
-        start = _draw(stdscr, last_argv, executed, len(argv_list), history, offset, status, show_details=show_details, results=results)
+        start = _draw(stdscr, last_argv, executed, len(argv_list), history, offset, status, show_details=show_details, results=results, batch=batch)
         if start is not None:
             offset = start
         try:

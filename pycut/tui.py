@@ -558,16 +558,14 @@ def _reference_label(source: Path) -> str:
 def _multi_select(stdscr, title: str, files: list[Path],
                   initial: tuple[list[Path], dict[str, int]] | None = None
                   ) -> tuple[list[Path], dict[str, int]] | None:
-    """多选视频列表 + 每个的裂变数量。返回 (选中列表, {路径: 裂变数})；Esc 返回 None。
-
-    空格勾选/取消；下一步逐视频输入数量；E或数字键可提前设置（默认1）；A 全选/取消全选。
-    """
+    """多选话术，下一步统一设置数量；返回时保留上次的共同数量。"""
     if not files:
         return None
     previous_files, previous_counts = initial if initial is not None else ([], {})
     previous_paths = {str(p) for p in previous_files}
     selected = {i for i, f in enumerate(files) if str(f) in previous_paths}
-    fission = {str(f): previous_counts.get(str(f), 1) for f in files}
+    shared_count = next(iter(previous_counts.values()), 1)
+    fission = {str(f): shared_count for f in files}
     sel = min(selected) if selected else 0
     while True:
         h, w = stdscr.getmaxyx()
@@ -576,8 +574,7 @@ def _multi_select(stdscr, title: str, files: list[Path],
                 return None
             continue
         stdscr.erase()
-        total = sum(fission[str(files[i])] for i in selected)
-        body = _frame(stdscr, title, f"{len(files)} 个视频 · 已选 {len(selected)} 个 · 预计输出 {total} 支")
+        body = _frame(stdscr, title, f"{len(files)} 个话术 · 已选 {len(selected)} 个 · 下一步统一设置数量")
 
         max_rows = max(1, h - body - 3)
         top = 0
@@ -593,17 +590,15 @@ def _multi_select(stdscr, title: str, files: list[Path],
             bcolor = "good" if checked else "muted"
             attr = curses.A_BOLD if active else curses.A_NORMAL
             name = _reference_label(f)
-            name = _ellipsize(name, w - 24)
+            name = _ellipsize(name, w - 11)
             _safe_add(stdscr, y, 3, mark, w, "accent" if active else "muted", attr)
             _safe_add(stdscr, y, 5, box, w, bcolor, attr)
             _safe_add(stdscr, y, 5 + 4, name, w,
                       "accent" if active else "text", attr)
-            n = fission.get(str(f), 1)
-            _safe_add(stdscr, y, w - 12, f"裂变 x{n}", w, "value", attr)
 
         _footer(stdscr,
-                "↑↓ 移动 · Space 多选 · ←/Esc 返回 · →/Enter 下一步 · E 裂变数量 · A 全选",
-                "↑↓移动  Space多选  ←返回  →下一步  E数量")
+                "↑↓ 移动 · Space 多选 · A 全选 · ←/Esc 返回 · →/Enter 设置统一数量",
+                "↑↓移动  Space多选  A全选  ←返回  →数量")
         stdscr.refresh()
 
         k = stdscr.getch()
@@ -624,14 +619,6 @@ def _multi_select(stdscr, title: str, files: list[Path],
                 selected.clear()
             else:
                 selected = set(range(len(files)))
-        elif k in (ord("e"), ord("E")):
-            p = str(files[sel])
-            n = _prompt_int(stdscr, h - 4, 2, w, "设置裂变数量",
-                            fission[p], 1, 99)
-            if n is not None:
-                fission[p] = n
-        elif ord("1") <= k <= ord("9"):
-            fission[str(files[sel])] = k - ord("0")
         elif k in (10, curses.KEY_ENTER, ord("\r"), curses.KEY_RIGHT, ord("l")):
             if not selected:
                 continue
@@ -641,20 +628,22 @@ def _multi_select(stdscr, title: str, files: list[Path],
 
 
 def _set_fission_counts(stdscr, chosen: list[Path], counts: dict[str, int]) -> bool:
-    """每个已选视频都明确输入数量；取消时保留已填值，返回上一步。"""
-    for index, source in enumerate(chosen, 1):
-        h, w = stdscr.getmaxyx()
-        stdscr.erase()
-        body = _frame(stdscr, "混剪 · 2/3 设置裂变数量",
-               f"第 {index}/{len(chosen)} 个视频 · 每个视频可生成 1～99 条")
-        _safe_add(stdscr, body, 2, _ellipsize(_reference_label(source), w - 4), w, "accent", curses.A_BOLD)
-        _safe_add(stdscr, body + 1, 2, "输入这支视频要生成的成片数量", w, "text")
-        _footer(stdscr, "Enter 保存数量并继续 · Esc 返回视频选择", "Enter 继续 · Esc 返回")
-        stdscr.refresh()
-        number = _prompt_int(stdscr, body + 3, 2, w, "生成条数", counts[str(source)], 1, 99)
-        if number is None:
-            return False
-        counts[str(source)] = number
+    """只输入一次，每个已选话术生成相同数量；取消不修改已保存值。"""
+    if not chosen:
+        return False
+    _, w = stdscr.getmaxyx()
+    stdscr.erase()
+    body = _frame(stdscr, "混剪 · 2/3 设置裂变数量",
+                  f"已选 {len(chosen)} 个话术 · 每个话术生成相同数量（1～99 条）")
+    _safe_add(stdscr, body, 2, "统一应用到所有选中的话术视频", w, "accent", curses.A_BOLD)
+    _safe_add(stdscr, body + 1, 2,
+              f"例如：每个生成 5 条，共生成 {len(chosen) * 5} 支成片", w, "text")
+    _footer(stdscr, "Enter 保存数量并继续 · Esc 返回视频选择", "Enter 继续 · Esc 返回")
+    stdscr.refresh()
+    number = _prompt_int(stdscr, body + 3, 2, w, "每个话术生成条数", counts[str(chosen[0])], 1, 99)
+    if number is None:
+        return False
+    counts.update((str(source), number) for source in chosen)
     return True
 
 

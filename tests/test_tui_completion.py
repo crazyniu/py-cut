@@ -18,7 +18,7 @@ def event(count, output='/结果', review=0):
 def test_all_command_end_states_wait_for_confirmation(command,code,cancelled,review,status):
     screen=mock.Mock()
     screen.getch.side_effect=[32,-1,10]
-    def run(_screen,_argv,_index,_total,history):
+    def run(_screen,_argv,_index,_total,history, **kwargs):
         history.append(event(3,review=review))
         return code,cancelled
     with mock.patch.object(tui_runner,'_run_one',side_effect=run),mock.patch.object(tui_runner,'_draw') as draw,mock.patch('curses.flushinp') as flush:
@@ -63,7 +63,7 @@ def test_actual_child_no_output_does_not_inherit_old_stages(tmp_path):
     screen.getch.return_value=-1
     history=deque([event(999)],maxlen=600)
     drawn=[]
-    with mock.patch.object(tui_runner,'_ROOT',tmp_path),mock.patch.object(tui_runner,'_draw',side_effect=lambda *args:drawn.append(args)):
+    with mock.patch.object(tui_runner,'_ROOT',tmp_path),mock.patch.object(tui_runner,'_draw',side_effect=lambda *args, **kwargs:drawn.append(args)):
         assert tui_runner._run_one(screen,['slice'],1,1,history)==(0,False)
     assert all(not args[7] for args in drawn)
 

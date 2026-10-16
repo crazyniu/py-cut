@@ -1,4 +1,4 @@
-"""执行真实配置模板的目录导航 JS；Node 仅用于开发验证，不是运行依赖。"""
+"""执行真实配置模板的原生目录选择 JS；Node 仅用于开发验证，不是运行依赖。"""
 from pathlib import Path
 import shutil
 import subprocess

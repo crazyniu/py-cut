@@ -51,31 +51,21 @@ class FissionTests(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def test_two_sources_show_sum_and_keep_individual_quantities(self):
-        first = Path("/tmp/甲.mp4")
-        second = Path("/tmp/乙.mp4")
-        screen = Screen([
-            ord(" "), ord("e"), ord("1"), ord("2"), 10,
-            curses.KEY_DOWN, ord(" "), ord("e"), ord("2"), 10, 10,
-        ])
-        chosen, fission = tui._multi_select(screen, "混剪", [first, second])
+    def test_selection_has_no_per_video_quantity_editor(self):
+        first, second = Path('/tmp/甲.mp4'), Path('/tmp/乙.mp4')
+        screen = Screen([ord('a'), ord('e'), ord('9'), curses.KEY_DOWN, 10])
+        chosen, counts = tui._multi_select(screen, '混剪', [first, second])
         self.assertEqual(chosen, [first, second])
-        self.assertEqual(fission, {str(first): 12, str(second): 2})
-        self.assertTrue(
-            any("预计输出 14 支" in value for _, _, value in screen.printed)
-        )
-        for file in chosen:
-            args = cli.build_parser().parse_args(
-                ["montage", "--source", str(file), "--fission", str(fission[str(file)])]
-            )
-            self.assertEqual(args.fission, fission[str(file)])
+        self.assertEqual(list(counts.values()), [1, 1])
+        self.assertTrue(any('下一步统一设置数量' in value for _, _, value in screen.printed))
+        self.assertFalse(any('裂变 x' in value for _, _, value in screen.printed))
 
-    def test_escape_during_integer_edit_keeps_selection_and_default(self):
-        first = Path("/tmp/甲.mp4")
-        screen = Screen([ord(" "), ord("e"), 27, 10])
-        chosen, values = tui._multi_select(screen, "混剪", [first])
-        self.assertEqual(chosen, [first])
-        self.assertEqual(values[str(first)], 1)
+    def test_newly_selected_video_inherits_shared_count_when_backtracking(self):
+        first, second = Path('/tmp/甲.mp4'), Path('/tmp/乙.mp4')
+        chosen, counts = tui._multi_select(Screen([ord('a'), 10]), '混剪', [first, second],
+                                          initial=([first], {str(first): 12}))
+        self.assertEqual(chosen, [first, second])
+        self.assertEqual(list(counts.values()), [12, 12])
 
     def test_out_of_range_is_visible_and_user_must_correct(self):
         screen = Screen([ord("0"), 10, 127, ord("9"), ord("9"), 10])
