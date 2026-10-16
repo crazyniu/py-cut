@@ -249,6 +249,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
     staged = final.with_name(
         f"{final.stem}.stage_{os.getpid()}_{threading.get_ident():x}.mp4")
     _unlink(working)
+    subtitles_combined = False
     try:
         if not opts.use_pip:
             log("--- 步骤C：--no-pip，跳过画中画 ---")
@@ -281,14 +282,22 @@ def run_pipeline(opts: MontageOptions) -> dict:
             # build_pip_cmd 不是纯命令构造器：它已经运行 FFmpeg、
             # 校验输出并原子发布到传入路径。不可再用 _publish_stage
             # 执行一次返回的 argv，否则画中画会被重复编码。
+            ass_path = None
             try:
+                if opts.srt and Path(opts.srt).is_file():
+                    ass_path = _prepare_subtitles(opts.srt, canvas, base_duration)
                 build_pip_cmd(base, timeline, working, canvas=canvas,
                               scale=opts.pip_scale, fps=config.MONTAGE_FPS,
-                              crf=opts.crf, variation_seed=seed)
+                              crf=opts.crf, seed=seed,
+                              **({"ass_path": ass_path} if ass_path is not None else {}))
+                subtitles_combined = ass_path is not None
             except (RuntimeError, ValueError, OSError) as exc:
                 log(f"  [失败] 画中画叠加失败: {exc}")
-                result["error"] = "步骤C 失败"
+                result["error"] = f"步骤C 画中画叠加失败: {exc}"
                 return result
+            finally:
+                if ass_path is not None:
+                    _unlink(ass_path)
             result["pip_count"] = len(timeline)
 
         if not working.is_file() or working.stat().st_size < 1024:
@@ -301,7 +310,10 @@ def run_pipeline(opts: MontageOptions) -> dict:
         # ---------------- 步骤D：字幕烧录（可选） ----------------
         # 顺序很关键：字幕烧录用 `-an`，所以**必须放在贴音轨之前**，
         # 否则刚贴上的基准音轨会被字幕这一步的 -an 抹掉（实测踩过：成片又变静音）。
-        if opts.srt and Path(opts.srt).is_file():
+        if subtitles_combined:
+            progress("混剪合成", 3, 5, detail="字幕已与画中画合并编码")
+            log("--- 步骤D：字幕已在画中画最终编码中完成 ---")
+        elif opts.srt and Path(opts.srt).is_file():
             progress("混剪合成", 3, 5, detail="烧录参考字幕")
             log("--- 步骤D：字幕烧录 ---")
             if _burn_subtitles(working, slots, canvas, opts):
@@ -380,7 +392,8 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 "background": [{k: p.get(k) for k in (
                     "take", "offset", "dedup_seed", "dedup_params", "mirror",
                     "speed", "sticker", "sticker_applied")} for p in picked],
-                "pip_variation_seed": seed if opts.use_pip else None,
+                "pip_variation_seed": None,
+                "pip_effects": "light_mirror" if opts.use_pip else None,
                 "transition_seconds": opts.seam_fade,
                 "sticker_sources": list(SOURCES) if opts.online_stickers else [],
                 "sticker_attribution": ATTRIBUTION if opts.online_stickers else None,
@@ -401,31 +414,35 @@ def run_pipeline(opts: MontageOptions) -> dict:
     finally:
         _unlink(working)
 
-def _burn_subtitles(video: Path, slots: list[tuple[float, float]],
-                    canvas: tuple[int, int], opts: MontageOptions) -> bool:
-    """按爆款字幕原时间轴烧录（字幕在底部，与右上角画中画不冲突）。"""
-    from ..core.montage_subtitles import (build_ass, build_subtitle_cmd,
-                                          parse_srt, subtitle_tmp_path)
-    import os  # noqa: PLC0415
-
-    cues = parse_srt(opts.srt)
+def _prepare_subtitles(srt, canvas: tuple[int, int], duration: float) -> Path:
+    """生成保留话术时间轴的 ASS，调用者负责结束后清理。"""
+    from ..core.montage_subtitles import build_ass, parse_srt, SubtitleCue
+    cues = parse_srt(srt)
     if not cues:
-        log("  [失败] 字幕解析为空")
-        return False
+        raise ValueError("字幕解析为空")
     # 成片保留爆款原声、总时长不变，字幕必须保留原时间戳。
-    duration = _duration(video)
-    from ..core.montage_subtitles import SubtitleCue
     subs = [SubtitleCue(c.index, max(0.0, c.start), min(duration, c.end), c.text)
             for c in cues if c.end > 0 and c.start < duration]
     if not subs:
-        log("  [失败] 没有可用的字幕-槽位对应")
-        return False
+        raise ValueError("没有处于话术时间轴内的字幕")
     log(f"  字幕 {len(subs)}/{len(cues)} 条，保留爆款原声时间轴")
 
     ass_path, style = build_ass(subs, canvas=canvas)
     log(f"  样式: {style.get('font_name', '?')} {style.get('font_size', 0):.0f}px "
         f"BorderStyle={config.MONTAGE_SUB_BORDER_STYLE}")
 
+    return Path(ass_path)
+
+
+def _burn_subtitles(video: Path, slots: list[tuple[float, float]],
+                    canvas: tuple[int, int], opts: MontageOptions) -> bool:
+    """无画中画时保留独立字幕编码；有画中画时复用同一 ASS 生成逻辑。"""
+    from ..core.montage_subtitles import build_subtitle_cmd, subtitle_tmp_path
+    try:
+        ass_path = _prepare_subtitles(opts.srt, canvas, _duration(video))
+    except (ValueError, OSError) as exc:
+        log(f"  [失败] 字幕准备失败：{exc}")
+        return False
     out = video.with_name(video.stem + "_sub.mp4")
     try:
         cmd = build_subtitle_cmd(video, Path(ass_path), out, crf=opts.crf,
