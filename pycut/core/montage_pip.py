@@ -67,11 +67,7 @@ class PipItem:
 # 素材池扫描
 # ---------------------------------------------------------------------------
 def _iter_mp4(root: Path):
-    """递归产出 mp4 路径。
-
-    用 `os.scandir` 而不是 `find -iname`——后者在 macOS 上会静默丢文件
-    （AGENTS.md 已记录）。目录不可读时跳过，不抛异常。
-    """
+    """合并多个根下的 MP4/MOV/M4V；目录访问失败交由调用方提示。"""
     from .scan import list_videos_recursive
     from .montage_clips import VIDEO_EXTS
     yield from (p for p in list_videos_recursive(root, max_depth=None, raise_on_error=True)

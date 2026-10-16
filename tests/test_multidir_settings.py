@@ -81,3 +81,27 @@ def test_malformed_environment_list_keeps_configuration_service_importable():
     with mock.patch.dict('os.environ', {'PYCUT_INTRO_DIR': '[invalid'}):
         assert config._configured_directories('PYCUT_INTRO_DIR') == []
         assert settings.problems({'PYCUT_INTRO_DIR': '[invalid'}, require_all=False)
+
+
+def test_montage_confirmation_keeps_total_visible_on_first_summary_row(tmp_path):
+    references = tmp_path / '话术'
+    clips = tmp_path / '切片'; clips.mkdir()
+    (clips / 'clip.mp4').touch()
+    chosen = []
+    for folder in ('a', 'b'):
+        path = references / folder / '1.mp4'; path.parent.mkdir(parents=True); path.touch(); chosen.append(path)
+    counts = {str(chosen[0]): 1, str(chosen[1]): 2}
+    with mock.patch.object(config, 'REFERENCE_DIR', references), \
+         mock.patch.object(config, 'CLIP_DIRS', [clips]), \
+         mock.patch.object(config, 'PIP_DIRS', []), \
+         mock.patch.object(config, 'INTRO_DIRS', []), \
+         mock.patch.object(tui, '_multi_select', return_value=(chosen, counts)), \
+         mock.patch.object(tui, '_set_fission_counts', return_value=True), \
+         mock.patch.object(tui, '_confirm', return_value=True) as confirm:
+        jobs = tui._wizard_montage(None, 60)
+    assert '共 3 支成片' in confirm.call_args.args[1][0][1]
+    assert len(jobs) == 2
+    for job in jobs:
+        args = cli.build_parser().parse_args(job)
+        assert settings.directories(args.clip_dir) == [clips]
+        assert args.no_pip

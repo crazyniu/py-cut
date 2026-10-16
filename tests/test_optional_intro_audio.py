@@ -17,7 +17,7 @@ def test_intro_not_required_and_web_labels_it_optional(tmp_path):
     values = {key: str(tmp_path) for key in settings.REQUIRED}
     assert 'PYCUT_INTRO_DIR' not in settings.REQUIRED
     assert settings.problems(values) == []
-    assert '可选' in web_config.page().split('for="PYCUT_INTRO_DIR"')[1].split('</label>')[0]
+    assert '可选' in web_config.page().split('data-key="PYCUT_INTRO_DIR"')[1].split('</legend>')[0]
 
 
 def test_empty_intro_preflight_and_late_scan_continue_but_scan_errors_fail(tmp_path):

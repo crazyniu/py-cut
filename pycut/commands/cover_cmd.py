@@ -16,7 +16,7 @@ from .. import config
 from ..core.ffmpeg import self_check
 from ..core.llm import make_llm
 from ..core.runtime import install_signal_handlers, reset_stop, STOP
-from ..core.subtitle import SAMPLES, WORKERS, collect_clips, process_clip, verified_clip
+from ..core.subtitle import SAMPLES, WORKERS, process_clip, verified_clip
 from ..core.progress import progress, completed_futures
 from ..core.utils import log
 
@@ -61,8 +61,6 @@ def _pick_clips(args: argparse.Namespace) -> list[Path]:
                 raise ValueError(f"输入文件不存在或不是普通文件: {file}")
             if file.suffix.lower() != ".mp4":
                 raise ValueError(f"字幕擦除只支持 MP4 文件: {file}")
-    else:
-        selected = collect_clips(None)
 
     # 同一个文件通过别名或重复参数出现时，不能并行写相同临时文件。
     unique: dict[Path, Path] = {}

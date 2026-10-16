@@ -843,14 +843,13 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
                 step = 1
                 continue
             step = 3
-        lines = [("混剪 · 3/3", "确认数量和素材后开始生成"),
+        lines = [("混剪 · 3/3", f"{len(chosen)} 个话术，共 {sum(fission[str(f)] for f in chosen)} 支成片"),
                  ("混剪切片", f"{len(clips)} 个目录 · {len(clip_files)} 个视频"),
                  ("画中画目录", _library_summary(pips)),
                  ("前贴目录", _library_summary(intros) if intros else "未配置，跳过"),
                  ("规格", "720×1280 · 9:16"),
                  ("原声", "正文使用话术原声，前贴保留自身原声"),
-                 ("输出", str(output)),
-                 ("生成数量", f"{len(chosen)} 个话术，共 {sum(fission[str(f)] for f in chosen)} 支成片")]
+                 ("输出", str(output))]
         lines += [(f"话术 {i}", f"{_reference_label(src)} × {fission[str(src)]}")
                   for i, src in enumerate(chosen, 1)]
         if not _confirm(stdscr, lines, [("叠加画中画", "关闭则不读取画中画素材", values[0])], values):

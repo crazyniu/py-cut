@@ -95,9 +95,9 @@ Windows 在 CMD 中使用 `run.cmd`（无参数进入 TUI），例如 `run.cmd c
 ./run.sh dedup --all --check            # 只自检，不产出
 
 # 3. 混剪：话术基准 -> 随机混剪 -> 画中画 -> 字幕 -> 贴原声
-./run.sh montage                        # 全流程
+./run.sh montage --source "话术/a/1.mp4" # 全流程
 ./run.sh montage --probe                # 先看素材库规模（竖屏/横屏/时长）
-./run.sh montage --seed 2026            # 固定结果可复现
+./run.sh montage --source "话术/a/1.mp4" --seed 2026 # 固定结果可复现
 ./run.sh montage --sticker-chance 0.9   # 贴纸更密
 ./run.sh montage --no-sub --no-sticker   # 只要干净画面
 ```
@@ -164,7 +164,7 @@ cp .env.example .env
 | `PYCUT_CLIP_DIR` | 混剪切片目录列表，也供字幕擦除、去重读取 |
 | `PYCUT_PIP_DIR` | 画中画切片目录列表；留空或取消叠加时不读取 |
 | `PYCUT_INTRO_DIR` | 可选前贴目录列表；全部目录没有视频时跳过 |
-| `PYCUT_OUTPUT_DIR` | 去重、混剪输出根目录，可自动创建 |
+| `PYCUT_OUTPUT_DIR` | 混剪成片输出根目录，可自动创建；独立处理另存输入同级 |
 | `PYCUT_STICKER_DIR` | 可选本地贴纸；空则沿用在线贴纸 |
 
 混剪切片、画中画和前贴均可点击“添加目录”，每行独立浏览、编辑或移除；合并递归扫描所有子目录，重叠路径和同一文件不会重复读取。`.env` 旧单路径保持兼容，多目录以单行 JSON 数组保存，例如 `PYCUT_CLIP_DIR='["/素材/切片一","/素材/切片二"]'`，不使用逗号或分号拆路径。CLI 对应参数可重复填写。话术列表显示相对路径以区分 `a/1.mp4` 与 `b/1.mp4`，字幕始终从视频同目录按同名匹配。
