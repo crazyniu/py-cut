@@ -15,6 +15,7 @@ from .ffmpeg import FFMPEG, probe_scalar
 from .llm import LLMClient
 from .runtime import STOP
 from .utils import log
+from .frame_sampling import FrameExtractionError, grab_frames
 
 SAMPLES = 5             # 每片段抽帧检测数（越多越能覆盖所有文字行）
 DETECT_WIDTH = 480      # 送检帧宽（足够 LLM 定位，省 token）
@@ -83,22 +84,28 @@ def detect_region(llm: LLMClient, clip: Path,
     clean_replies = 0
     uncertain_positive = 0
     frames = []
+    if STOP.flag:
+        raise RuntimeError("用户中断字幕检测")
+    if not getattr(llm, "enabled", True) and not getattr(llm, "_delegate", None):
+        raise SubtitleReviewNeeded("识别服务暂不可用")
+    times = [dur * (i + 0.5) / samples for i in range(samples)]
     with tempfile.TemporaryDirectory(prefix="subchk_") as td:
-        for i in range(samples):
-            if STOP.flag:
-                raise RuntimeError("用户中断字幕检测")
-            if time.monotonic() >= deadline:
-                raise SubtitleReviewNeeded("识别等待超时")
-            if not getattr(llm, "enabled", True) and not getattr(llm, "_delegate", None):
-                raise SubtitleReviewNeeded("识别服务暂不可用")
-            t = dur * (i + 0.5) / samples
-            jp = Path(td) / f"f{i}.jpg"
-            if not _grab_frame(clip, t, jp, timeout=max(0.01, deadline - time.monotonic())):
-                raise SubtitleReviewNeeded("采样帧提取不完整")
+        try:
+            paths = grab_frames(clip, times, Path(td), width=DETECT_WIDTH,
+                                timeout=max(0.01, deadline - time.monotonic()), ffmpeg=FFMPEG)
+        except FrameExtractionError as exc:
+            raise SubtitleReviewNeeded(str(exc)) from exc
+        if len(paths) != samples:
+            raise SubtitleReviewNeeded("采样帧提取不完整")
+        for jp in paths:
             frame = cv2.imread(str(jp))
             if frame is None:
                 raise SubtitleReviewNeeded("采样帧读取失败")
             frames.append(frame)
+    if STOP.flag:
+        raise RuntimeError("用户中断字幕检测")
+    if time.monotonic() >= deadline:
+        raise SubtitleReviewNeeded("识别等待超时")
     prompt = (DETECT_PROMPT + f"\n这里有 {samples} 张按时间顺序排列的独立图片。"
               "每张图片的坐标以该图片为准，不要拼接坐标。逐张检测，"
               '只返回 {"frames":[{"frame":0,"has_subtitle":true或false,'
@@ -287,7 +294,7 @@ def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
     mk.unlink(missing_ok=True)
     try:
         residual = detect_region(llm, clip, min(samples, 3))
-    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
+    except (RuntimeError, ValueError, OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
         log(f"  [待复查] {clip.name}: 复检不确定（{exc}）；继续处理")
         return "review"
     if residual is not None:

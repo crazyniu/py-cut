@@ -90,7 +90,7 @@ def test_detection_budget_is_shared_across_samples(tmp_path):
         deadlines.append(deadline)
         return {'frames':[{'frame':i,'has_subtitle':False} for i in range(len(frame))]}
     model = SimpleNamespace(enabled=True, ask_vision=ask)
-    with mock.patch.object(subtitle, 'probe_scalar', side_effect=lambda _, key:values[key]), mock.patch.object(subtitle, '_grab_frame', return_value=True), mock.patch.object(subtitle.cv2, 'imread', return_value=object()):
+    with mock.patch.object(subtitle, 'probe_scalar', side_effect=lambda _, key:values[key]), mock.patch.object(subtitle, 'grab_frames', side_effect=lambda clip,times,folder,**kw:[folder/f'f{i}.jpg' for i in range(len(times))]), mock.patch.object(subtitle.cv2, 'imread', return_value=object()):
         assert subtitle.process_clip(model, tmp_path/'clip.mp4') == 'nosub'
     assert len(deadlines) == 1
     assert len(set(deadlines)) == 1

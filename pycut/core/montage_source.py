@@ -29,6 +29,7 @@ from .. import config
 from .ffmpeg import FFMPEG, FFPROBE, probe_scalar
 from .dedup import _video_duration
 from .utils import log, run_cmd
+from .montage_clips import _probe_one
 
 # ffprobe 解析失败时的兜底帧率（本素材实测 30fps）
 FALLBACK_FPS = 30.0
@@ -179,7 +180,8 @@ def _merge_close(spans: list[tuple[float, float]]) -> list[tuple[float, float]]:
 def detect_speech_segments(path: Path, noise_db: float | None = None,
                            min_silence: float | None = None,
                            seg_min: float | None = None,
-                           seg_max: float | None = None) -> list[SpeechSegment]:
+                           seg_max: float | None = None, *,
+                           duration: float | None = None) -> list[SpeechSegment]:
     """用 ffmpeg silencedetect 提取语音段（已按 seg_min 过滤、超 seg_max 截断）。
 
     参数默认全部取config.MONTAGE_SILENCE_NOISE_DB / SILENCE_MIN_DUR /
@@ -190,7 +192,7 @@ def detect_speech_segments(path: Path, noise_db: float | None = None,
     seg_min = config.MONTAGE_SEG_MIN_DUR if seg_min is None else seg_min
     seg_max = config.MONTAGE_SEG_MAX_DUR if seg_max is None else seg_max
 
-    duration = _video_duration(Path(path))
+    duration = _video_duration(Path(path)) if duration is None else duration
     if duration <= 0:
         log(f"[步骤A] {Path(path).name}: 探测不到视频时长，语音段为空")
         return []
@@ -233,26 +235,23 @@ def probe_source(path: Path, *, noise_db: float | None = None,
         log(f"[步骤A] 基准视频不存在: {path}")
         return None
 
-    duration = _video_duration(path)
+    # 同一完整 JSON 查询同时获得视频时长、尺寸、帧率和音轨存在性。
+    # 背景、画中画、字幕检测共用文件身份校验的元数据缓存。
+    details: dict = {}
+    info = _probe_one(path, details=details)
+    if info is None:
+        log(f"[步骤A] {path.name}: 探测不到有效视频信息")
+        return None
+    # 正文以视频流为准，不能因为元数据缺失而改用较长的音轨/容器时长。
+    duration = _float_or_zero(str(details.get("duration") or ""))
     if duration <= 0:
         log(f"[步骤A] {path.name}: 探测不到视频时长")
         return None
-
-    width = int(_float_or_zero(probe_scalar(path, "stream=width")))
-    height = int(_float_or_zero(probe_scalar(path, "stream=height")))
-    if width <= 0 or height <= 0:
-        log(f"[步骤A] {path.name}: 视频流缺失有效分辨率")
-        return None
-    # 必须走 probe_scalar + 取首行：见 _fps_to_float 注释里的 0/0 多行坑
-    fps = _fps_to_float(probe_scalar(path, "stream=avg_frame_rate")) or FALLBACK_FPS
-
-    rc, out, _err = run_cmd(
-        [FFPROBE, "-v", "error", "-select_streams", "a",
-         "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
-        timeout=_PROBE_TIMEOUT)
-    has_audio = rc == 0 and out.strip() != ""
-
-    segments = detect_speech_segments(path, noise_db=noise_db, min_silence=min_silence) if has_audio else []
+    width, height = info.width, info.height
+    fps = _fps_to_float(str(details.get("avg_frame_rate") or "")) or FALLBACK_FPS
+    has_audio = info.has_audio
+    segments = (detect_speech_segments(path, noise_db=noise_db, min_silence=min_silence,
+                                       duration=duration) if has_audio else [])
     speech_total = sum(s.duration for s in segments)
 
     profile = SourceProfile(

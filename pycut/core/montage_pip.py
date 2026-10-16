@@ -436,9 +436,8 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
             if frames <= 0:
                 continue
             parts.append(
-                f"[{i + 1}:v]fps={fps},{spatial}setpts=PTS-STARTPTS,"
-                f"tpad=stop_mode=clone:stop={frames},trim=end_frame={frames},"
-                f"setpts=PTS-STARTPTS[pi{i}]"
+                f"[{i + 1}:v]fps={fps}:start_time=0:eof_action=pass,{spatial}"
+                f"trim=end_frame={frames},setpts=N/({fps}*TB)[pi{i}]"
             )
             labels.append(f"[pi{i}]")
         else:
@@ -448,13 +447,19 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
             parts.append(
                 f"[{cur}][pi{i}]overlay=x=W-w-{margin_x}:y={margin_y}"
                 f":enable='between(t,{_ms(start)},{_ms(end)})'"
-                f":eof_action=repeat:shortest=0[v{i}]"
+                f":eof_action=pass:repeatlast=0:shortest=0[v{i}]"
             )
             cur = f"v{i}"
     if continuous:
+        # 分支只记录最后一帧的到达，不编码、不重复解码、不写整帧。
+        # 主画面等长不能证明画中画完整；缺真实帧时不靠 tpad 蒙混过关。
         parts.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[piptrack]")
-        parts.append(f"[bg][piptrack]overlay=x=W-w-{margin_x}:y={margin_y}"
-                     f":eof_action=repeat:shortest=0[vmerged]")
+        parts.append("[piptrack]split[pipvisible][pipcheck]")
+        parts.append(f"[pipcheck]select='eq(n,{budget - 1})',"
+                     f"metadata=mode=add:key=pycut.complete:value=1,"
+                     f"metadata=mode=print:file='pipe\\:2',nullsink")
+        parts.append(f"[bg][pipvisible]overlay=x=W-w-{margin_x}:y={margin_y}"
+                     f":eof_action=pass:repeatlast=0:shortest=0[vmerged]")
         cur = "vmerged"
     parts.append(f"[{cur}]{subtitle_filter}[vout]")
     fcomplex = ";".join(parts)
@@ -484,6 +489,8 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
             raise RuntimeError(
                 f"画中画叠加失败 rc={rc}: "
                 f"{_ffmpeg_error(err)}")
+        if continuous and "pycut.complete=1" not in err.splitlines():
+            raise RuntimeError("画中画真实帧不足，拒绝克隆尾帧或发布缺失画中画的成片")
         os.replace(str(tmp), str(out))
     finally:
         if tmp.is_file():

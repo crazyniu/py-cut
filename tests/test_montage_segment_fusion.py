@@ -23,8 +23,8 @@ def test_effect_order_double_seek_and_frame_budget(tmp_path):
     assert 'tpad=' not in graph  # 源视频提前结束时不克隆末帧
     assert graph.index('geq=') < graph.index('fade=')
     assert old_graph.replace('[0:v]', '[segment]') in graph
-    assert 'fade=t=in:st=0.400000:d=0.200000' in graph
-    assert 'fade=t=out:st=2.200000:d=0.200000' in graph
+    assert 'fade=t=in:st=0.347826:d=0.200000' in graph
+    assert 'fade=t=out:st=2.147826:d=0.200000' in graph
     assert cmd.count('-ss') == 2
     second_input = cmd.index('-i', cmd.index('-i') + 1)
     assert second_input < cmd.index('-ss', cmd.index('-ss') + 1)

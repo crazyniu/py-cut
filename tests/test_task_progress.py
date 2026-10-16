@@ -46,7 +46,7 @@ def test_moving_subtitle_boxes_are_unioned():
         {'frame':1,'has_subtitle': True, 'box': [.1, .8, .8, .9]},
         {'frame':2,'has_subtitle': True, 'box': [.2, .2, .5, .3]}]}))
     values = {'format=duration':'4', 'stream=width':'720', 'stream=height':'1280'}
-    with mock.patch.object(subtitle, 'probe_scalar', side_effect=lambda _, key: values[key]), mock.patch.object(subtitle, '_grab_frame', return_value=True), mock.patch.object(subtitle.cv2, 'imread', return_value=object()):
+    with mock.patch.object(subtitle, 'probe_scalar', side_effect=lambda _, key: values[key]), mock.patch.object(subtitle, 'grab_frames', side_effect=lambda clip,times,folder,**kw:[folder/f'f{i}.jpg' for i in range(len(times))]), mock.patch.object(subtitle.cv2, 'imread', return_value=object()):
         x, y, width, height, _ = subtitle.detect_region(model, Path('clip.mp4'), 3)
     assert x <= 72 and x + width >= 576
     assert y <= 256 and y + height >= 1152
