@@ -23,6 +23,20 @@ def fade_duration(segment_duration: float, requested: float) -> float:
     return min(seconds, duration / 2.0)
 
 
+def seam_fade_filters(duration: float, seconds: float, first: bool = False,
+                      last: bool = False, *, start: float = 0.0) -> list[str]:
+    """在输出精确 seek 前的时间轴应用淡化，保留原片段帧预算。"""
+    length = float(duration)
+    fade = fade_duration(length, seconds)
+    filters = []
+    if not first:
+        at = "0" if start == 0 else f"{start:.6f}"
+        filters.append(f"fade=t=in:st={at}:d={fade:.6f}")
+    if not last:
+        filters.append(f"fade=t=out:st={start + length - fade:.6f}:d={fade:.6f}")
+    return filters
+
+
 def build_seam_fade_cmd(src: Path, out: Path, *,
                         duration: float, seconds: float = 0.25,
                         first: bool = False, last: bool = False,
@@ -35,13 +49,7 @@ def build_seam_fade_cmd(src: Path, out: Path, *,
     """
     from .ffmpeg import FFMPEG
 
-    length = float(duration)
-    fade = fade_duration(length, seconds)
-    filters = []
-    if not first:
-        filters.append(f"fade=t=in:st=0:d={fade:.6f}")
-    if not last:
-        filters.append(f"fade=t=out:st={length - fade:.6f}:d={fade:.6f}")
+    filters = seam_fade_filters(duration, seconds, first, last)
     if not filters:
         return []
     return [
