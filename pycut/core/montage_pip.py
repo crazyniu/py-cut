@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import os
 import random
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,6 +60,30 @@ ENC_TIMEOUT_MAX = 3600
 
 # 临时文件后缀（带 pid，避免同批并发时抢写同一文件）
 TMP_SUFFIX = ".piptmp"
+
+
+def _run_with_activity(cmd: list[str], timeout: int, *, interval: float = 10.0) -> tuple[int, str, str]:
+    """Keep the CLI/TUI observable during a long FFmpeg call without changing its arguments.
+
+    A heartbeat is elapsed wall time, never a fabricated encoded-frame percentage.
+    The existing run_cmd retains timeout, subprocess cleanup and full stderr handling.
+    """
+    finished = threading.Event()
+    started = time.monotonic()
+
+    def report() -> None:
+        while not finished.wait(interval):
+            log(f"  [画中画] FFmpeg 正在合成画面 · 已等待 {int(time.monotonic() - started)}秒"
+                "（编码器尚未返回；不代表编码进度）")
+
+    reporter = threading.Thread(target=report, name="pycut-pip-activity", daemon=True)
+    reporter.start()
+    try:
+        return run_cmd(cmd, timeout=timeout)
+    finally:
+        finished.set()
+        reporter.join(timeout=0.5)
+        log(f"  [画中画] FFmpeg 调用结束 · 用时 {time.monotonic() - started:.1f}秒")
 
 
 @dataclass
@@ -484,7 +510,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     timeout = min(ENC_TIMEOUT_MAX,
                   max(ENC_TIMEOUT_MIN, int(info.duration * ENC_TIMEOUT_PER_SEC)))
     try:
-        rc, _out, err = run_cmd(cmd, timeout=timeout)
+        rc, _out, err = _run_with_activity(cmd, timeout=timeout)
         if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:
             raise RuntimeError(
                 f"画中画叠加失败 rc={rc}: "
