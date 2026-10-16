@@ -40,13 +40,13 @@ def page() -> str:
             sections[section].append(
                 f'<fieldset class="field multi-directory" data-key="{key}" '
                 f'aria-describedby="{key}-help {key}-error"><legend>{html.escape(label)}'
-                f'<span class="optional">{optional}</span></legend>'
+                f'<span class="{badge_class}">{optional}</span></legend>'
                 f'<small id="{key}-help">{html.escape(help_text)}</small>'
                 f'{input_html}<span class="field-error" id="{key}-error"></span></fieldset>')
         else:
             sections[section].append(
                 f'<div class="field"><label for="{key}">{html.escape(label)}'
-                f'<span class="optional">{optional}</span></label>'
+                f'<span class="{badge_class}">{optional}</span></label>'
                 f'{input_html}'
                 f'<small id="{key}-help">{html.escape(help_text)}</small>'
                 f'<span class="field-error" id="{key}-error"></span></div>')
