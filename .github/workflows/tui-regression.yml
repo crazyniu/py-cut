@@ -80,7 +80,9 @@ jobs:
         run: >-
           python -m pytest tests/test_tui*.py tests/test_task_progress.py
           tests/test_output_layout.py tests/test_scene_safety.py tests/test_slice_scope.py
-          tests/test_scan*.py tests/test_llm_safety.py tests/test_launcher_install.py -q
+          tests/test_scan*.py tests/test_llm_safety.py tests/test_launcher_install.py
+          tests/test_pip_resources.py tests/test_pip_single_pass.py tests/test_pip_cleanup.py
+          tests/test_montage_combined_subtitles.py -q
           --ignore=tests/test_tui_textual_picker.py
       - name: Full suite (synthetic media only; user media opt-in)
         if: github.event_name == 'workflow_dispatch'
