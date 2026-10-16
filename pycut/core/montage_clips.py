@@ -198,13 +198,9 @@ def _collect_files(root: Path) -> list[Path]:
     必须走 `os.walk`（macOS `find -iname "*.mp4"` 会静默丢文件，AGENTS.md 记录过）。
     排序固定 => 配不错位，且同 seed 的选片结果可复现。
     """
-    out: list[Path] = []
-    for dirpath, _dirnames, filenames in os.walk(str(root)):
-        for name in filenames:
-            if name.lower().endswith(VIDEO_EXTS):
-                out.append(Path(dirpath) / name)
-    out.sort()
-    return out
+    from .scan import list_videos_recursive
+    return [p for p in list_videos_recursive(root, max_depth=None, raise_on_error=True)
+            if p.suffix.lower() in VIDEO_EXTS]
 
 
 def _content_sig(path: Path) -> str:
@@ -316,15 +312,11 @@ def scan_library(root=None, min_dur=None, max_dur=None,
       竖屏 720x1280 182 条 + 544x960 3 条 = 185 条通过；
       其中 57 组是逐字节相同的重复拷贝 -> **最终可用 150 条**（总容量约 13 分钟）。
     """
-    root = Path(root) if root else Path(config.MONTAGE_CLIP_DIR)
+    root = root if root is not None else config.CLIP_DIRS
     lo = float(config.MONTAGE_CLIP_MIN_DUR if min_dur is None else min_dur)
     hi = float(config.MONTAGE_CLIP_MAX_DUR if max_dur is None else max_dur)
     nw = int(workers) if workers else max(4, int(config.MONTAGE_WORKERS))
     ratio_max = float(config.MONTAGE_MAX_SIDE_RATIO)
-
-    if not root.is_dir():
-        log(f"[混剪B] 片段库不存在: {root}")
-        return []
 
     files = _collect_files(root)
     if not files:

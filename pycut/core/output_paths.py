@@ -48,3 +48,10 @@ def validate_targets(pairs: list[tuple[Path, Path]]) -> None:
         if key in seen and seen[key].resolve() != src.resolve():
             raise ValueError(f"输出文件同名冲突: {seen[key]} / {src} -> {dst}")
         seen[key] = src
+
+
+def matching_root(src: Path, roots) -> Path:
+    """嵌套根优先归属最长路径；每个文件只输出一次。"""
+    from ..settings import directories
+    parents = [root for root in directories(roots) if src.resolve().is_relative_to(root)]
+    return max(parents, key=lambda p: len(p.parts)) if parents else source_root(src)

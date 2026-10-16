@@ -23,11 +23,11 @@ from ..core.utils import log
 
 def register(subparsers) -> None:
     p = subparsers.add_parser(
-        "cover", help="字幕擦除：对切片单独检测并擦除字幕（流水线第三步）")
+        "cover", help="字幕擦除：检测并擦除用户切片中的字幕")
     p.add_argument("--file", nargs="+", help="要处理的切片 mp4 路径（可多个）")
-    p.add_argument("--all", action="store_true", help="处理默认有人脸／无人脸切片目录的全部切片")
-    p.add_argument("--src-dir", default="",
-                   help="要擦除字幕的视频目录（递归扫描所有 mp4；留空则用 --all/--file）")
+    p.add_argument("--all", action="store_true", help="处理配置的混剪切片目录中的全部 MP4")
+    p.add_argument("--src-dir", action="append", default=None,
+                   help="要擦除字幕的视频目录（可重复传入或使用 JSON 数组，默认读取配置）")
     p.add_argument("--out-dir", default="", help="输出目录（默认源目录同级的字幕查重）")
     p.add_argument("--gateway", default=config.DEFAULT_GATEWAY,
                    choices=list(config.GATEWAYS.keys()),
@@ -46,10 +46,10 @@ def register(subparsers) -> None:
 
 def _pick_clips(args: argparse.Namespace) -> list[Path]:
     """返回去重后的 MP4 列表；显式文件缺失必须报错，不能悄悄跳过。"""
-    if args.src_dir:
+    if args.src_dir or not args.file:
         from ..core.scan import list_videos_recursive  # noqa: PLC0415
         selected = [
-            p for p in list_videos_recursive(Path(args.src_dir).expanduser())
+            p for p in list_videos_recursive(args.src_dir or config.CLIP_DIRS, max_depth=None, raise_on_error=True)
             if p.suffix.lower() == ".mp4"
         ]
     elif args.file:
@@ -70,9 +70,6 @@ def _pick_clips(args: argparse.Namespace) -> list[Path]:
 
 
 def run(args: argparse.Namespace) -> int:
-    if not args.file and not args.all and not args.src_dir:
-        log("[错误] 需要 --file、--all 或 --src-dir")
-        return 2
     if args.workers < 1 or args.samples < 1:
         log("[错误] --workers 和 --samples 都必须是正整数")
         return 2
@@ -85,10 +82,11 @@ def run(args: argparse.Namespace) -> int:
         log("[错误] 所选范围没有可处理的 MP4 视频")
         return 1
 
-    from ..core.output_paths import flat_output, sibling, source_root, validate_targets
+    from ..core.output_paths import flat_output, sibling, source_root, validate_targets, matching_root
+    roots = args.src_dir or (config.CLIP_DIRS if not args.file else [])
     def destination(c: Path) -> Path:
         root = (Path(args.out_dir).expanduser() if args.out_dir else
-                sibling(Path(args.src_dir) if args.src_dir else source_root(c), "字幕查重"))
+                sibling(matching_root(c, roots), "字幕查重"))
         return flat_output(c, root)
     try:
         validate_targets([(c, destination(c)) for c in clips])

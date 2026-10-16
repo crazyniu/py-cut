@@ -32,14 +32,14 @@ def register(subparsers) -> None:
     g.add_argument("--step", default="all", choices=["a", "b", "c", "all"],
                    help="只跑某一步：a=提取基准 / b=片段混剪 / c=画中画叠加 / all=三步")
     g.add_argument("--source", default="",
-                   help=f"步骤A 基准视频（默认 {config.MONTAGE_SRC}）")
-    g.add_argument("--clip-dir", default="",
+                   help="话术视频；未指定时话术目录内只有一支则自动选择，多支请显式选择")
+    g.add_argument("--clip-dir", action="append", default=None,
                    help=f"步骤B 片段库目录（默认 {config.MONTAGE_CLIP_DIR}）")
-    g.add_argument("--dedup-dir", default="",
+    g.add_argument("--dedup-dir", action="append", default=None,
                    help=f"步骤C 画中画素材目录（默认 {config.MONTAGE_DEDUP_DIR}）")
     g.add_argument("--out-dir", default="",
                    help=f"最终成片输出目录（默认 .env 输出目录；未配置时使用爆款目录同级混剪/MMDD）")
-    g.add_argument("--intro-dir", default=None, help="前贴目录（默认读取 .env；空字符串禁用）")
+    g.add_argument("--intro-dir", action="append", default=None, help="前贴目录（默认读取 .env；空字符串禁用）")
     g.add_argument("--fission", type=int, default=1,
                    help="每支爆款视频裂变生成几支成片（每支随机选片/扰动不同、话术相同）")
 
@@ -99,11 +99,8 @@ def _probe_library(clip_dir: Path, allow_landscape: bool, workers: int) -> int:
     from ..core.montage_clips import scan_library  # noqa: PLC0415
 
     log(f"[探测] 片段库: {clip_dir}")
-    if not clip_dir.is_dir():
-        log(f"  [错误] 素材目录不存在: {clip_dir}")
-        return 1
-    all_files = [p for p in clip_dir.rglob("*")
-                 if p.suffix.lower() in (".mp4", ".mov", ".m4v")]
+    from ..core.montage_clips import _collect_files
+    all_files = _collect_files(clip_dir)
     log(f"  文件总数(含横屏): {len(all_files)}")
 
     if allow_landscape:
@@ -210,23 +207,44 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     if not args.sticker_dir and os.environ.get("PYCUT_STICKER_DIR"):
         args.sticker_dir = str(config.MONTAGE_STICKER_DIR)
     source = Path(args.source).expanduser() if args.source else config.MONTAGE_SRC
-    clip_dir = Path(args.clip_dir).expanduser() if args.clip_dir else config.MONTAGE_CLIP_DIR
-    dedup_dir = Path(args.dedup_dir).expanduser() if args.dedup_dir else config.MONTAGE_DEDUP_DIR
+    from ..settings import directories
+    try:
+        clip_dir = directories(args.clip_dir) if args.clip_dir is not None else config.CLIP_DIRS
+        dedup_dir = directories(args.dedup_dir) if args.dedup_dir is not None else config.PIP_DIRS
+        intro_dir = directories(args.intro_dir) if args.intro_dir is not None else config.INTRO_DIRS
+    except ValueError as exc:
+        log(f"[错误] 目录配置无效：{exc}")
+        return 2
+    clip_dir = clip_dir[0] if len(clip_dir) == 1 else clip_dir
+    dedup_dir = dedup_dir[0] if len(dedup_dir) == 1 else dedup_dir
     from ..core.output_paths import montage_output
-    out_dir = (Path(args.out_dir).expanduser() if args.out_dir else
-               config.MONTAGE_OUT if os.environ.get("PYCUT_OUTPUT_DIR") else montage_output(source.parent))
 
     # --probe 只检查片段库，不需要基准视频、字幕或已有成片。
     if args.probe:
         if STOP.flag:
             log("[中断] 混剪素材探测已取消（退出码 130）")
             return 130
-        code = _probe_library(clip_dir, args.allow_landscape, args.workers)
+        try:
+            code = _probe_library(clip_dir, args.allow_landscape, args.workers)
+        except (ValueError, OSError) as exc:
+            log(f"[错误] {exc}")
+            return 2
         if STOP.flag:
             log("[中断] 混剪素材探测未完整完成（退出码 130）")
             return 130
         return code
 
+    if not args.source:
+        from ..core.scan import list_videos_recursive
+        try:
+            candidates = list_videos_recursive(config.REFERENCE_DIR, max_depth=None, raise_on_error=True)
+        except (ValueError, OSError) as exc:
+            log(f"[错误] 无法读取话术目录：{exc}")
+            return 2
+        if len(candidates) != 1:
+            log(f"[错误] 话术目录有 {len(candidates)} 个视频，请通过 TUI 或 --source 明确选择")
+            return 2
+        source = candidates[0]
     if not source.is_file():
         sys.exit(f"[错误] 步骤A 基准视频不存在: {source}")
     if (not args.no_sub and args.srt not in ("", None, "auto")
@@ -238,6 +256,16 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     # 用户显式传 --srt 路径时优先用；传空串（--srt ""）或 --no-sub 则不烧字幕。
     srt = _resolve_srt(args, source)
 
+    try:
+        relative_parent = source.resolve().parent.relative_to(config.REFERENCE_DIR.resolve())
+        reference_root = config.REFERENCE_DIR
+    except ValueError:
+        relative_parent = Path()
+        reference_root = source.parent
+    out_dir = (Path(args.out_dir).expanduser() if args.out_dir else
+               config.MONTAGE_OUT if os.environ.get("PYCUT_OUTPUT_DIR") else montage_output(reference_root))
+    out_dir = out_dir / relative_parent
+
     t0 = time.time()
     canvas = config.MONTAGE_CANVAS
     log(f"[目标] 画布 {canvas[0]}x{canvas[1]}  fps {config.MONTAGE_FPS}  "
@@ -245,12 +273,12 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
 
     from . import montage_pipeline  # noqa: PLC0415
 
+    intro_dir = intro_dir[0] if len(intro_dir) == 1 else intro_dir
     opts = montage_pipeline.MontageOptions(
         prepared=prepared,
         out_name=f"{source.stem}_1.mp4",
         step=args.step,
-        intro_dir=(Path(args.intro_dir).expanduser() if args.intro_dir else
-                   config.INTRO_DIR if args.intro_dir is None and os.environ.get("PYCUT_INTRO_DIR") else None),
+        intro_dir=intro_dir or None,
         source=source,
         clip_dir=clip_dir,
         dedup_dir=dedup_dir,
@@ -258,7 +286,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
         seed=(args.seed or None),
         allow_landscape=args.allow_landscape,
         pip_slot=args.pip_slot,
-        use_pip=not args.no_pip,
+        use_pip=not args.no_pip and bool(dedup_dir),
         pip_continuous=not args.pip_gap,
         keep_audio=not args.no_audio,
         mirror_chance=max(0.0, min(1.0, args.mirror_chance)),
@@ -291,7 +319,10 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     progress_stage = "基准分析" if args.step == "a" else "裂变生成"
     progress_total = 1 if args.step == "a" else args.fission
     progress(progress_stage, 0, progress_total, detail="分析参考素材" if args.step == "a" else "每条成片独立选片与扰动")
-    result = montage_pipeline.run_pipeline(opts)
+    try:
+        result = montage_pipeline.run_pipeline(opts)
+    except (ValueError, OSError) as exc:
+        result = {"error": str(exc)}
     if STOP.flag:
         log("[中断] 混剪任务已取消，不执行后续裂变（退出码 130）")
         return 130
