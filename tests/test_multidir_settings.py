@@ -105,3 +105,21 @@ def test_montage_confirmation_keeps_total_visible_on_first_summary_row(tmp_path)
         args = cli.build_parser().parse_args(job)
         assert settings.directories(args.clip_dir) == [clips]
         assert args.no_pip
+
+
+def test_unconfigured_montage_output_uses_script_root_sibling(tmp_path):
+    from pycut.core.output_paths import montage_output
+    reference = tmp_path / '话术'
+    source = reference / 'a' / '1.mp4'; source.parent.mkdir(parents=True); source.touch()
+    clips = tmp_path / '切片'; clips.mkdir(); (clips / 'clip.mp4').touch()
+    with mock.patch.dict('os.environ', {'PYCUT_OUTPUT_DIR': ''}), \
+         mock.patch.object(config, 'REFERENCE_DIR', reference), \
+         mock.patch.object(config, 'CLIP_DIRS', [clips]), \
+         mock.patch.object(config, 'PIP_DIRS', []), \
+         mock.patch.object(config, 'INTRO_DIRS', []), \
+         mock.patch.object(tui, '_multi_select', return_value=([source], {str(source):1})), \
+         mock.patch.object(tui, '_set_fission_counts', return_value=True), \
+         mock.patch.object(tui, '_confirm', return_value=True):
+        jobs = tui._wizard_montage(None, 100)
+    args = cli.build_parser().parse_args(jobs[0])
+    assert Path(args.out_dir) == montage_output(reference)
