@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import os
 import random
+import re
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -35,6 +37,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .. import config
 from .ffmpeg import FFMPEG, probe_video
 from .utils import log, run_cmd
+from .progress import progress
 
 # ---------------------------------------------------------------------------
 # 时间轴参数（config 里没给画中画的出现时长/间隔，值在此处定）
@@ -62,29 +65,78 @@ ENC_TIMEOUT_MAX = 3600
 TMP_SUFFIX = ".piptmp"
 
 
-def _run_with_activity(cmd: list[str], timeout: int, *, interval: float = 10.0) -> tuple[int, str, str]:
-    """Keep the CLI/TUI observable during a long FFmpeg call without changing its arguments.
+def _encoded_frames(path: Path) -> int | None:
+    """Read FFmpeg's own -progress file; partial writes do not count as frames."""
+    try:
+        data = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    frames = re.findall(r"(?m)^frame=\s*(\d+)[ \t]*$", data)
+    return int(frames[-1]) if frames else None
 
-    A heartbeat is elapsed wall time, never a fabricated encoded-frame percentage.
-    The existing run_cmd retains timeout, subprocess cleanup and full stderr handling.
+
+def _run_with_activity(cmd: list[str], timeout: int, *, interval: float = 10.0,
+                       total_frames: int | None = None) -> tuple[int, str, str]:
+    """Read *encoded frames* while retaining the existing run_cmd timeout/errors.
+
+    FFmpeg -progress writes a transient file in system temp. The monitor reads
+    official frame counts instead of guessing progress from wall time or file
+    size. Failure to set up telemetry only disables the counter, not encoding.
     """
     finished = threading.Event()
     started = time.monotonic()
+    progress_file: Path | None = None
+    actual_cmd = cmd
+    total = int(total_frames or 0)
+    if total > 0 and os.environ.get("PYCUT_PROGRESS") == "1":
+        try:
+            fd, location = tempfile.mkstemp(prefix="pycut_ffmpeg_", suffix=".progress")
+            os.close(fd)
+            progress_file = Path(location)
+            # Global FFmpeg progress flags; do not change any video/audio filter.
+            actual_cmd = [*cmd[:-1], "-stats_period", "1",
+                          "-progress", str(progress_file), cmd[-1]]
+            progress("画中画编码", 0, total, detail="FFmpeg 已启动，等待真实编码帧")
+        except OSError as exc:
+            log(f"  [画中画进度] 无法创建监控文件，保留等待心跳：{type(exc).__name__}")
+    last_frame = 0
 
     def report() -> None:
-        while not finished.wait(interval):
-            log(f"  [画中画] FFmpeg 正在合成画面 · 已等待 {int(time.monotonic() - started)}秒"
-                "（编码器尚未返回；不代表编码进度）")
+        nonlocal last_frame
+        last_log = started
+        while not finished.wait(0.6):
+            if progress_file is not None:
+                measured = _encoded_frames(progress_file)
+                if measured is not None and measured > last_frame:
+                    # 100% is only emitted after FFmpeg and the output are verified.
+                    last_frame = min(max(0, measured), total - 1)
+                    progress("画中画编码", last_frame, total,
+                             detail=f"已编码 {last_frame}/{total} 帧")
+            elapsed = time.monotonic() - started
+            if elapsed - (last_log - started) >= interval:
+                status = (f" · 已编码 {last_frame}/{total} 帧"
+                          if progress_file is not None else " · 编码器尚未返回")
+                log(f"  [画中画] FFmpeg 正在合成画面 · 已等待 {int(elapsed)}秒"
+                    f"{status}（未完成整片校验）")
+                last_log = time.monotonic()
 
     reporter = threading.Thread(target=report, name="pycut-pip-activity", daemon=True)
     reporter.start()
     try:
-        return run_cmd(cmd, timeout=timeout)
+        return run_cmd(actual_cmd, timeout=timeout)
     finally:
         finished.set()
-        reporter.join(timeout=0.5)
+        reporter.join(timeout=0.6)
+        if progress_file is not None:
+            measured = _encoded_frames(progress_file)
+            if measured is not None and min(measured, total - 1) > last_frame:
+                progress("画中画编码", min(measured, total - 1), total,
+                         detail=f"FFmpeg 已编码 {min(measured, total - 1)}/{total} 帧，待校验")
+            try:
+                progress_file.unlink(missing_ok=True)
+            except OSError:
+                pass
         log(f"  [画中画] FFmpeg 调用结束 · 用时 {time.monotonic() - started:.1f}秒")
-
 
 @dataclass
 class PipItem:
@@ -128,11 +180,15 @@ def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
     started = time.monotonic()
     paths = sorted(_iter_mp4(base), key=lambda p: str(p))
     log(f"  [画中画素材] 读取 {len(paths)} 个视频的元数据（未改动文件复用缓存）")
+    progress("画中画素材扫描", 0, len(paths), detail="读取画中画时长与规格")
     durations = {}
     with ThreadPoolExecutor(max_workers=max(4, config.MONTAGE_WORKERS)) as executor:
         jobs = {executor.submit(_probe_duration, path): path for path in paths}
-        for future in as_completed(jobs):
+        for count, future in enumerate(as_completed(jobs), 1):
             durations[jobs[future]] = future.result()
+            if count % 20 == 0 or count == len(paths):
+                progress("画中画素材扫描", count, len(paths),
+                         detail=f"已探测 {count}/{len(paths)} 条画中画")
     # 探测并发完成，仍按源路径顺序配对，以保持 seed 可复现。
     for path in paths:
         dur = durations[path]
@@ -142,7 +198,11 @@ def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
         items.append(PipItem(path=path, duration=dur))
 
     from .montage_clips import _drop_duplicates
+    progress("画中画素材扫描", len(paths), len(paths),
+             detail="元数据读取结束，正在检查重复文件")
     items, duplicate_count = _drop_duplicates(items)
+    progress("画中画素材扫描", len(paths), len(paths),
+             detail=f"画中画扫描完成，可用 {len(items)} 条")
     if duplicate_count:
         log(f"  [画中画去重] 排除 {duplicate_count} 条相同内容")
 
@@ -588,7 +648,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     timeout = min(ENC_TIMEOUT_MAX,
                   max(ENC_TIMEOUT_MIN, int(info.duration * ENC_TIMEOUT_PER_SEC)))
     try:
-        rc, _out, err = _run_with_activity(cmd, timeout=timeout)
+        rc, _out, err = _run_with_activity(cmd, timeout=timeout, total_frames=budget)
         if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:
             raise RuntimeError(
                 f"画中画叠加失败 rc={rc}: "
@@ -596,6 +656,8 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
         if continuous and "pycut.complete=1" not in err.splitlines():
             raise RuntimeError("画中画真实帧不足，拒绝克隆尾帧或发布缺失画中画的成片")
         os.replace(str(tmp), str(out))
+        progress("画中画编码", budget, budget, success=1,
+                 detail="编码完成，画中画末帧校验与发布成功")
     finally:
         if tmp.is_file():
             try:
