@@ -61,6 +61,16 @@ def test_browser_multidirectory_flow(tmp_path):
     page.set_viewport_size({'width':390,'height':844})
     page.screenshot(path=str(tmp_path/'multidir-mobile.png'),full_page=True)
     assert page.evaluate('()=>document.documentElement.scrollWidth')<=390
+    assert page.locator('fieldset[data-key=PYCUT_CLIP_DIR] .is-required').inner_text()=='必填'
+    # 最后一项滚到底时应完整出现在固定保存栏之上。
+    page.evaluate('()=>window.scrollTo(0,document.documentElement.scrollHeight)')
+    assert page.evaluate("()=>document.querySelector('#PYCUT_STICKER_DIR').getBoundingClientRect().bottom < document.querySelector('.bottom').getBoundingClientRect().top")
+    # 编辑后立即提示未保存；Ctrl+S 保存，恢复成功态。
+    page.locator('#PYCUT_OUTPUT_DIR').fill(str(root/'out'))
+    assert page.locator('#page-state').inner_text()=='未保存'
+    page.keyboard.press('Control+s')
+    page.wait_for_function('()=>!saving')
+    assert page.locator('#page-state').inner_text()=='已保存'
     page.get_by_role('button',name='LLM 网关',exact=True).click()
     assert page.locator('#PYCUT_MAIN_KEY').input_value()==''
     assert page.locator('#PYCUT_MAIN_KEY').get_attribute('placeholder')=='已配置，留空保持不变'

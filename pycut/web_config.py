@@ -20,7 +20,11 @@ def page() -> str:
     for key, (label, help_text) in settings.FIELDS.items():
         kind = 'password' if key.endswith('_KEY') else 'text'
         section = 'directories' if key.endswith('_DIR') else 'llm'
-        optional = '可选' if key in ('PYCUT_PIP_DIR', 'PYCUT_INTRO_DIR', 'PYCUT_OUTPUT_DIR', 'PYCUT_STICKER_DIR') or key.startswith('PYCUT_BACKUP_') else ''
+        required = key in settings.REQUIRED
+        optional = ('必填' if required else '可选' if key in (
+            'PYCUT_PIP_DIR', 'PYCUT_INTRO_DIR', 'PYCUT_OUTPUT_DIR',
+            'PYCUT_STICKER_DIR') or key.startswith('PYCUT_BACKUP_') else '')
+        badge_class = 'optional is-required' if required else 'optional'
         input_html = (f'<input id="{key}" name="{key}" type="{kind}" autocomplete="off" '
                       f'spellcheck="false" aria-describedby="{key}-help {key}-error">')
         multi = key in settings.MULTI_DIRECTORIES
@@ -36,13 +40,13 @@ def page() -> str:
             sections[section].append(
                 f'<fieldset class="field multi-directory" data-key="{key}" '
                 f'aria-describedby="{key}-help {key}-error"><legend>{html.escape(label)}'
-                f'<span class="optional">{optional}</span></legend>'
+                f'<span class="{badge_class}">{optional}</span></legend>'
                 f'<small id="{key}-help">{html.escape(help_text)}</small>'
                 f'{input_html}<span class="field-error" id="{key}-error"></span></fieldset>')
         else:
             sections[section].append(
                 f'<div class="field"><label for="{key}">{html.escape(label)}'
-                f'<span class="optional">{optional}</span></label>'
+                f'<span class="{badge_class}">{optional}</span></label>'
                 f'{input_html}'
                 f'<small id="{key}-help">{html.escape(help_text)}</small>'
                 f'<span class="field-error" id="{key}-error"></span></div>')
