@@ -107,3 +107,18 @@ def test_activity_does_not_keep_animating_after_stopping(status):
     assert '正在准备素材' not in text
     if status=='stopping':assert '正在停止当前处理' in text
     if status=='error':assert '[失败] example' in text
+
+
+
+def test_background_encoding_shows_real_segment_completion_while_total_is_zero():
+    batch = tui_runner._montage_plan(jobs(1, 1))
+    batch.update(current_planned=1)
+    screen = Screen(size=(24, 100))
+    events = {'混剪合成': {'completed': 1, 'total': 5},
+              '背景片段编码': {'completed': 8, 'total': 32}}
+    with mock.patch.object(tui, '_attr', return_value=0):
+        tui_runner._draw(screen, jobs(1,1)[0], 1, 1, deque(), 0,
+                         'running', events, batch=batch)
+    rendered = '\n'.join(text for _, _, text in screen.printed)
+    assert '已生成 0 个（成片完成率）' in rendered
+    assert '背景片段已编码 8/32（25%）' in rendered
