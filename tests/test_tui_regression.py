@@ -89,12 +89,12 @@ class TUIRegression(unittest.TestCase):
             5, 2, 100, "裂变", 1, 1, 99), 3)
         self.assertIsNone(tui._prompt_int(Screen([27]), 5, 2, 100, "裂变", 1, 1, 99))
 
-    def test_multi_select_supports_two_digit_fission_and_empty_input(self):
+    def test_multi_select_does_not_edit_fission_and_handles_empty_input(self):
         files = [Path("/tmp/婚礼.mp4"), Path("/tmp/采访.mp4")]
         s = Screen([ord(" "), ord("e"), ord("1"), ord("2"), 10, 10])
         chosen, counts = tui._multi_select(s, "混剪", files)
         self.assertEqual(chosen, [files[0]])
-        self.assertEqual(counts[str(files[0])], 12)
+        self.assertEqual(counts[str(files[0])], 1)
         self.assertIsNone(tui._multi_select(Screen(), "混剪", []))
 
     def test_montage_escape_returns_without_unpack_error(self):
