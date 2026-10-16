@@ -57,7 +57,7 @@ class SliceScopeTests(unittest.TestCase):
         ]
         executed = self._selected_by_cli(argv)
         self.assertEqual(planned, executed)
-        self.assertIn(self.root / "a.mp4", planned)
+        self.assertIn((self.root / "a.mp4").resolve(), {p.resolve() for p in planned})
         self.assertIn(self.root / "d1/d2/d3/b.MP4", planned)
         self.assertNotIn(self.root / "d1/d2/d3/d4/too-deep.mp4", planned)
         self.assertNotIn(self.root / "d1/d2/d3/ignored.mov", planned)
@@ -65,10 +65,10 @@ class SliceScopeTests(unittest.TestCase):
         self.assertNotIn(self.root / "System/hidden.mp4", planned)
         self.assertNotIn(self.root / "node_modules/dependency.mp4", planned)
         if self.link_created:
-            self.assertIn(self.root / "alias.mp4", planned)
+            self.assertEqual(sum(p.resolve() == (self.root / "a.mp4").resolve() for p in planned), 1)
 
     def test_user_clip_preview_count_matches_recursive_mp4_scope(self):
-        planned = [p for p in scan.list_videos_recursive(self.root) if p.suffix.lower() == '.mp4']
+        planned = [p for p in scan.list_videos_recursive(self.root, max_depth=None) if p.suffix.lower() == '.mp4']
         with mock.patch.object(config, 'CLIP_DIRS', [self.root]), \
              mock.patch.object(tui, '_confirm', return_value=True) as confirm:
             commands = tui._wizard_cover(mock.Mock(), 100)
