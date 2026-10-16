@@ -37,6 +37,7 @@ from pathlib import Path
 from .. import config
 from .ffmpeg import FFMPEG, FFPROBE
 from .utils import log, run_cmd
+from .progress import progress
 from .probe_cache import cached_probe
 
 # 素材库可识别的扩展名（与 montage_cmd 的 --probe 保持一致）
@@ -705,10 +706,17 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
     # 小批次保持串行，避免线程/多个编码器启动开销；较多段最多两个编码任务。
     # 子任务失败会等已启动 FFmpeg 退出再清理，不能提前删除它们正在写的文件。
     segments: dict[int, Path] = {}
+    finished = 0
+    total_jobs = len(jobs)
+    progress("背景片段编码", 0, total_jobs,
+             detail=f"已规划 {total_jobs} 段，正在执行 FFmpeg 编码（最多2路）")
     if len(jobs) < 6:
         for job in jobs:
             index, path = encode(job)
             segments[index] = path
+            finished += 1
+            progress("背景片段编码", finished, total_jobs,
+                     detail=f"第 {finished}/{total_jobs} 段编码完成，继续处理下一段")
     else:
         with futures.ThreadPoolExecutor(max_workers=2) as executor:
             pending = {executor.submit(encode, job): job[0] for job in jobs}
@@ -717,6 +725,9 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
                 try:
                     index, path = future.result()
                     segments[index] = path
+                    finished += 1
+                    progress("背景片段编码", finished, total_jobs,
+                             detail=f"已完成 {finished}/{total_jobs} 段（最多2路并行）")
                 except Exception as exc:
                     if first_error is None:
                         first_error = exc
