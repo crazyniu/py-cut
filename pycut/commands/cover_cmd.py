@@ -52,6 +52,8 @@ def _pick_clips(args: argparse.Namespace) -> list[Path]:
             p for p in list_videos_recursive(args.src_dir or config.CLIP_DIRS, max_depth=None, raise_on_error=True)
             if p.suffix.lower() == ".mp4"
         ]
+        from ..core.output_paths import without_outputs
+        selected = without_outputs(selected, args.src_dir or config.CLIP_DIRS, "字幕查重", getattr(args, "out_dir", ""))
     elif args.file:
         selected = [Path(p).expanduser() for p in args.file]
         for file in selected:

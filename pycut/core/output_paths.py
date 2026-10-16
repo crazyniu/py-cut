@@ -55,3 +55,17 @@ def matching_root(src: Path, roots) -> Path:
     from ..settings import directories
     parents = [root for root in directories(roots) if src.resolve().is_relative_to(root)]
     return max(parents, key=lambda p: len(p.parts)) if parents else source_root(src)
+
+
+def without_outputs(files: list[Path], roots, task_name: str, out_dir="") -> list[Path]:
+    """仅排除本次扫描根内部的实际输出目录，支持父子根安全重跑。"""
+    from ..settings import directories
+    inputs = directories(roots)
+    outputs = ([Path(out_dir).expanduser().resolve()] if out_dir else
+               [sibling(root, task_name).resolve() for root in inputs])
+    if any(output == root for output in outputs for root in inputs):
+        raise ValueError("输出目录不能与输入目录相同，请指定独立输出目录")
+    internal = [output for output in outputs
+                if any(output.is_relative_to(root) for root in inputs)]
+    return [file for file in files
+            if not any(file.resolve().is_relative_to(output) for output in internal)]

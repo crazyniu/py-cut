@@ -144,3 +144,34 @@ def test_dedup_interruption_does_not_start_next_root(tmp_path):
         assert dedup_cmd.run(args)==130
     assert batch.call_count==1
     STOP.flag=False
+
+
+@pytest.mark.parametrize('task,command',[('字幕查重','cover'),('去重','dedup')])
+def test_parent_child_roots_rerun_excludes_only_actual_output(tmp_path,task,command):
+    parent=tmp_path/'library';child=parent/'child'
+    child.mkdir(parents=True)
+    source=child/'source.mp4';source.touch()
+    generated=parent/task;generated.mkdir()
+    (generated/'source_1.mp4').touch()
+    # An unrelated user folder with the same task name must remain input.
+    legitimate=parent/'other'/task;legitimate.mkdir(parents=True)
+    user=legitimate/'user.mp4';user.touch()
+    args=cli.build_parser().parse_args([command,'--src-dir',str(parent),'--src-dir',str(child)])
+    picker=cover_cmd._pick_clips if command=='cover' else dedup_cmd._pick_srcs
+    assert set(picker(args))=={source,user}
+    # A nested explicit output is also excluded, without matching all task names.
+    explicit=parent/'published';explicit.mkdir();(explicit/'old.mp4').touch()
+    args.out_dir=str(explicit)
+    assert set(picker(args))=={source,user,generated/'source_1.mp4'}
+    args.out_dir=str(parent)
+    with pytest.raises(ValueError,match='输入目录相同'):
+        picker(args)
+
+
+@pytest.mark.parametrize('task',['去重','字幕查重'])
+def test_input_root_named_after_task_is_valid_with_separate_output(tmp_path,task):
+    from pycut.core.output_paths import without_outputs
+    root=tmp_path/task;root.mkdir();source=root/'clip.mp4';source.touch()
+    assert without_outputs([source],[root],task,tmp_path/'elsewhere')==[source]
+    with pytest.raises(ValueError,match='输入目录相同'):
+        without_outputs([source],[root],task,root)

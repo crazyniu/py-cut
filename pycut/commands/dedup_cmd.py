@@ -118,6 +118,9 @@ def _pick_srcs(args: argparse.Namespace) -> list[Path]:
         from ..core.scan import list_videos_recursive  # noqa: PLC0415
         srcs = [p for p in list_videos_recursive(args.src_dir or config.CLIP_DIRS, max_depth=None, raise_on_error=True)
                 if p.suffix.lower() == ".mp4"]
+        if not getattr(args, "in_place", False):
+            from ..core.output_paths import without_outputs
+            srcs = without_outputs(srcs, args.src_dir or config.CLIP_DIRS, "去重", getattr(args, "out_dir", ""))
         if not srcs:
             sys.exit(f"[错误] {args.src_dir} 下没有可处理的视频")
         return srcs
