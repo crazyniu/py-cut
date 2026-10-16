@@ -31,7 +31,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .. import config
-from .ffmpeg import FFMPEG, FFPROBE, probe_video
+from .ffmpeg import FFMPEG, probe_video
 from .utils import log, run_cmd
 
 # ---------------------------------------------------------------------------
@@ -79,37 +79,10 @@ def _iter_mp4(root: Path):
 
 
 def _probe_duration(path: Path) -> float:
-    """取**视频流**时长（秒），读不到返回 0。
-
-    口径与 `core/dedup.py:_video_duration` 一致：只读 `stream.duration`，
-    不用 `format=duration`（那是容器里最长一条流的长度）。
-    mp4 实测一定有值；实测 matroska/flv 的 `stream.duration` 是 `N/A`，
-    故加一档 format 兜底。
-    """
-    rc, out, _err = run_cmd(
-        [FFPROBE, "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=duration", "-of", "csv=p=0", str(path)],
-        timeout=30)
-    if rc == 0:
-        try:
-            v = float(out.strip().splitlines()[0])
-            if v > 0:
-                return v
-        except (IndexError, TypeError, ValueError):
-            pass
-
-    rc, out, _err = run_cmd(
-        [FFPROBE, "-v", "error", "-show_entries", "format=duration",
-         "-of", "csv=p=0", str(path)],
-        timeout=30)
-    if rc == 0:
-        try:
-            v = float(out.strip().splitlines()[0])
-            if v > 0:
-                return v
-        except (IndexError, TypeError, ValueError):
-            pass
-    return 0.0
+    """复用背景的一次完整元数据探测与缓存，不为时长另开 ffprobe。"""
+    from .montage_clips import _probe_one
+    item = _probe_one(path)
+    return item.duration if item is not None else 0.0
 
 
 def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
@@ -125,9 +98,12 @@ def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
 
     items: list[PipItem] = []
     skipped = 0
+    import time
+    started = time.monotonic()
     paths = sorted(_iter_mp4(base), key=lambda p: str(p))
+    log(f"  [画中画素材] 读取 {len(paths)} 个视频的元数据（未改动文件复用缓存）")
     durations = {}
-    with ThreadPoolExecutor(max_workers=max(1, config.MONTAGE_WORKERS)) as executor:
+    with ThreadPoolExecutor(max_workers=max(4, config.MONTAGE_WORKERS)) as executor:
         jobs = {executor.submit(_probe_duration, path): path for path in paths}
         for future in as_completed(jobs):
             durations[jobs[future]] = future.result()
@@ -145,6 +121,7 @@ def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
         log(f"  [画中画去重] 排除 {duplicate_count} 条相同内容")
 
     log(f"  [画中画素材] {base}  可用 {len(items)} 条 / 跳过(短于 {lo:g}s) {skipped} 条")
+    log(f"  [画中画素材] 元数据与重复文件检查耗时 {time.monotonic() - started:.2f}s")
     return items
 
 

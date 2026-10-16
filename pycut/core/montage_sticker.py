@@ -35,7 +35,7 @@ _ALPHA_VARS = "alpha(X,Y)"
 def sticker_chain(img: Path, canvas: tuple[int, int],
                   scale_ratio: float = 0.28, margin_ratio: float = 0.04,
                   opacity: float = 0.55, pos: str = "br",
-                  fps: int | None = None) -> list[str] | None:
+                  fps: int | None = None, video_label: str = "0:v") -> list[str] | None:
     """构造「贴纸叠加」的 filter_complex 片段（不含输入/输出映射）。
 
     返回 list[str]，第一项是 filter_complex 的**链部分**，第二项是输出 label。
@@ -96,7 +96,7 @@ def sticker_chain(img: Path, canvas: tuple[int, int],
     )
     chain = (
         f"{ch};"
-        f"[0:v][stk]overlay={off}:format=auto:shortest=0[vstk]"
+        f"[{video_label}][stk]overlay={off}:format=auto:shortest=0[vstk]"
     )
     return [chain, "vstk"]
 

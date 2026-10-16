@@ -110,7 +110,8 @@ class MontageSyntheticMediaTests(unittest.TestCase):
         stack.enter_context(mock.patch.object(config, "FFMPEG", ffmpeg))
         for mod in (ffmpeg_core, montage_clips, montage_pip):
             stack.enter_context(mock.patch.object(mod, "FFMPEG", ffmpeg))
-            stack.enter_context(mock.patch.object(mod, "FFPROBE", ffprobe))
+            if hasattr(mod, "FFPROBE"):
+                stack.enter_context(mock.patch.object(mod, "FFPROBE", ffprobe))
         stack.enter_context(mock.patch.dict(os.environ, {"PYCUT_FFMPEG": ffmpeg}))
 
     def test_reference_uses_video_duration_when_audio_is_longer(self):

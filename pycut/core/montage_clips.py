@@ -15,9 +15,8 @@ ffmpeg **rc=0 不报错**，产物时长只有 **3.73s**（期望 9.33s）。
 **rc=0 但产物静默短一大截**是最坏的一类错误，所以本模块改成两阶段：
 先把每段双 seek 精确截取并统一规格（分辨率/帧率/SAR/pix_fmt 全一致），**再** concat。
 实测两阶段结果 9.333s / 720x1276 / 无音轨，与 filter_complex 单次编码一致；
-选两阶段是因为每段可单独校验规格与时长。注意阶段2 是**再编码一次**（`_enc_args`
-的 libx264 + CRF），**不是** `-c copy`：段与段的分辨率/SAR/像素格式已统一，但拼接
-本身仍过一次编码器。
+选两阶段是因为每段可单独校验规格与时长。段级几何、贴纸和转场合并编码；
+阶段2 对已统一分辨率/SAR/像素格式/帧率的静音段执行视频流复制，避免整片再编码。
 
 拼接命令一律**列表形式**传参（素材名含中文/空格/括号，实测有 `财源滚滚来__ (1)`），
 绝不 shell 拼串；写临时文件 + `os.replace` 原子替换，单个文件失败不外抛。
@@ -37,6 +36,7 @@ from pathlib import Path
 from .. import config
 from .ffmpeg import FFMPEG, FFPROBE
 from .utils import log, run_cmd
+from .probe_cache import cached_probe
 
 # 素材库可识别的扩展名（与 montage_cmd 的 --probe 保持一致）
 VIDEO_EXTS = (".mp4", ".mov", ".m4v")
@@ -154,7 +154,7 @@ def _probe_one(path: Path) -> ClipItem | None:
         "-show_entries", "format=duration",
         "-of", "json", str(path),
     ]
-    rc, out, _err = run_cmd(args, timeout=PROBE_TIMEOUT)
+    rc, out, _err = cached_probe(path, args, PROBE_TIMEOUT, run_cmd)
     if rc != 0:
         return None
     try:
@@ -535,7 +535,9 @@ def _write_concat_list(files: list[Path]) -> Path:
 def _seg_cmd(src: Path, offset: float, take: float, out: Path,
              canvas=None, fps=None, crf: str = CRF_DEFAULT,
              mirror: bool = False, speed: float = 1.0,
-             frames: int | None = None, dedup_seed: int | None = None) -> list[str]:
+             frames: int | None = None, dedup_seed: int | None = None,
+             sticker: Path | None = None, sticker_seed: int = 0,
+             seam_fade: float = 0.0, first: bool = False, last: bool = False) -> list[str]:
     """单段截取：双 seek（输入侧粗 + 输出侧精）+ 适配画布 + 静音 + libx264。
 
     `mirror` / `speed` 是可选的画面扰动（由调用方按 seed 决定，保持参数默认值即
@@ -567,12 +569,41 @@ def _seg_cmd(src: Path, offset: float, take: float, out: Path,
     if frames is not None:
         # 累计舍入的帧预算可避免多片拼接后产生每段一帧的时长漂移。
         chain += ",tpad=stop_mode=clone:stop_duration=1"
+    filters = []
+    if seam_fade > 0:
+        from .montage_transitions import seam_fade_filters
+        duration = frames / float(fps or config.MONTAGE_FPS) if frames is not None else take
+        # 输出侧 -ss 在滤镜之后裁掉 fine 秒；淡化须沿同一时间轴后移，
+        # 否则淡入会被精确 seek 一起裁掉。贴纸与淡化保持原先先后顺序。
+        filters = seam_fade_filters(duration, seam_fade, first, last, start=fine)
+    inputs = ["-ss", f"{coarse:.3f}", "-i", str(src)]
+    if sticker:
+        from .montage_sticker import sticker_chain
+        rng = random.Random(sticker_seed)
+        rng.random()  # 与旧段级贴纸 chance=1 的随机序列一致。
+        img = rng.choice([Path(sticker)])
+        part = sticker_chain(
+            img, canvas or config.MONTAGE_CANVAS,
+            config.MONTAGE_STICKER_SCALE, config.MONTAGE_STICKER_MARGIN,
+            config.MONTAGE_STICKER_OPACITY, pos=rng.choice(["br", "bl", "tl"]),
+            fps=fps, video_label="segment")
+        if part is None:
+            raise ValueError(f"已指定贴纸但无法读取: {sticker}")
+        inputs += ["-i", str(img)]
+        graph, label = part
+        graph = f"[0:v]{chain}[segment];{graph}"
+        if filters:
+            graph += f";[{label}]" + ",".join(filters) + "[vout]"
+            label = "vout"
+        output_filter = ["-filter_complex", graph, "-map", f"[{label}]"]
+    else:
+        output_filter = ["-vf", ",".join([chain, *filters])]
     return [
         FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-        "-ss", f"{coarse:.3f}", "-i", str(src),   # 输入侧粗 seek（回退 COARSE_BACKOFF）
-        "-ss", f"{fine:.3f}",                      # 输出侧精 seek 补回来
+        *inputs,
+        "-ss", f"{fine:.3f}",
         "-t", f"{max(0.0, float(take)):.3f}",
-        "-vf", chain,
+        *output_filter,
         *([] if frames is None else ["-frames:v", str(frames)]),
         *_enc_args(out, fps, crf),
     ]
@@ -614,7 +645,11 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
         rc, _o, err = run_cmd(
             _seg_cmd(it.path, d["offset"], src_take, seg, canvas, fps, crf,
                      mirror=bool(d.get("mirror")), speed=speed, frames=frames,
-                     **({"dedup_seed": d["dedup_seed"]} if "dedup_seed" in d else {})),
+                     **({"dedup_seed": d["dedup_seed"]} if "dedup_seed" in d else {}),
+                     sticker=Path(d["sticker"]) if d.get("sticker") else None,
+                     sticker_seed=i * 7919 + 13,
+                     seam_fade=seam_fade if len(items) > 1 else 0.0,
+                     first=i == 0, last=i == len(items) - 1),
             timeout=timeout)
         if rc != 0 or not seg.is_file() or seg.stat().st_size < 1024:
             msg = err.strip()[:4000] or "输出缺失或文件过小"
@@ -624,49 +659,8 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
                 f"speed={speed:.3f} frames={frames} canvas={canvas} "
                 f"fps={frame_rate:g} rc={rc}\n{msg}")
 
-        # 贴纸叠加：段级叠加（拼接后再加就分不清哪段配哪张了）。
-        # items 里带 "sticker" 才叠；明确选择后叠加失败不得静默发布无贴纸成片。
-        stk = d.get("sticker")
-        if stk:
-            from .montage_sticker import apply_sticker_to_file  # noqa: PLC0415
-            if apply_sticker_to_file(
-                    seg, seg, canvas,
-                    crf=crf, fps=fps,
-                    scale_ratio=config.MONTAGE_STICKER_SCALE,
-                    margin_ratio=config.MONTAGE_STICKER_MARGIN,
-                    opacity=config.MONTAGE_STICKER_OPACITY,
-                    seed=i * 7919 + 13, chance=1.0,
-                    sticker=Path(stk)):
-                d["sticker_applied"] = True
-            else:
-                raise RuntimeError(f"分段 {i + 1} 已指定贴纸但叠加失败: {stk}")
-        # 段间亮度淡化在标准化和段级贴纸完成后执行，原片段不重叠也不裁短。
-        if seam_fade > 0 and len(items) > 1:
-            faded = None
-            from .montage_transitions import (build_seam_fade_cmd,
-                                               probe_segment_duration)
-            try:
-                real_duration = probe_segment_duration(seg)
-                faded = seg.with_name(f"{seg.stem}_fade.mp4")
-                cmd = build_seam_fade_cmd(
-                    seg, faded, duration=real_duration, seconds=seam_fade,
-                    first=(i == 0), last=(i == len(items) - 1),
-                    fps=fps, crf=crf)
-                if cmd:
-                    frc, _fo, ferr = run_cmd(cmd, timeout=timeout)
-                    if frc != 0 or not faded.is_file() or faded.stat().st_size < 1024:
-                        raise RuntimeError(
-                            ferr.strip().splitlines()[-1] if ferr.strip()
-                            else "转场输出缺失")
-                    faded_duration = probe_segment_duration(faded)
-                    if abs(faded_duration - real_duration) > 0.15 + 1 / max(float(fps or config.MONTAGE_FPS), 1):
-                        raise RuntimeError("转场前后片段时长不一致")
-                    os.replace(faded, seg)
-            except (OSError, ValueError, RuntimeError) as exc:
-                raise RuntimeError(f"分段 {i + 1} 转场失败: {exc}") from exc
-            finally:
-                if faded is not None and faded.is_file():
-                    faded.unlink()
+        if d.get("sticker"):
+            d["sticker_applied"] = True
         segs.append(seg)
     return segs
 
@@ -683,7 +677,7 @@ def build_concat_cmd(items: list[dict], out: Path, canvas=None, fps=None,
     - 竖屏素材用 `scale` + `pad` 适配画布：**等比、不裁切内容**，实测补边仅 1~3px；
       **严禁直接拉伸变形**（会明显变形）。
     - **静音**：`-an`，且 concat 列表只含视频流（阶段1 产出的段本就无音轨）。
-    - `libx264` + `-pix_fmt yuv420p` + `-movflags +faststart` + `-fps_mode cfr`。
+    - 段级 `libx264` / yuv420p / CFR；拼接 `-c:v copy`，保留 faststart。
     - **原子替换**：阶段2 产物先写 `<out>.tmp_<pid>.mp4`，由 `concat_clips` 在
       ffmpeg 成功后才 `os.replace` 到 `out`（本函数只负责阶段2 的命令，替换由
       `concat_clips` 执行；阶段1 的截取编码已经在本函数内跑完了）。
@@ -709,7 +703,8 @@ def build_concat_cmd(items: list[dict], out: Path, canvas=None, fps=None,
     cmd = [
         FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
         "-f", "concat", "-safe", "0", "-i", str(lst),
-        *_enc_args(tmp, fps, crf),
+        "-map", "0:v:0", "-an", "-c:v", "copy",
+        "-map_metadata", "-1", "-movflags", "+faststart", str(tmp),
     ]
     return cmd, lst
 

@@ -2,21 +2,20 @@
 from pathlib import Path
 from unittest import mock
 
-from pycut import config, tui
+from pycut import config, tui, settings
 from pycut.core.montage_clips import _collect_files
 
 
 def test_montage_nested_chinese_libraries_and_specific_empty_message(tmp_path):
     background = tmp_path / '中文 背景'
     pip = tmp_path / '切片'
-    reference = tmp_path / '爆款.mp4'
+    reference = tmp_path / '话术' / 'a' / '爆款.mp4'
     for root in (background, pip):
         nested = root / '179179' / '有人脸' / '额外' / '深层'
         nested.mkdir(parents=True)
         (nested / '素材_1.MP4').write_bytes(b'candidate')
     selection = ([reference], {str(reference): 1})
-    env = {'PYCUT_PIP_DIR': str(pip)}
-    with mock.patch.dict('os.environ', env), mock.patch.object(config, 'MONTAGE_CLIP_DIR', background), mock.patch.object(config, 'MONTAGE_DEDUP_DIR', pip), mock.patch.object(tui, 'list_videos_flat', return_value=[reference]), mock.patch.object(tui, '_multi_select', return_value=selection), mock.patch.object(tui, '_set_fission_counts', return_value=True), mock.patch.object(tui, '_confirm', return_value=True), mock.patch.object(tui, '_flash') as flash:
+    with mock.patch.object(config, 'CLIP_DIRS', [background]), mock.patch.object(config, 'PIP_DIRS', [pip]), mock.patch.object(tui, 'list_videos_recursive', return_value=[reference]), mock.patch.object(settings, 'problems', return_value=[]), mock.patch.object(tui, '_multi_select', return_value=selection), mock.patch.object(tui, '_set_fission_counts', return_value=True), mock.patch.object(tui, '_confirm', return_value=True), mock.patch.object(tui, '_flash') as flash:
         jobs = tui._wizard_montage(None, 100)
         assert jobs and '--clip-dir' in jobs[0]
         assert '--dedup-dir' in jobs[0]
@@ -27,13 +26,13 @@ def test_montage_nested_chinese_libraries_and_specific_empty_message(tmp_path):
         # 画中画目录配置了但无可用素材 → 勾选（默认开）后扫描为空，拒绝并提示。
         assert tui._wizard_montage(None, 100) is None
         warning = flash.call_args.args[1]
-        assert f'画中画目录没有可用素材：{pip}' in warning
+        assert '画中画素材不可用' in warning
         for candidate in _collect_files(background):
             candidate.unlink()
         # 背景切片目录始终需要，清空后入口即拒绝。
         assert tui._wizard_montage(None, 100) is None
         warning = flash.call_args.args[1]
-        assert f'背景切片：{background}' in warning
+        assert '未找到混剪切片' in warning and str(background) in warning
 
 
 def test_flash_keeps_long_chinese_path_across_lines():
