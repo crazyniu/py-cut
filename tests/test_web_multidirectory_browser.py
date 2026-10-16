@@ -2,7 +2,7 @@ import json, tempfile, os
 import pytest
 from pathlib import Path
 from unittest import mock
-from pycut import web_config,config,settings
+from pycut import web_config,config,settings,native_directory_picker
 
 @pytest.mark.skipif(os.environ.get('PYCUT_TEST_BROWSER')!='1',reason='Real Chromium QA is opt-in; runtime has no browser dependency')
 def test_browser_multidirectory_flow(tmp_path):
@@ -11,7 +11,7 @@ def test_browser_multidirectory_flow(tmp_path):
   root=Path(td)
   for name in ('话术/a','混剪一','混剪二','画中画','前贴'):(root/name).mkdir(parents=True)
   (root/'.env').write_text('PYCUT_MAIN_KEY=test-private-secret\nPYCUT_REFERENCE_DIR='+str(root/'话术')+'\nPYCUT_CLIP_DIR='+str(root/'混剪一')+'\n')
-  with mock.patch.object(config,'PROJECT_ROOT',root),mock.patch.object(config,'refresh'),mock.patch.dict(os.environ,{},clear=True),sync_playwright() as pw:
+  with mock.patch.object(config,'PROJECT_ROOT',root),mock.patch.object(config,'refresh'),mock.patch.dict(os.environ,{},clear=True),mock.patch.object(native_directory_picker,'choose_directory',side_effect=[native_directory_picker.PickerError('当前无图形桌面，请手动输入路径'),None,str(root/'画中画')]) as picker,sync_playwright() as pw:
    browser=pw.chromium.launch(executable_path='/usr/bin/chromium',args=['--no-sandbox'])
    page=browser.new_page(viewport={'width':1280,'height':1000});page.set_default_timeout(5000)
    errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
@@ -23,14 +23,14 @@ def test_browser_multidirectory_flow(tmp_path):
     assert group.locator('input').input_value()==str(root/'混剪一')
     page.locator('.add-directory[data-key=PYCUT_CLIP_DIR]').click()
     group.locator('input').nth(1).fill(str(root/'混剪二'))
-    group.locator('.browse').nth(1).click();page.wait_for_function('()=>browse.valid')
-    assert page.locator('#browse-path').inner_text()==str(root/'混剪二')
-    page.locator('#browse-cancel').click()
+    group.locator('.browse').nth(1).click();page.wait_for_function('()=>!picking')
+    assert '手动输入路径' in page.locator('#status').inner_text()
     assert group.locator('input').nth(1).input_value()==str(root/'混剪二')
-    group.locator('.browse').nth(1).click();page.wait_for_function('()=>browse.valid')
-    page.locator('#browse-up').click();page.wait_for_function('()=>browse.valid&&browse.path==='+json.dumps(str(root)))
-    page.locator('#browse-list').get_by_role('button',name='画中画').click();page.wait_for_function('()=>browse.valid&&browse.path==='+json.dumps(str(root/'画中画')))
-    page.locator('#browse-select').click()
+    group.locator('.browse').nth(1).click();page.wait_for_function('()=>!picking')
+    assert '已取消选择' in page.locator('#status').inner_text()
+    assert group.locator('input').nth(1).input_value()==str(root/'混剪二')
+    group.locator('.browse').nth(1).click();page.wait_for_function('()=>!picking')
+    assert picker.call_count==3
     assert group.locator('input').nth(0).input_value()==str(root/'混剪一')
     assert group.locator('input').nth(1).input_value()==str(root/'画中画')
     for key in ('PYCUT_PIP_DIR','PYCUT_INTRO_DIR'):

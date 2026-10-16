@@ -7,7 +7,7 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
-from . import config, settings, web_dir_browser
+from . import config, settings, web_dir_browser, native_directory_picker
 
 _SERVER = None
 _TOKEN = secrets.token_urlsafe(32)
@@ -99,7 +99,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, {'values':{k:('' if k.endswith('_KEY') else v) for k,v in values.items()}, 'configured_keys':configured, 'overrides':settings.overrides(), 'problems':settings.problems(values), 'path':str(config.PROJECT_ROOT / '.env')})
 
     def do_POST(self):
-        if self.path != '/api/config':
+        if self.path not in ('/api/config', '/api/pick-directory'):
             return self.reply(404, {'error':'页面不存在'})
         if not self.authorized():
             return self.reply(403, {'error':'无效的配置会话，请刷新页面'})
@@ -111,6 +111,15 @@ class Handler(BaseHTTPRequestHandler):
             values = json.loads(self.rfile.read(size))
             if not isinstance(values, dict):
                 raise ValueError('配置格式无效')
+            if self.path == '/api/pick-directory':
+                key, initial = values.get('key'), values.get('path', '')
+                if key not in settings.DIRECTORIES or not isinstance(initial, str) or len(initial) > 4096 or '\x00' in initial:
+                    raise ValueError('目录选择参数无效')
+                try:
+                    selected = native_directory_picker.choose_directory(initial, config.PROJECT_ROOT, '选择'+settings.FIELDS[key][0])
+                except native_directory_picker.PickerError as exc:
+                    return self.reply(503, {'error':str(exc)})
+                return self.reply(200, {'path':selected, 'cancelled':selected is None})
             with _LOCK:
                 settings.save(values)
                 config.refresh()
@@ -118,6 +127,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, {'problems':errors, 'overrides':settings.overrides(),
                              'values':{k:('' if k.endswith('_KEY') else v) for k,v in settings.effective().items()}})
         except (ValueError, TypeError, OSError):
+            if self.path == '/api/pick-directory':
+                return self.reply(400, {'error':'目录选择参数无效，请刷新页面后重试'})
             self.reply(400, {'error':'保存失败：请检查字段提示和 .env 写入权限后重试。', 'problems':settings.problems(values, require_all=False) if isinstance(values, dict) and all(isinstance(v, str) for v in values.values()) else []})
 
 

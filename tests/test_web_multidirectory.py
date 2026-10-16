@@ -19,8 +19,10 @@ def test_multi_groups_keep_named_string_values_and_remove_source():
         assert f'class="directory-list" data-key="{key}"' in page
         assert f'class="add-directory" data-key="{key}"' in page
     assert 'MULTI_FIELDS' not in page
-    assert 'request!==browse.request' in page
-    assert 'browse.input' in page and 'input?.isConnected' in page
+    assert 'picking||loading||saving' in page
+    assert 'input.isConnected' in page and 'input.value!==original' in page
+    assert 'browse-modal' not in page
+    assert '/api/pick-directory' in page
 
 
 def test_multi_directory_post_returns_canonical_paths_and_no_keys(tmp_path):
