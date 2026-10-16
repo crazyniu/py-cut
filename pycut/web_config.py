@@ -20,23 +20,37 @@ def page() -> str:
     for key, (label, help_text) in settings.FIELDS.items():
         kind = 'password' if key.endswith('_KEY') else 'text'
         section = 'directories' if key.endswith('_DIR') else 'llm'
-        optional = '可选' if key in ('PYCUT_INTRO_DIR', 'PYCUT_STICKER_DIR') or key.startswith('PYCUT_BACKUP_') else ''
+        optional = '可选' if key in ('PYCUT_PIP_DIR', 'PYCUT_INTRO_DIR', 'PYCUT_OUTPUT_DIR', 'PYCUT_STICKER_DIR') or key.startswith('PYCUT_BACKUP_') else ''
         input_html = (f'<input id="{key}" name="{key}" type="{kind}" autocomplete="off" '
                       f'spellcheck="false" aria-describedby="{key}-help {key}-error">')
-        if key.endswith('_DIR'):
+        multi = key in settings.MULTI_DIRECTORIES
+        if multi:
+            input_html = (f'<input id="{key}" name="{key}" type="hidden">'
+                          f'<div class="directory-list" data-key="{key}"></div>'
+                          f'<button type="button" class="add-directory" data-key="{key}">添加目录</button>')
+        elif key.endswith('_DIR'):
             input_html = (f'<div class="input-row">{input_html}'
                           f'<button type="button" class="browse" data-key="{key}" '
                           f'aria-label="选择{html.escape(label)}">选择…</button></div>')
-        sections[section].append(
-            f'<div class="field"><label for="{key}">{html.escape(label)}'
-            f'<span class="optional">{optional}</span></label>'
-            f'{input_html}'
-            f'<small id="{key}-help">{html.escape(help_text)}</small>'
-            f'<span class="field-error" id="{key}-error"></span></div>')
+        if multi:
+            sections[section].append(
+                f'<fieldset class="field multi-directory" data-key="{key}" '
+                f'aria-describedby="{key}-help {key}-error"><legend>{html.escape(label)}'
+                f'<span class="optional">{optional}</span></legend>'
+                f'<small id="{key}-help">{html.escape(help_text)}</small>'
+                f'{input_html}<span class="field-error" id="{key}-error"></span></fieldset>')
+        else:
+            sections[section].append(
+                f'<div class="field"><label for="{key}">{html.escape(label)}'
+                f'<span class="optional">{optional}</span></label>'
+                f'{input_html}'
+                f'<small id="{key}-help">{html.escape(help_text)}</small>'
+                f'<span class="field-error" id="{key}-error"></span></div>')
     template = Path(__file__).with_name('templates').joinpath('config.html').read_text(encoding='utf-8')
     return (template.replace('DIRECTORY_FIELDS', ''.join(sections['directories']))
             .replace('LLM_FIELDS', ''.join(sections['llm']))
             .replace('TOKEN_VALUE', json.dumps(_TOKEN))
+            .replace('MULTI_FIELDS', json.dumps(settings.MULTI_DIRECTORIES))
             .replace('FIELD_LABELS', json.dumps({k: v[0] for k, v in settings.FIELDS.items()}, ensure_ascii=False)))
 
 
@@ -101,7 +115,8 @@ class Handler(BaseHTTPRequestHandler):
                 settings.save(values)
                 config.refresh()
                 errors = settings.problems(settings.effective())
-            self.reply(200, {'problems':errors, 'overrides':settings.overrides()})
+            self.reply(200, {'problems':errors, 'overrides':settings.overrides(),
+                             'values':{k:('' if k.endswith('_KEY') else v) for k,v in settings.effective().items()}})
         except (ValueError, TypeError, OSError):
             self.reply(400, {'error':'保存失败：请检查字段提示和 .env 写入权限后重试。', 'problems':settings.problems(values, require_all=False) if isinstance(values, dict) and all(isinstance(v, str) for v in values.values()) else []})
 
