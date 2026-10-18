@@ -762,8 +762,7 @@ def build_concat_cmd(items: list[dict], out: Path, canvas=None, fps=None,
     本函数先在 `config.MONTAGE_TMP/seg_<pid>_<thread>/` 下执行**阶段1**（每段双 seek 精确截取
     + 统一规格），再返回**阶段2** 的 concat 命令。调用方自己跑 argv。
 
-    - 目标画布默认 `config.MONTAGE_CANVAS = (720, 1276)`（注意高度 1276 不是 1280，
-      以步骤A 基准视频为准）。
+    - 目标画布默认 `config.MONTAGE_CANVAS = (720, 1280)`，不跟随话术源分辨率改变。
     - 竖屏素材用 `scale` + `pad` 适配画布：**等比、不裁切内容**，实测补边仅 1~3px；
       **严禁直接拉伸变形**（会明显变形）。
     - **静音**：`-an`，且 concat 列表只含视频流（阶段1 产出的段本就无音轨）。
@@ -772,7 +771,7 @@ def build_concat_cmd(items: list[dict], out: Path, canvas=None, fps=None,
       ffmpeg 成功后才 `os.replace` 到 `out`（本函数只负责阶段2 的命令，替换由
       `concat_clips` 执行；阶段1 的截取编码已经在本函数内跑完了）。
     - 返回 `(ffmpeg argv, 实际使用的 concat 列表路径)`；列表在 `config.MONTAGE_TMP`
-      下、文件名带 pid，便于调用方打印与清理。
+      下、文件名带 pid 和线程标识，便于调用方隔离与清理。
 
     注意：本函数**有副作用**（会真的跑阶段1 的截取编码）。只想看命令请自行拼装。
     """
