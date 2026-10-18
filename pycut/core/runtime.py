@@ -14,6 +14,12 @@ class _Stop:
 STOP = _Stop()
 
 
+def check_stop() -> None:
+    """Abort at a processing boundary before starting work or publishing it."""
+    if STOP.flag:
+        raise InterruptedError("用户已中断任务，未发布结果")
+
+
 def install_signal_handlers() -> None:
     """注册 SIGINT / SIGTERM -> 置 STOP.flag，长任务检测到后收尾退出。"""
 

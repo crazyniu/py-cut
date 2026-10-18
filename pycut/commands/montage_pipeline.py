@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,7 @@ from .. import config
 from ..core.progress import progress
 from ..core.utils import log
 from ..core.output_paths import montage_output
+from ..core.runtime import check_stop
 
 
 @dataclass
@@ -57,6 +59,21 @@ def run_pipeline(opts: MontageOptions) -> dict:
     返回键：source_duration / segments / clips_used / clips_reused /
             pip_count / final_duration / final / base（步骤B 中间产物路径）
     """
+    # Own the background from its creation onward, including errors/cancellation
+    # before the final-render block. Only successful --step b keeps its file.
+    temporary: list[Path] = []
+    try:
+        check_stop()
+        return _run_pipeline(opts, temporary)
+    except InterruptedError as exc:
+        log(f"[中断] {exc}")
+        return {"error": str(exc), "final": "", "cancelled": True}
+    finally:
+        for path in temporary:
+            _unlink(path)
+
+
+def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
     from ..core.dedup_presets import derive_seed  # noqa: PLC0415 复用已有的 seed 派生
     from ..core.montage_clips import (concat_clips,  # noqa: PLC0415
                                       pick_clips, scan_library)
@@ -81,6 +98,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
         prepared["source"] = probe_source(opts.source, noise_db=opts.noise_db,
                                           min_silence=opts.min_silence)
     prof = prepared["source"]
+    check_stop()
     if prof is None:
         log(f"  [失败] 基准视频探测失败: {opts.source}")
         return {"source_duration": 0.0, "segments": 0, "clips_used": 0,
@@ -91,6 +109,10 @@ def run_pipeline(opts: MontageOptions) -> dict:
     canvas = config.MONTAGE_CANVAS
     # 基准视频总时长是硬约束；不能再沿用 0.98 的缩短预算。
     target = prof.duration
+    if opts.step not in ("a", "b") and opts.keep_audio and not prof.has_audio:
+        error = "基准视频无音轨，无法保留原声；未发布成片"
+        log(f"  [失败] {error}")
+        return {"error": error, "final": ""}
     # 有字幕时，**以字幕为节奏骨架**切槽——字幕条数（56）远多于语音段（7），
     # 一槽一字幕才能把话术完整带上；否则 42 条字幕会因槽不够而丢失。
     # 无字幕时才退回「语音段 + 连续补槽」。
@@ -99,6 +121,9 @@ def run_pipeline(opts: MontageOptions) -> dict:
         from ..core.montage_subtitles import parse_srt  # noqa: PLC0415
         try:
             cues = parse_srt(opts.srt)
+            if opts.step not in ("a", "b") and not any(
+                    c.end > 0 and c.start < target and c.end > c.start for c in cues):
+                raise ValueError("字幕为空或没有处于话术时间轴内的有效字幕")
             if cues:
                 # 关键：用**字幕自己的**最小可读时长（0.8s），不是片段的 min_clip(1.2s)。
                 # 实测 56 条字幕里 27 条短于 1.2s，按1.2 卡会丢一半；
@@ -107,7 +132,11 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 slots = _slots_from_cues(cues, target, sub_min)
                 log(f"  按字幕切槽: {len(cues)} 条字幕 -> {len(slots)} 个槽，"
                     f"累计 {sum(b - a for a, b in slots):.2f}s（目标 {target:.2f}s）")
-        except Exception as e:  # noqa: BLE001 字幕解析失败不该中断混剪
+        except (ValueError, OSError) as e:
+            if opts.step not in ("a", "b"):
+                error = f"步骤D 字幕准备失败: {e}"
+                log(f"  [失败] {error}")
+                return {"error": error, "final": ""}
             log(f"  [提示] 字幕解析失败（{type(e).__name__}），退回语音节奏切槽")
             slots = []
 
@@ -151,13 +180,13 @@ def run_pipeline(opts: MontageOptions) -> dict:
         return result
 
     # ---------------- 步骤B：随机混剪 ----------------
+    check_stop()
     progress("混剪合成", 1, 5, detail="选片、扰动与背景合成")
     log("--- 步骤B：随机混剪拼接 ---")
     if "stickers" not in prepared:
         prepared["stickers"] = _load_stickers(opts.sticker_dir) if opts.sticker_chance > 0 else []
         if opts.online_stickers and opts.sticker_chance > 0:
             from ..core.online_stickers import download_stickers
-            import tempfile
             try:
                 directory = tempfile.TemporaryDirectory(prefix="stickers_", dir=tmp)
                 prepared.setdefault("temporary_dirs", []).append(directory)
@@ -179,6 +208,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
                                                max_dur=opts.max_clip, workers=opts.workers,
                                                allow_landscape=opts.allow_landscape)
     items = prepared["background"]
+    check_stop()
     if opts.allow_landscape:
         log(f"  素材 {len(items)} 条（已允许横屏）")
     else:
@@ -204,7 +234,9 @@ def run_pipeline(opts: MontageOptions) -> dict:
         log(f"  [失败] {result['error']}；拒绝产出缩水成片")
         return result
 
-    # 先确认画中画池，再编码正文；避免素材不足时白做整段混剪。
+    # Plan the actual PiP coverage before any encoding, not just pool existence.
+    frame_tolerance = 1.0 / config.MONTAGE_FPS + 0.01
+    timeline = []
     if opts.use_pip and opts.step != "b":
         if "pip" not in prepared:
             prepared["pip"] = scan_dedup_pool(opts.dedup_dir, min_dur=opts.min_clip)
@@ -212,18 +244,35 @@ def run_pipeline(opts: MontageOptions) -> dict:
             result["error"] = f"画中画素材目录没有可用 MP4/MOV/M4V：{opts.dedup_dir}"
             log(f"  [失败] {result['error']}（请检查素材长度/路径或显式使用 --no-pip）")
             return result
+        timeline = plan_pip_timeline(prepared["pip"], target, slot=opts.pip_slot,
+                                     seed=seed, continuous=opts.pip_continuous)
+        # The continuous planner already returns adjacent full shots extending
+        # beyond the body. Keep that surplus for a single final trim.
+        cov = sum(t["duration"] for t in timeline)
+        log(f"  画中画 {len(timeline)} 段，累计 {cov:.1f}s / {target:.1f}s"
+            f"（覆盖率 {cov / target * 100:.0f}%"
+            f"{'，连续模式' if opts.pip_continuous else ''}）")
+        if not timeline or (opts.pip_continuous and target - cov > frame_tolerance):
+            result["error"] = (
+                f"画中画素材不足：需覆盖 {target:.2f}s，实际 {cov:.2f}s")
+            log(f"  [失败] {result['error']}；拒绝输出没有画中画的成片")
+            return result
 
-    base = tmp / f"base_{seed}.mp4"
+    check_stop()
+    fd, location = tempfile.mkstemp(prefix=f"base_{seed}_", suffix=".mp4", dir=tmp)
+    os.close(fd)
+    base = Path(location)
+    temporary.append(base)
     # 用 montage_clips.concat_clips（内部完成「分段截取 → concat → 原子替换」两阶段）
     r = concat_clips(picked, base, canvas=canvas, fps=config.MONTAGE_FPS,
                      crf=opts.crf, **({"seam_fade": opts.seam_fade} if opts.seam_fade else {}))
+    check_stop()
     if not r.get("ok") or not base.is_file():
         log(f"  [失败] 拼接失败: {r.get('error') or '产物未生成'}")
         result["error"] = "步骤B拼接失败"
         _unlink(base)
         return result
     base_duration = _duration(base)
-    frame_tolerance = 1.0 / config.MONTAGE_FPS + 0.01
     if abs(base_duration - target) > frame_tolerance:
         result["error"] = (f"步骤B时长错误：基准 {target:.3f}s，拼接 {base_duration:.3f}s")
         log(f"  [失败] {result['error']}")
@@ -241,6 +290,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
         log("  --step b：停在步骤B 产物")
         result["final"] = str(base)
         result["final_duration"] = target
+        temporary.remove(base)
         return result
 
     # ---------------- 步骤C：画中画叠加 ----------------
@@ -265,22 +315,6 @@ def run_pipeline(opts: MontageOptions) -> dict:
             log("--- 步骤C：画中画叠加 ---")
             pool = prepared["pip"]
             log(f"  画中画素材 {len(pool)} 条")
-            timeline = plan_pip_timeline(pool, target, slot=opts.pip_slot,
-                                             seed=seed, continuous=opts.pip_continuous)
-            # 用户反馈「画中画不连续」：上游 plan_pip_timeline 每段之间固定留
-            # ~0.6s 空档，实测 19% 的时间画面上没有画中画。连续模式下重排时间轴，
-            # 让画中画**首尾相接**（gap=0），符合「全程都有」的观感。
-            if opts.pip_continuous:
-                timeline = _make_continuous(timeline, target)
-            cov = sum(t["duration"] for t in timeline)
-            log(f"  画中画 {len(timeline)} 段，累计 {cov:.1f}s / {target:.1f}s"
-                f"（覆盖率 {cov / target * 100:.0f}%"
-                f"{'，连续模式' if opts.pip_continuous else ''}）")
-            if not timeline or (opts.pip_continuous and target - cov > frame_tolerance):
-                result["error"] = (
-                    f"画中画素材不足：需覆盖 {target:.2f}s，实际 {cov:.2f}s")
-                log(f"  [失败] {result['error']}；拒绝输出没有画中画的成片")
-                return result
             # build_pip_cmd 不是纯命令构造器：它已经运行 FFmpeg、
             # 校验输出并原子发布到传入路径。不可再用 _publish_stage
             # 执行一次返回的 argv，否则画中画会被重复编码。
@@ -288,6 +322,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
             try:
                 if opts.srt and Path(opts.srt).is_file():
                     ass_path = _prepare_subtitles(opts.srt, canvas, base_duration)
+                check_stop()
                 build_pip_cmd(base, timeline, working, canvas=canvas,
                               scale=opts.pip_scale, fps=config.MONTAGE_FPS,
                               crf=opts.crf, seed=seed,
@@ -302,6 +337,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
                     _unlink(ass_path)
             result["pip_count"] = len(timeline)
 
+        check_stop()
         if not working.is_file() or working.stat().st_size < 1024:
             log("  [失败] 成片未生成或文件异常")
             result["error"] = "成片未生成或文件异常"
@@ -327,6 +363,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
         elif opts.srt:
             log(f"--- 步骤D：跳过（字幕文件不存在: {opts.srt}）---")
 
+        check_stop()
         # ---------------- 步骤E：贴回基准视频的原始音轨（放最后） ----------------
         # 步骤B/C/D 都用 -an（片段自带的声音是杂音，且字幕烧录会抹掉音轨），
         # 但**基准视频的话术音频必须保留**——用户要求成片时长与话术对齐，
@@ -348,7 +385,9 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 return result
             log("--- 步骤E：跳过（基准视频无音轨）---")
 
+        check_stop()
         duration = _duration(working)
+        check_stop()
         if (duration <= 0 or not working.is_file() or working.stat().st_size < 1024
                 or abs(duration - target) > frame_tolerance):
             result["error"] = (
@@ -369,6 +408,7 @@ def run_pipeline(opts: MontageOptions) -> dict:
                 result["error"] = f"前贴处理失败：{exc}"
                 log(f"  [失败] {result['error']}；未发布成片")
                 return result
+        check_stop()
         try:
             os.replace(str(working), str(final))
         except OSError as exc:
@@ -388,7 +428,6 @@ def run_pipeline(opts: MontageOptions) -> dict:
     finally:
         _unlink(working)
         _unlink(staged)
-        _unlink(base)
         result["base"] = ""  # 完整混剪不向调用者返回已删除的中间文件路径
 
 def _prepare_subtitles(srt, canvas: tuple[int, int], duration: float) -> Path:

@@ -12,6 +12,11 @@ from pycut.core import subtitle
 
 
 class ConfigTests(unittest.TestCase):
+    def setUp(self):
+        # A previously initialized urllib opener can retain cloud HTTP proxies
+        # even inside tests that clear os.environ. Local HTTP stays local.
+        self.urlopen = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
+
     def test_save_preserves_comments_other_values_and_blank_secret(self):
         with tempfile.TemporaryDirectory() as td, mock.patch.object(config, 'PROJECT_ROOT', Path(td)):
             path = Path(td) / '.env'
@@ -47,9 +52,9 @@ class ConfigTests(unittest.TestCase):
             url = web_config.start(open_browser=False)
             self.addCleanup(web_config.stop)
             with self.assertRaises(urllib.error.HTTPError) as error:
-                urllib.request.urlopen(url + 'api/config')
+                self.urlopen(url + 'api/config')
             self.assertEqual(error.exception.code, 403)
-            with urllib.request.urlopen(url) as response:
+            with self.urlopen(url) as response:
                 page = response.read().decode('utf-8')
             self.assertIn('data-panel="llm"', page)
             self.assertNotIn('DIRECTORY_FIELDS', page)
@@ -57,30 +62,30 @@ class ConfigTests(unittest.TestCase):
                 self.assertIn(f'id="{key}"', page)
             headers = {'X-Config-Token':web_config._TOKEN, 'Content-Type':'application/json'}
             req = urllib.request.Request(url+'api/config', headers=headers)
-            with urllib.request.urlopen(req) as response:
+            with self.urlopen(req) as response:
                 raw = response.read()
             self.assertNotIn(b'test-secret', raw)
             payload = {'PYCUT_CLIP_DIR':td, 'PYCUT_MAIN_KEY':''}
             req = urllib.request.Request(url+'api/config', json.dumps(payload).encode(), headers, method='POST')
-            with urllib.request.urlopen(req) as response:
+            with self.urlopen(req) as response:
                 self.assertEqual(response.status, 200)
             self.assertEqual(settings.read_env()['PYCUT_MAIN_KEY'], 'test-secret')
             before = Path(td, '.env').read_bytes()
             invalid = {'PYCUT_CLIP_DIR':str(Path(td, 'missing'))}
             req = urllib.request.Request(url+'api/config', json.dumps(invalid).encode(), headers, method='POST')
             with self.assertRaises(urllib.error.HTTPError) as error:
-                urllib.request.urlopen(req)
+                self.urlopen(req)
             feedback = json.loads(error.exception.read())
             self.assertEqual(feedback['problems'], [f'混剪切片目录第 1 项不存在或无法访问：{Path(td, "missing")}'])
             self.assertEqual(before, Path(td, '.env').read_bytes())
             req = urllib.request.Request(url+'api/config', b'{', headers, method='POST')
             with self.assertRaises(urllib.error.HTTPError) as error:
-                urllib.request.urlopen(req)
+                self.urlopen(req)
             self.assertEqual(error.exception.code, 400)
             headers['Origin'] = 'https://example.com'
             req = urllib.request.Request(url+'api/config', b'{}', headers, method='POST')
             with self.assertRaises(urllib.error.HTTPError) as error:
-                urllib.request.urlopen(req)
+                self.urlopen(req)
             self.assertEqual(error.exception.code, 403)
 
     def test_dir_browse_endpoint_requires_token_and_returns_absolute_paths(self):
@@ -92,19 +97,19 @@ class ConfigTests(unittest.TestCase):
             quoted = urllib.parse.quote(str(root))
             # 无 token 拒绝
             with self.assertRaises(urllib.error.HTTPError) as error:
-                urllib.request.urlopen(url + 'api/dirs?path=' + quoted)
+                self.urlopen(url + 'api/dirs?path=' + quoted)
             self.assertEqual(error.exception.code, 403)
             # 带 token 返回真实绝对路径与中文空格目录
             headers = {'X-Config-Token': web_config._TOKEN}
             req = urllib.request.Request(url + 'api/dirs?path=' + quoted, headers=headers)
-            with urllib.request.urlopen(req) as response:
+            with self.urlopen(req) as response:
                 data = json.loads(response.read())
             self.assertIsNone(data['error'])
             self.assertEqual(data['path'], str(root.resolve()))
             self.assertIn('中文 空格', [d['name'] for d in data['dirs']])
             # 不存在的路径返回清晰错误
             req = urllib.request.Request(url + 'api/dirs?path=' + urllib.parse.quote(str(root / 'nope')), headers=headers)
-            with urllib.request.urlopen(req) as response:
+            with self.urlopen(req) as response:
                 data = json.loads(response.read())
             self.assertEqual(data['error'], '目录不存在')
 

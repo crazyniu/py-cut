@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from pathlib import Path
+import re
 
 from .progress import progress
+from .runtime import check_stop
 from .utils import log
 
 Segment = tuple[dict, str, int]
@@ -18,8 +20,9 @@ Runner = Callable[..., tuple[int, str, str]]
 
 
 def prepare_track(segments: Sequence[Segment], directory: Path, *, fps: int,
-                  ffmpeg: str, run: Runner, timeout: int) -> Path:
-    """Render each planned segment, verify its last real frame, return concat list.
+                  ffmpeg: str, run: Runner, timeout: int,
+                  until_frames: int | None = None) -> Path:
+    """Join real encoded shots until the track is long enough, return concat list.
 
     ``directory`` must be a caller-owned TemporaryDirectory, held open through
     final compositing and cleaned on success, failure or interruption. Source
@@ -35,6 +38,7 @@ def prepare_track(segments: Sequence[Segment], directory: Path, *, fps: int,
     manifest_lines = ["ffconcat version 1.0"]
     progress("画中画编码", 0, total, detail=f"小窗预处理：0/{len(segments)} 段")
     for index, (entry, chain, frames) in enumerate(segments, 1):
+        check_stop()
         if frames <= 0:
             raise ValueError("画中画片段帧预算必须大于零")
         # Reuse the same truncated input seek/take strings as the inline graph.
@@ -43,8 +47,9 @@ def prepare_track(segments: Sequence[Segment], directory: Path, *, fps: int,
         target = directory / name
         log(f"  [画中画准备] {index}/{len(segments)} · {Path(entry['path']).name}"
             f" · 取 {_ms(entry['offset'])}s 起 / {frames} 帧")
-        # Inline metadata avoids a split -> select -> nullsink branch that can
-        # demand the entire track early and queue video frames for the overlay.
+        # The marker proves an exact nominal budget when present. Shorter real
+        # shots are also usable: output frame telemetry is authoritative, and
+        # the complete track is checked against the body in final composition.
         verify = (f"metadata=mode=add:key=pycut.complete:value=1:"
                   f"enable='eq(n,{frames - 1})',"
                   f"metadata=mode=print:key=pycut.complete:file='pipe\\:2':"
@@ -58,25 +63,32 @@ def prepare_track(segments: Sequence[Segment], directory: Path, *, fps: int,
             "-vf", f"{chain},format=bgra,{verify}",
             "-c:v", "ffv1", "-level", "3", "-threads", "1",
             "-pix_fmt", "bgra", "-fps_mode", "passthrough",
+            "-stats_period", "10", "-progress", "pipe:2",
             "-frames:v", str(frames), "-f", "nut", str(target),
         ]
         rc, _, error = run(command, timeout=timeout)
+        check_stop()
         if rc != 0 or not target.is_file() or target.stat().st_size == 0:
             raise RuntimeError(
                 f"画中画第 {index}/{len(segments)} 段预处理失败 "
                 f"({Path(entry['path']).name}) rc={rc}: {_ffmpeg_error(error)}")
-        if "pycut.complete=1" not in error.splitlines():
+        measured = re.findall(r"(?m)^frame=\s*(\d+)[ \t]*$", error)
+        actual = int(measured[-1]) if measured else (
+            frames if "pycut.complete=1" in error.splitlines() else 0)
+        if actual <= 0:
             raise RuntimeError(
                 f"画中画第 {index}/{len(segments)} 段真实帧不足 "
-                f"({Path(entry['path']).name})，需要 {frames} 帧；拒绝克隆尾帧")
+                f"({Path(entry['path']).name})，无法确认有效画面；拒绝克隆尾帧")
         # NUT duration is not the inclusive frame budget. Set the demuxer's
         # next-file offset explicitly; the final graph rebuilds a CFR timebase
         # from real frames, without manufacturing frames to fill gaps.
-        manifest_lines.extend((f"file {name}", f"duration {frames / fps:.12f}"))
-        completed += frames
+        manifest_lines.extend((f"file {name}", f"duration {actual / fps:.12f}"))
+        completed += actual
         progress("画中画编码", completed, total,
                  detail=f"小窗预处理：已完成 {index}/{len(segments)} 段 · {completed}/{total} 帧")
         log(f"  [画中画准备] 已完成 {index}/{len(segments)} 段 · {completed}/{total} 帧")
+        if until_frames is not None and completed >= until_frames:
+            break
     manifest = directory / "track.ffconcat"
     manifest.write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
     log("  [画中画准备] 完成，开始最终画面、羽化阴影与字幕合成")

@@ -51,7 +51,8 @@ class MontagePublicationTests(unittest.TestCase):
                                    return_value=profile), \
                  mock.patch.object(montage_source, "plan_clip_slots",
                                    return_value=[(0.0, 10.0)]), \
-                 mock.patch.object(montage_subtitles, "parse_srt", return_value=[]), \
+                 mock.patch.object(montage_subtitles, "parse_srt", return_value=[
+                     montage_subtitles.SubtitleCue(1, 0, 1, "TEXT")]), \
                  mock.patch.object(montage_clips, "scan_library",
                                    return_value=[object()]), \
                  mock.patch.object(montage_clips, "pick_clips",

@@ -36,7 +36,7 @@ class MontageOverlayContractTests(unittest.TestCase):
         pool = [PipItem(Path(f"clip_{i}.mp4"), 2.0) for i in range(5)]
         items = montage_pip.plan_pip_timeline(pool, 3.25, slot=1.0,
                                                seed=42, continuous=True)
-        self.assertAlmostEqual(sum(i["duration"] for i in items), 3.25, places=2)
+        self.assertGreater(sum(i["duration"] for i in items), 3.25)
         for first, second in zip(items, items[1:]):
             self.assertAlmostEqual(first["start"] + first["duration"],
                                    second["start"], delta=0.002)
@@ -64,7 +64,7 @@ class MontageOverlayContractTests(unittest.TestCase):
             opts = montage_pipeline.MontageOptions(
                 source=Path("reference.mp4"), out_dir=Path(temp) / "output",
                 sticker_dir=str(Path(temp) / "missing"), sticker_chance=1.0,
-                srt="")
+                srt="", keep_audio=False)
             result = montage_pipeline.run_pipeline(opts)
         self.assertIn("目录没有可用图片", result.get("error", ""))
         self.assertFalse(result.get("final"))

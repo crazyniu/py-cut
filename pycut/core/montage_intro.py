@@ -12,6 +12,7 @@ from .. import config
 from .dedup_presets import derive_seed
 from .montage_clips import _probe_one, concat_clips, fit_filter
 from .scan import list_videos_recursive
+from .runtime import check_stop
 from .utils import log, run_cmd
 
 
@@ -111,6 +112,7 @@ def _video_copy_cmd(concat_file: Path, body: Path, intro_source: Path,
 
 def prepend(video: Path, folder: Path, *, seed: int, canvas: tuple[int, int],
             stickers: list[Path], crf: str, keep_audio: bool) -> dict | None:
+    check_stop()
     files = list_videos_recursive(folder, max_depth=None, raise_on_error=True)
     if not files:
         log(f"[跳过] 前贴目录没有视频，直接输出正文：{folder}")
@@ -136,6 +138,7 @@ def prepend(video: Path, folder: Path, *, seed: int, canvas: tuple[int, int],
                             fps=config.MONTAGE_FPS, crf=crf)["ok"]:
             raise RuntimeError("前贴去重/贴纸处理失败")
         intro = _adapt_intro(intro, body_info, folder_tmp / "adapted.mp4", crf)
+        check_stop()
         intro_info = _video_signature(intro)
         if intro_info is None:
             raise RuntimeError("前贴视频流不可用")
@@ -154,12 +157,14 @@ def prepend(video: Path, folder: Path, *, seed: int, canvas: tuple[int, int],
                               duration, keep_audio, combined,
                               body_duration=body_info["duration"])
         rc, _, error = run_cmd(cmd, timeout=3600)
+        check_stop()
         actual = _video_signature(combined) if not rc else None
         if (actual is None or not combined.is_file() or combined.stat().st_size < 1024
                 or abs(actual["duration"] - expected) > 2 / config.MONTAGE_FPS
                 or actual["nb_frames"] != intro_info["nb_frames"] + body_info["nb_frames"]
                 or actual["has_audio"] != keep_audio):
             raise RuntimeError(f"前贴拼接流/帧数/时长校验失败，正文保持不变：{error.strip()[-500:]}")
+        check_stop()
         os.replace(combined, video)
         log("  [前贴] 视频流复制拼接，已完成正文未重新编码")
     return {"source": str(source), "duration": duration,

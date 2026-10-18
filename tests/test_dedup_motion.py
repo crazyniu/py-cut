@@ -172,7 +172,9 @@ class DedupMotionTests(unittest.TestCase):
 
             def accept(item, source, target, options):
                 self.assertEqual(source, src)
-                self.assertEqual(target, out)
+                self.assertNotEqual(target, out)
+                self.assertEqual(target.parent, out.parent)
+                self.assertTrue(target.is_file())
                 item.ok = True
                 item.dur_dst = item.dur_src
                 item.phash_dist = 2.0

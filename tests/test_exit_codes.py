@@ -65,7 +65,7 @@ class ExitCodeTests(unittest.TestCase):
     def test_cli_failure_stops_chained_dedup(self):
         screen = mock.Mock()
         screen.getch.return_value = 10
-        commands = [["slice", "--no-sub"], ["dedup", "--all"]]
+        commands = [["cover", "--all"], ["dedup", "--all"]]
         for argv in commands:
             cli.build_parser().parse_args(argv)
         with mock.patch.object(tui_runner, "_run_one", return_value=(2, False)) as run, \

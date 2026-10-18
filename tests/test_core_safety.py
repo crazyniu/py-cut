@@ -301,7 +301,7 @@ class CoreSafetyTests(unittest.TestCase):
                 segments=[], speech_total=10.0, has_audio=False)
             opts = montage_pipeline.MontageOptions(
                 source=root / "src.mp4", clip_dir=root,
-                out_dir=root / "out", srt="", allow_landscape=True)
+                out_dir=root / "out", srt="", allow_landscape=True, keep_audio=False)
             with mock.patch.object(config, "MONTAGE_TMP", root / "tmp"), \
                  mock.patch.object(montage_source, "probe_source", return_value=prof), \
                  mock.patch.object(montage_source, "plan_clip_slots",

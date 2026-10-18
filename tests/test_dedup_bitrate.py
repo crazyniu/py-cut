@@ -123,7 +123,9 @@ class DedupBitrateTests(unittest.TestCase):
 
             def accepted(item, source, candidate, options):
                 self.assertEqual(source, src)
-                self.assertEqual(candidate, dst)
+                self.assertNotEqual(candidate, dst)
+                self.assertEqual(candidate.parent, dst.parent)
+                self.assertTrue(candidate.is_file())
                 item.ok = True
                 item.phash_dist = 2.0
                 item.psnr = 27.0

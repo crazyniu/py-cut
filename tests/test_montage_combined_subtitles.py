@@ -49,7 +49,7 @@ def test_pip_ass_is_burned_once_and_cleaned_with_atomic_publication(tmp_path,fai
     assert not list((tmp_path/'temp').glob('*.ass'))
     assert all(not path.exists() for path in captured)
     if failure:
-        assert '步骤C' in result['error']
+        assert ('字幕准备失败' if failure == 'prepare' else '步骤C') in result['error']
         assert final.read_bytes()==b'previous-video'
         audio.assert_not_called()
         if failure=='prepare':encode.assert_not_called()

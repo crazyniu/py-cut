@@ -39,6 +39,7 @@ from .. import config
 from .ffmpeg import FFMPEG, probe_video
 from .utils import log, run_cmd
 from .progress import progress
+from .runtime import check_stop
 
 # ---------------------------------------------------------------------------
 # 时间轴参数（config 里没给画中画的出现时长/间隔，值在此处定）
@@ -88,6 +89,7 @@ def _run_with_activity(cmd: list[str], timeout: int, *, interval: float = 10.0,
     official frame counts instead of guessing progress from wall time or file
     size. Failure to set up telemetry only disables the counter, not encoding.
     """
+    check_stop()
     finished = threading.Event()
     started = time.monotonic()
     progress_file: Path | None = None
@@ -129,6 +131,7 @@ def _run_with_activity(cmd: list[str], timeout: int, *, interval: float = 10.0,
     reporter.start()
     try:
         rc, out, err = run_cmd(actual_cmd, timeout=timeout)
+        check_stop()
         if rc != 0 and progress_file is not None:
             measured = _encoded_frames(progress_file)
             if measured is not None:
@@ -234,7 +237,7 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
     `offset` 是从该切片第几秒开始取。
 
     规则：
-      * 同一时刻只有一个画中画（区间之间恒有 `gap` 空隙，绝不重叠）；
+      * 同一时刻只有一个画中画；连续模式首尾相接，间隔模式保留 `gap`；
       * 同一素材不重复使用；
       * 每段的出现时长 = `slot`（默认 `PIP_SLOT`），素材本身不够长则按实际截短；
       * `offset + duration` 保证不超过素材实际时长（否则输入侧 `-t` 会伸到素材
@@ -242,6 +245,9 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
       * 素材不够铺满 `total_duration` 时**如实返回较少的项**，并在最后一项标
         `reached_end=True`（不编造、不重复用素材去凑）；时间轴正常排满不算；
       * `random.Random(seed)` 保证同 seed 结果可复现。
+
+    连续模式按完整镜头预留约一个 slot 的余量，最终合成统一按正文长度截断；
+    只有素材连正文长度都覆盖不了时才标记不足。
     """
     items = [p for p in (pool or []) if p is not None]
     total = float(total_duration)
@@ -249,6 +255,9 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
         return []
 
     slot_len = float(slot) if slot else PIP_SLOT
+    # Continuous PiP is prepared a shot longer, then cut once at composition.
+    # No tiny final source interval has to hit the body endpoint exactly.
+    goal = total + slot_len if continuous else total
     rng = random.Random(seed)
 
     order = list(items)
@@ -260,7 +269,7 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
     reached_end = False
 
     while True:
-        rest = total - t
+        rest = goal - t
         # 找一条还没用、且够长的素材
         picked = None
         for idx, it in enumerate(order):
@@ -284,11 +293,12 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
             reached_end = True
             break
         if rest < (0.01 if continuous else PIP_MIN_SHOT):
-            # 连续模式允许尾段不足常规最短镜头，以免末尾出现空白。
+            # 规划已覆盖目标；连续模式不额外截出很短的尾段。
             break
 
         idx, it, dur = picked
-        dur = min(dur, rest)
+        if not continuous:
+            dur = min(dur, rest)
         # 截取起点：在素材可用范围内随机取，避开首尾（首尾常是转场/黑场）
         offset = rng.uniform(0.0, it.duration - dur) if it.duration > dur else 0.0
 
@@ -311,18 +321,19 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
         })
 
         gap = 0.0 if continuous else rng.uniform(PIP_GAP - PIP_GAP_JITTER, PIP_GAP + PIP_GAP_JITTER)
-        t += dur + gap
-        if t >= total - (0.01 if continuous else PIP_MIN_SHOT):
+        t += dur_r + gap
+        if t >= goal - (0.01 if continuous else PIP_MIN_SHOT):
             # 时间轴排满了，正常结束（不是素材不够）
             break
 
-    if timeline and reached_end:
-        timeline[-1]["reached_end"] = True
-
     covered = sum(e["duration"] for e in timeline)
+    # Exhausting only the optional surplus is not a shortage of body footage.
+    insufficient = reached_end and covered < total - 1 / config.MONTAGE_FPS
+    if timeline and insufficient:
+        timeline[-1]["reached_end"] = True
     log(f"  [画中画时间轴] {len(timeline)} 段/ 覆盖 {covered:.2f}s "
         f"/ 成片 {total:.2f}s"
-        + ("（素材不足以铺满，已提前收尾）" if reached_end else ""))
+        + ("（素材不足以铺满，已提前收尾）" if insufficient else ""))
     return timeline
 
 
@@ -467,6 +478,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     时间轴为空时直接转存 base（`-c copy` 更快）；copy 失败则回退重编码，
     保证输出文件确实存在。全程写临时文件后 `os.replace` 原子替换。
     """
+    check_stop()
     base = Path(base)
     out = Path(out)
     fps = int(fps or config.MONTAGE_FPS)
@@ -529,6 +541,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
                     raise RuntimeError(
                         f"转存 base 失败 rc={rc}: "
                         f"{_ffmpeg_error(err)}")
+            check_stop()
             os.replace(str(tmp), str(out))
             return cmd
         finally:
@@ -557,8 +570,8 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     budget = max(1, round(info.duration * fps))
     continuous = abs(entries[0]["start"]) < .001 and all(
         abs(right["start"] - (left["start"] + left["duration"])) < .002
-        for left, right in zip(entries, entries[1:])) and abs(
-            entries[-1]["start"] + entries[-1]["duration"] - info.duration) <= 1 / fps + .002
+        for left, right in zip(entries, entries[1:])) and (
+            entries[-1]["start"] + entries[-1]["duration"] >= info.duration - 1 / fps - .002)
     rng = random.Random(seed)
     if seed is not None:
         # PR #115 曾为提速删除画中画原有的 standard 几何/像素扰动。
@@ -594,7 +607,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
         if continuous:
             # 用累计边界量化帧数，不能逐段独立取整后累积时长误差。
             start_frame = round(e["start"] * fps)
-            end_frame = budget if i == len(entries) - 1 else round((e["start"] + e["duration"]) * fps)
+            end_frame = round((e["start"] + e["duration"]) * fps)
             frames = end_frame - start_frame
             if frames <= 0:
                 continue
@@ -673,7 +686,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
                     "同时仅解码 1 条原素材；最终仅叠加 2 路视频")
                 track = prepare_track(prepared_segments, directory, fps=fps,
                                       ffmpeg=FFMPEG, run=_run_with_activity,
-                                      timeout=timeout)
+                                      timeout=timeout, until_frames=budget + 1)
                 final_parts = [parts[0], f"[1:v]setpts=N/({fps}*TB)[piptrack]",
                                *parts[track_tail_start:]]
                 cmd = [*base_inputs, "-f", "concat", "-safe", "1",
@@ -687,6 +700,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
                 f"{_ffmpeg_error(err)}")
         if continuous and "pycut.complete=1" not in err.splitlines():
             raise RuntimeError("画中画真实帧不足，拒绝克隆尾帧或发布缺失画中画的成片")
+        check_stop()
         os.replace(str(tmp), str(out))
         progress("画中画编码", budget, budget, success=1,
                  detail="编码完成，画中画末帧校验与发布成功")
