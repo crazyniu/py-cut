@@ -29,7 +29,7 @@ class MontageRequirementsTests(unittest.TestCase):
              mock.patch.object(montage_pipeline, "_apply_variation"), \
              mock.patch.object(montage_clips, "concat_clips") as render:
             result = montage_pipeline.run_pipeline(montage_pipeline.MontageOptions(
-                source=Path(directory) / "source.mp4", out_dir=Path(directory), srt=""))
+                source=Path(directory) / "source.mp4", out_dir=Path(directory), srt="", keep_audio=False))
             self.assertIn("重复", result["error"])
             render.assert_not_called()
 
@@ -38,7 +38,8 @@ class MontageRequirementsTests(unittest.TestCase):
         for seed in range(10):
             with self.subTest(seed=seed):
                 timeline = plan_pip_timeline(pool, 8, slot=2.5, seed=seed, continuous=True)
-                self.assertAlmostEqual(sum(e["duration"] for e in timeline), 8, places=3)
+                self.assertGreater(sum(e["duration"] for e in timeline), 8)
+                self.assertLessEqual(sum(e["duration"] for e in timeline), 14)
                 self.assertEqual(len({e["item"].path for e in timeline}), len(timeline))
     def test_both_variation_and_seed_are_reproducible_without_changing_timing(self):
         params, chain = dedup.montage_variation(720, 1280, 123)

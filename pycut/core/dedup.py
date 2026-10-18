@@ -32,7 +32,7 @@ from .dedup_presets import (build_params, derive_seed, ken_burns_for_seed,
                             video_bitrate_for_seed)
 from .ffmpeg import FFMPEG, FFPROBE, VideoInfo, probe_scalar, probe_video
 from .fingerprint import compare
-from .runtime import STOP
+from .runtime import STOP, check_stop
 from .progress import progress
 from .utils import fmt_bytes, fmt_dur, log, run_cmd
 
@@ -705,8 +705,8 @@ def _gate_error(item: _Report, gates: dict, opts: DedupOptions) -> str:
 def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
     """处理单个视频，返回报告条目dict。
 
-    流程：探测 → 生成参数 → 构造滤镜 → ffmpeg 编码（.tmp + os.replace 原子替换）
-    → 自检（pHash 距离 / PSNR）→ 报告。
+    流程：探测 → 生成参数 → 构造滤镜 → 编码临时文件
+    → 自检（pHash 距离 / PSNR）→ 原子发布 → 报告。
 
     **任何异常都不抛到批处理层**，统一捕获后返回 ok=False 的条目。
     自检不达标时文件仍然保留，只把 ok 置 False。
@@ -717,6 +717,7 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
     t0 = time.time()
 
     try:
+        check_stop()
         if not src.is_file():
             item.error = f"源文件不存在: {src}"
             return item.to_dict()
@@ -804,6 +805,7 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
                       max(ENC_TIMEOUT_MIN, int(info.duration * ENC_TIMEOUT_PER_SEC)))
         try:
             rc, _out, err = run_cmd(cmd, timeout=timeout)
+            check_stop()
 
             if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:
                 item.error = (f"ffmpeg 失败 rc={rc}: "
@@ -820,14 +822,19 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
                     timeout=timeout)
                 params["audio_mix"]["verified_output"] = checked
 
-            if opts.in_place:
-                # 必须趁 src 尚未被覆盖时与临时产物比较。先替换再
-                # compare(src, dst) 等价于自己比自己，pHash 永远趋近 0。
-                _self_check(item, src, tmp, opts)
-                if not item.ok:
-                    item.error = "原地覆盖已取消（自检未通过）：" + (item.error or "未知原因")
-                    item.seconds = time.time() - t0
-                    return item.to_dict()
+            check_stop()
+            # Validate the staged file before publishing in either mode. Default
+            # mode still retains a completed but below-threshold result; an
+            # interrupted self-check must never replace an earlier good file.
+            dw, dh = _probe_size(tmp)
+            if dw and (dw != info.width or dh != info.height):
+                log(f"    [警告] 输出分辨率 {dw}x{dh} 与源 {info.width}x{info.height} 不一致")
+            _self_check(item, src, tmp, opts)
+            check_stop()
+            if opts.in_place and not item.ok:
+                item.error = "原地覆盖已取消（自检未通过）：" + (item.error or "未知原因")
+                item.seconds = time.time() - t0
+                return item.to_dict()
             os.replace(str(tmp), str(dst))
         finally:
             if tmp.is_file():
@@ -839,16 +846,12 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
         log(f"    [已产出] {dst.name}  {fmt_bytes(dst.stat().st_size)}  "
             f"{fmt_dur(time.time() - t0)}")
 
-        # --- 规格校验：分辨率必须与源一致 ---
-        dw, dh = _probe_size(dst)
-        if dw and (dw != info.width or dh != info.height):
-            log(f"    [警告] 输出分辨率 {dw}x{dh} 与源 {info.width}x{info.height} 不一致")
-
-        # --- 自检：原地覆盖已在写入前校验，不能再与自身比较 ---
-        if not opts.in_place:
-            _self_check(item, src, dst, opts)
-
+    except InterruptedError as exc:
+        item.ok = False
+        item.error = str(exc)
+        item.seconds = time.time() - t0
     except Exception as e:  # noqa: BLE001 单文件失败不拖垮整批
+        item.ok = False
         item.error = f"{type(e).__name__}: {e}"
         item.seconds = time.time() - t0
         log(f"    [异常] {src.name}: {type(e).__name__} {e}")

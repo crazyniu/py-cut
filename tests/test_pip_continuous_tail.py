@@ -16,15 +16,15 @@ def pool(root, count=32):
     return [PipItem(root / f'{i}.mp4', 2.2 if i == 0 else 2.5) for i in range(count)]
 
 
-def test_77_seconds_tail_survives_plan_normalization_and_render_clamp(tmp_path):
+def test_77_seconds_uses_full_last_shot_in_longer_track(tmp_path):
     target = 2318 / 30
     planned = montage_pip.plan_pip_timeline(pool(tmp_path), target, seed=1, continuous=True)
     assert len(planned) == 32
-    assert planned[-1]['duration'] == .067
-    actual = _make_continuous(planned, target)
+    assert planned[-1]['duration'] == 2.5
+    actual = planned
     assert len(actual) == len(montage_pip._clamp_entries(actual)) == 32
-    assert sum(row['duration'] for row in actual) == pytest.approx(target, abs=.001)
-    assert actual[-1]['allow_short']
+    assert sum(row['duration'] for row in actual) > target
+    assert not actual[-1]['reached_end']
     assert len({row['item'].path for row in actual}) == 32
 
 
@@ -51,7 +51,7 @@ def test_truly_insufficient_pool_is_not_extended(tmp_path):
     target = 2318 / 30
     planned = montage_pip.plan_pip_timeline(pool(tmp_path, 31), target,
                                            seed=1, continuous=True)
-    actual = _make_continuous(planned, target)
+    actual = planned
     assert planned[-1]['reached_end']
     assert len(actual) == 31
     assert sum(row['duration'] for row in actual) == pytest.approx(77.2)
@@ -78,7 +78,7 @@ def test_real_32_shots_cover_final_two_frames(tmp_path):
     planned = montage_pip.plan_pip_timeline(items, target, seed=1, continuous=True)
     for item in items:
         shutil.copyfile(blue if item is planned[-1]['item'] else red, item.path)
-    actual = _make_continuous(planned, target)
+    actual = planned
     out = tmp_path / 'out.mp4'
     command = montage_pip.build_pip_cmd(base, actual, out, canvas=(160, 284), fps=30)
     assert command[command.index('-frames:v') + 1] == '2318'

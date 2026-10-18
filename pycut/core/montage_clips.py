@@ -29,6 +29,7 @@ import math
 import os
 import random
 import shutil
+import threading
 import time
 from concurrent import futures
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ from .ffmpeg import FFMPEG, FFPROBE
 from .utils import log, run_cmd
 from .progress import progress
 from .probe_cache import cached_probe
+from .runtime import check_stop
 
 # 素材库可识别的扩展名（与 montage_cmd 的 --probe 保持一致）
 VIDEO_EXTS = (".mp4", ".mov", ".m4v")
@@ -90,13 +92,13 @@ def _tmp_root() -> Path:
 
 
 def _tmp_path(suffix: str, tag: str) -> Path:
-    """带 pid 的中间文件路径（同一批里多次调用不会互相覆盖）。"""
-    return _tmp_root() / f"{tag}_{os.getpid()}{suffix}"
+    """每个调用线程独立，避免同一进程中的并行任务互相覆盖。"""
+    return _tmp_root() / f"{tag}_{os.getpid()}_{threading.get_ident():x}{suffix}"
 
 
 def _seg_dir(tag: str) -> Path:
     """分段目录（每批一次）。"""
-    return _tmp_root() / f"{tag}_{os.getpid()}"
+    return _tmp_root() / f"{tag}_{os.getpid()}_{threading.get_ident():x}"
 
 
 # ---------------------------------------------------------------------------
@@ -655,6 +657,7 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
     源剩余时长不足时只裁短，不重复末帧。累计输出帧预算按实际裁短时长计算，
     后续 concat/调用方仍严格校验目标时长，素材不足不会发布缩水成片。
     """
+    check_stop()
     segdir = _seg_dir("seg")
     try:
         shutil.rmtree(segdir, ignore_errors=True)
@@ -700,8 +703,10 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
         jobs.append((i, d, seg, src_take, speed, frames, timeout, cmd))
 
     def encode(job):
+        check_stop()
         i, d, seg, src_take, speed, frames, timeout, cmd = job
         rc, _o, err = run_cmd(cmd, timeout=timeout)
+        check_stop()
         if rc != 0 or not seg.is_file() or seg.stat().st_size < 1024:
             msg = err.strip()[:4000] or "输出缺失或文件过小"
             raise RuntimeError(
@@ -754,11 +759,10 @@ def build_concat_cmd(items: list[dict], out: Path, canvas=None, fps=None,
                      crf: str = "20", seam_fade: float = 0.0) -> tuple[list[str], Path]:
     """用 concat demuxer 拼接成单条静音视频（**两阶段**，原因见模块 docstring 实测）。
 
-    本函数先在 `config.MONTAGE_TMP/seg_<pid>/` 下执行**阶段1**（每段双 seek 精确截取
+    本函数先在 `config.MONTAGE_TMP/seg_<pid>_<thread>/` 下执行**阶段1**（每段双 seek 精确截取
     + 统一规格），再返回**阶段2** 的 concat 命令。调用方自己跑 argv。
 
-    - 目标画布默认 `config.MONTAGE_CANVAS = (720, 1276)`（注意高度 1276 不是 1280，
-      以步骤A 基准视频为准）。
+    - 目标画布默认 `config.MONTAGE_CANVAS = (720, 1280)`，不跟随话术源分辨率改变。
     - 竖屏素材用 `scale` + `pad` 适配画布：**等比、不裁切内容**，实测补边仅 1~3px；
       **严禁直接拉伸变形**（会明显变形）。
     - **静音**：`-an`，且 concat 列表只含视频流（阶段1 产出的段本就无音轨）。
@@ -767,7 +771,7 @@ def build_concat_cmd(items: list[dict], out: Path, canvas=None, fps=None,
       ffmpeg 成功后才 `os.replace` 到 `out`（本函数只负责阶段2 的命令，替换由
       `concat_clips` 执行；阶段1 的截取编码已经在本函数内跑完了）。
     - 返回 `(ffmpeg argv, 实际使用的 concat 列表路径)`；列表在 `config.MONTAGE_TMP`
-      下、文件名带 pid，便于调用方打印与清理。
+      下、文件名带 pid 和线程标识，便于调用方隔离与清理。
 
     注意：本函数**有副作用**（会真的跑阶段1 的截取编码）。只想看命令请自行拼装。
     """
@@ -808,6 +812,7 @@ def concat_clips(items: list[dict], out: Path, canvas=None, fps=None,
     lst = Path()
     tmp = out.with_name(f"{out.stem}.tmp_{os.getpid()}{out.suffix}")
     try:
+        check_stop()
         usable = [d for d in items
                   if d.get("item") is not None and d.get("take", 0.0) > 0]
         res["segments"] = len(usable)
@@ -832,6 +837,7 @@ def concat_clips(items: list[dict], out: Path, canvas=None, fps=None,
                       max(ENC_TIMEOUT_MIN, int(expect * ENC_TIMEOUT_PER_SEC)))
         log(f"[混剪B] 拼接 {len(usable)} 段 -> 目标 {expect:.2f}s -> {out}")
         rc, _o, err = run_cmd(cmd, timeout=timeout)
+        check_stop()
         if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:
             msg = err.strip().splitlines()[-1] if err.strip() else "无输出"
             res["error"] = f"ffmpeg 失败 rc={rc}: {msg}"
@@ -852,6 +858,7 @@ def concat_clips(items: list[dict], out: Path, canvas=None, fps=None,
             log(f"  [拼接失败] {res['error']}")
             return res
 
+        check_stop()
         os.replace(str(tmp), str(out))          # 验证后再原子替换
         res.update(ok=True, duration=dur, seconds=round(time.time() - t0, 2))
         log(f"  [已产出] {out.name}  {dur:.2f}s  用时 {time.time() - t0:.1f}s")

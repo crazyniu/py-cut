@@ -107,14 +107,14 @@ class CoverSafetyTests(unittest.TestCase):
     def test_cover_tui_preview_counts_only_mp4(self):
         files = [Path("/a/first.mp4"), Path("/a/second.mov")]
         def confirm(screen, lines):
-            self.assertEqual(lines[-1][1], "1 个")
+            self.assertEqual(dict(lines)["MP4 数量"], "1")
             return True
-        with mock.patch.object(config, "CLIP_DIR", Path("/a")), \
-             mock.patch.object(scan, "list_videos_recursive",
+        with mock.patch.object(config, "CLIP_DIRS", [Path("/a")]), \
+             mock.patch.object(tui, "list_videos_recursive",
                                return_value=files), \
              mock.patch.object(tui, "_confirm", side_effect=confirm):
             self.assertEqual(tui._wizard_cover(object(), 100),
-                             [["cover", "--src-dir", "/a"]])
+                             [["cover", "--src-dir", '["/a"]']])
 
 
     def test_failed_frame_extraction_does_not_mark_clip_as_clean(self):

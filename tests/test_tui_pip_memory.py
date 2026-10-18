@@ -243,6 +243,57 @@ def test_real_mixed_frame_rates_and_one_frame_tail_keep_all_21_shots(tmp_path):
     assert float(frames[-1][30:90, 108:138].std()) > 10
 
 
+def test_preparation_keeps_short_real_shots_when_long_track_still_covers_body(tmp_path):
+    segments = [(dict(path=tmp_path / f'{i}.mp4', offset=0, duration=2.5),
+                 'fps=30,trim=end_frame=75,setpts=N/(30*TB)', 75) for i in range(3)]
+    called = []
+    def render(command, timeout):
+        called.append(command)
+        Path(command[-1]).write_bytes(b'lossless' * 300)
+        # First shot is one real frame shorter than its nominal budget. That
+        # is not a failure when the joined stream has enough real frames.
+        return 0, '', f'frame={74 if len(called) == 1 else 75}\nprogress=end\n'
+    manifest = track.prepare_track(segments, tmp_path, fps=30, ffmpeg='ffmpeg',
+                                   run=render, timeout=30, until_frames=91)
+    assert len(called) == 2
+    assert 'duration 2.466666666667' in manifest.read_text()
+    assert 'clip_00003' not in manifest.read_text()
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason='real FFmpeg required')
+def test_real_180_second_body_trims_longer_pip_track_once(tmp_path):
+    import cv2
+    base, clip = tmp_path / 'body.mp4', tmp_path / 'shot.mp4'
+    make_video(base, 'color=c=gray:s=160x284:r=30', 5400)
+    make_video(clip, 'testsrc2=s=96x170:r=30', 90)
+    pool = []
+    for i in range(80):
+        path = tmp_path / f'shot-{i}.mp4'
+        shutil.copyfile(clip, path)
+        pool.append(pip.PipItem(path, 3))
+    timeline = pip.plan_pip_timeline(pool, 180, slot=2.5, seed=47, continuous=True)
+    assert sum(row['duration'] for row in timeline) > 180
+    assert timeline[-1]['duration'] == 2.5  # not a tiny precisely balanced tail
+    output = tmp_path / 'final.mp4'
+    command = pip.build_pip_cmd(base, timeline, output, seed=47)
+    assert command.count('-i') == 2
+    video = cv2.VideoCapture(str(output))
+    count = 0
+    tail = None
+    try:
+        while True:
+            ok, frame = video.read()
+            if not ok:
+                break
+            assert frame.shape == (284, 160, 3)
+            tail = frame
+            count += 1
+    finally:
+        video.release()
+    assert count == 5400
+    assert float(tail[30:90, 108:138].std()) > 10
+
+
 @pytest.mark.skipif(os.environ.get('PYCUT_TEST_LONG_PIP') != '1' or not HAS_FFMPEG,
                     reason='opt-in long media QA')
 @pytest.mark.parametrize('count,frame_count', [(21, 1520), (32, 2318), (61, 4433)])

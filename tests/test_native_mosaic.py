@@ -77,7 +77,7 @@ class NativeMosaicTests(unittest.TestCase):
         model=SimpleNamespace(ask_vision=lambda *a, **kw:{'frames':[{'frame':i,'has_subtitle':True,'box':[.2,.5,.7,.501]} for i in range(5)]})
         values={'format=duration':'1','stream=width':'180','stream=height':'320'}
         with mock.patch.object(subtitle,'probe_scalar',side_effect=lambda p,k:values[k]), \
-             mock.patch.object(subtitle,'_grab_frame',return_value=True), \
+             mock.patch.object(subtitle,'grab_frames',return_value=[Path(f'{i}.jpg') for i in range(5)]), \
              mock.patch.object(subtitle.cv2,'imread',return_value=np.zeros((320,180,3),np.uint8)):
             with self.assertRaisesRegex(RuntimeError,'未标记无字幕'):
                 subtitle.detect_region(model,Path('video.mp4'))
