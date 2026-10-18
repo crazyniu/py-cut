@@ -2,6 +2,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+import os
 import shutil
 import subprocess
 
@@ -38,8 +39,7 @@ def test_bounded_track_reuses_effects_and_only_final_encode_is_full_size(tmp_pat
     info = SimpleNamespace(width=720, height=1280, duration=3.0)
     def record(stage, completed, total, **fields):
         events.append(dict(stage=stage, completed=completed, total=total, **fields))
-    with (mock.patch.object(pip, 'PIP_INLINE_LIMIT', 1),
-          mock.patch.object(pip, 'probe_video', return_value=info),
+    with (mock.patch.object(pip, 'probe_video', return_value=info),
           mock.patch.object(pip, 'run_cmd', side_effect=encode),
           mock.patch.object(pip, 'progress', side_effect=record),
           mock.patch.object(track, 'progress', side_effect=record)):
@@ -95,8 +95,7 @@ def test_failure_or_interrupt_keeps_old_output_and_cleans_small_clips(tmp_path, 
             return 187, '', 'filter error: original diagnostic'
         return 0, '', 'pycut.complete=1\n'
     info = SimpleNamespace(width=720, height=1280, duration=3)
-    with (mock.patch.object(pip, 'PIP_INLINE_LIMIT', 1),
-          mock.patch.object(pip, 'probe_video', return_value=info),
+    with (mock.patch.object(pip, 'probe_video', return_value=info),
           mock.patch.object(pip, 'run_cmd', side_effect=encode)):
         with pytest.raises(KeyboardInterrupt if failure == 'interrupt' else RuntimeError) as error:
             pip.build_pip_cmd(tmp_path / 'base.mp4', entries(tmp_path / 'clip.mp4'), output)
@@ -112,18 +111,36 @@ def test_failure_or_interrupt_keeps_old_output_and_cleans_small_clips(tmp_path, 
     assert temporary_dirs and all(not path.exists() for path in temporary_dirs)
 
 
-def test_small_inline_track_has_no_eager_last_frame_branch(tmp_path):
+def test_single_inline_shot_has_no_eager_last_frame_branch(tmp_path):
     def encode(command, timeout):
         Path(command[-1]).write_bytes(b'video' * 500)
         return 0, '', 'pycut.complete=1\n'
     with (mock.patch.object(pip, 'probe_video', return_value=SimpleNamespace(width=720, height=1280, duration=3)),
           mock.patch.object(pip, 'run_cmd', side_effect=encode)):
-        cmd = pip.build_pip_cmd(tmp_path / 'base.mp4', entries(tmp_path / 'clip.mp4'), tmp_path / 'out.mp4')
+        cmd = pip.build_pip_cmd(tmp_path / 'base.mp4', entries(tmp_path / 'clip.mp4', count=1), tmp_path / 'out.mp4')
     graph = cmd[cmd.index('-filter_complex') + 1]
-    assert 'concat=n=3' in graph
+    assert 'concat=n=1' in graph
     assert '[piptrack]metadata=mode=add' in graph
     assert "enable='eq(n,89)'" in graph
     assert 'nullsink' not in graph and '[pipcheck]' not in graph
+
+
+@pytest.mark.parametrize('count', [2, 16, 21, 32, 33, 61])
+def test_every_multishot_track_bounds_original_inputs_without_threshold_override(tmp_path, count):
+    commands = []
+    def encode(command, timeout):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b'video' * 500)
+        return 0, '', 'pycut.complete=1\n'
+    with (mock.patch.object(pip, 'probe_video', return_value=SimpleNamespace(width=720, height=1280, duration=3)),
+          mock.patch.object(pip, 'run_cmd', side_effect=encode)):
+        result = pip.build_pip_cmd(tmp_path / 'base.mp4',
+                                   entries(tmp_path / 'clip.mp4', count=count),
+                                   tmp_path / 'out.mp4', seed=3691282568)
+    assert len(commands) == count + 1
+    assert all(command.count('-i') == 1 and 'ffv1' in command for command in commands[:-1])
+    assert result.count('-i') == 2 and 'concat' in result
+    assert result[result.index('-frames:v') + 1] == '90'
 
 
 HAS_FFMPEG = bool(shutil.which('ffmpeg') and shutil.which('ffprobe'))
@@ -153,7 +170,8 @@ def decoded_frames(path):
 
 
 @pytest.mark.skipif(not HAS_FFMPEG, reason='real FFmpeg required')
-def test_real_bounded_and_inline_seeded_outputs_match_and_keep_subtitles(tmp_path):
+@pytest.mark.parametrize('count', [3, 21])
+def test_real_bounded_and_inline_seeded_outputs_match_and_keep_subtitles(tmp_path, count):
     import numpy as np
     base, clip = tmp_path / 'base.mp4', tmp_path / 'clip.mp4'
     make_video(base, 'color=c=gray:s=160x284:r=30', 90)
@@ -171,9 +189,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,SAMPLE
 ''', encoding='utf-8')
     expected, actual = tmp_path / 'inline.mp4', tmp_path / 'bounded.mp4'
-    pip.build_pip_cmd(base, entries(clip), expected, seed=2026, ass_path=ass)
-    with mock.patch.object(pip, 'PIP_INLINE_LIMIT', 1):
-        pip.build_pip_cmd(base, entries(clip), actual, seed=2026, ass_path=ass)
+    # Explicitly force the old path only for the control; production must use
+    # bounded preparation even with 21 shots, without a test-only override.
+    with mock.patch.object(pip, 'PIP_INLINE_LIMIT', count):
+        pip.build_pip_cmd(base, entries(clip, count=count), expected, seed=2026, ass_path=ass)
+    pip.build_pip_cmd(base, entries(clip, count=count), actual, seed=2026, ass_path=ass)
     left, right = decoded_frames(expected), decoded_frames(actual)
     assert len(left) == len(right) == 90
     assert all(frame.shape == (284, 160, 3) for frame in right)
@@ -195,7 +215,66 @@ def test_real_source_shortfall_is_not_filled_with_cloned_tail(tmp_path):
     make_video(clip, 'testsrc2=s=96x170:r=30', 5)
     output = tmp_path / 'out.mp4'
     output.write_bytes(b'keep this successful previous output')
-    with mock.patch.object(pip, 'PIP_INLINE_LIMIT', 1), pytest.raises(RuntimeError, match='真实帧不足'):
+    with pytest.raises(RuntimeError, match='真实帧不足'):
         pip.build_pip_cmd(base, entries(clip), output, seed=2026)
     assert output.read_bytes() == b'keep this successful previous output'
     assert not pip._tmp_path(output).exists()
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason='real FFmpeg required')
+def test_real_mixed_frame_rates_and_one_frame_tail_keep_all_21_shots(tmp_path):
+    base = tmp_path / 'base.mp4'
+    make_video(base, 'color=c=gray:s=160x284:r=30', 181)
+    sources = []
+    for rate in (25, 30, 60):
+        source = tmp_path / f'clip-{rate}.mp4'
+        make_video(source, f'testsrc2=s=96x170:r={rate}', rate * 2)
+        sources.append(source)
+    timeline = []
+    for i in range(21):
+        frames = 9 if i < 20 else 1
+        timeline.append(dict(item=pip.PipItem(sources[i % 3], 2),
+                             start=i * 9 / 30, duration=frames / 30,
+                             offset=.1, allow_short=True))
+    output = tmp_path / 'out.mp4'
+    pip.build_pip_cmd(base, timeline, output, seed=3691282568)
+    frames = decoded_frames(output)
+    assert len(frames) == 181
+    assert float(frames[-1][30:90, 108:138].std()) > 10
+
+
+@pytest.mark.skipif(os.environ.get('PYCUT_TEST_LONG_PIP') != '1' or not HAS_FFMPEG,
+                    reason='opt-in long media QA')
+@pytest.mark.parametrize('count,frame_count', [(21, 1520), (32, 2318), (61, 4433)])
+def test_real_hd_multishot_tracks_have_bounded_inputs_and_complete_frames(tmp_path, count, frame_count):
+    base, clip = tmp_path / 'base.mp4', tmp_path / 'hd.mp4'
+    make_video(base, 'color=c=gray:s=720x1280:r=30', frame_count)
+    make_video(clip, 'testsrc2=s=1080x1920:r=30', 120)
+    timeline = []
+    for i in range(count):
+        path = tmp_path / f'source-{i}.mp4'
+        shutil.copyfile(clip, path)
+        start = round(i * frame_count / count)
+        end = round((i + 1) * frame_count / count)
+        timeline.append(dict(item=pip.PipItem(path, 4), start=start / 30,
+                             duration=(end - start) / 30, offset=.1, allow_short=True))
+    output = tmp_path / 'out.mp4'
+    command = pip.build_pip_cmd(base, timeline, output, seed=3691282568)
+    assert command.count('-i') == 2
+    # Stream the full decode: retaining thousands of 720p frames would itself
+    # make a memory-bound compositor test consume gigabytes in the test runner.
+    import cv2
+    video = cv2.VideoCapture(str(output))
+    decoded = 0
+    try:
+        while True:
+            ok, frame = video.read()
+            if not ok:
+                break
+            assert frame.shape == (1280, 720, 3)
+            if decoded in (0, frame_count // 2, frame_count - 1):
+                assert float(frame[160:400, 500:600].std()) > 10
+            decoded += 1
+    finally:
+        video.release()
+    assert decoded == frame_count

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -39,6 +40,26 @@ class SubprocessSafetyTests(unittest.TestCase):
                 code, _out, err = utils.run_cmd(["ffprobe"], 3)
                 self.assertEqual(code, -1)
                 self.assertTrue(err)
+
+    def test_timeout_preserves_diagnostics_emitted_before_stall(self):
+        error = subprocess.TimeoutExpired(
+            ["ffmpeg"], 3, output="已输出".encode(),
+            stderr=b"[decoder] corrupt frame\n[filter] waiting for input\n")
+        with mock.patch.object(utils.subprocess, "run", side_effect=error):
+            code, out, err = utils.run_cmd(["ffmpeg"], 3)
+        self.assertEqual((code, out), (-1, "已输出"))
+        self.assertIn("timeout after 3s", err)
+        self.assertIn("[decoder] corrupt frame", err)
+        self.assertIn("[filter] waiting for input", err)
+
+    def test_real_child_timeout_keeps_partial_output_and_error(self):
+        code, out, err = utils.run_cmd([
+            sys.executable, "-c",
+            "import os,time; os.write(1,b'partial output'); "
+            "os.write(2,b'decoder diagnostic'); time.sleep(30)"], .5)
+        self.assertEqual((code, out), (-1, "partial output"))
+        self.assertIn("timeout after 0.5s", err)
+        self.assertIn("decoder diagnostic", err)
 
 
 if __name__ == "__main__":

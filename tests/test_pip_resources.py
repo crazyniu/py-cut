@@ -140,18 +140,25 @@ def test_restored_per_segment_standard_variation_is_deterministic(tmp_path, cont
     duration = 1.0 if continuous else 2.0
     info = SimpleNamespace(width=160, height=284, duration=duration)
 
+    commands = []
     def render(command, timeout):
+        commands.append(command)
         Path(command[-1]).write_bytes(b"generated" * 500)
         return 0, "", "pycut.complete=1\n"
 
     def command(seed):
+        commands.clear()
         with (mock.patch.object(pip, "probe_video", return_value=info),
               mock.patch.object(pip, "run_cmd", side_effect=render)):
-            return pip.build_pip_cmd(tmp_path / "base.mp4", entries,
-                                     output_file, seed=seed)
+            pip.build_pip_cmd(tmp_path / "base.mp4", entries,
+                              output_file, seed=seed)
+        return list(commands)
 
-    def filtergraph(cmd):
-        return cmd[cmd.index("-filter_complex") + 1]
+    def filtergraph(commands):
+        # Seeded effects are now in the lossless small-window preparation;
+        # the final two-input graph contains only styling/overlay/subtitles.
+        return ";".join(cmd[cmd.index(flag) + 1] for cmd in commands
+                        for flag in ('-vf', '-filter_complex') if flag in cmd)
 
     first = filtergraph(command(2026))
     assert first == filtergraph(command(2026))

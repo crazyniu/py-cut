@@ -47,8 +47,12 @@ def run_cmd(args: list[str], timeout: int) -> tuple[int, str, str]:
             stderr=subprocess.PIPE,
             timeout=timeout,
         )
-    except subprocess.TimeoutExpired:
-        return -1, "", f"timeout after {timeout}s"
+    except subprocess.TimeoutExpired as exc:
+        # subprocess.run has killed/reaped the child, but TimeoutExpired still
+        # carries diagnostics emitted before the timeout. Keep the root cause.
+        out = (exc.output or b"").decode("utf-8", "replace")
+        err = (exc.stderr or b"").decode("utf-8", "replace")
+        return -1, out, f"timeout after {timeout}s\n{err}".rstrip()
     except FileNotFoundError as e:
         return -1, "", f"executable not found: {e}"
     except OSError as e:

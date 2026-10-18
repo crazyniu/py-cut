@@ -55,8 +55,10 @@ PIP_MIN_SHOT = 0.8         # 短于此就不放（闪一下看不清，也白占
 PIP_X264_PRESET = "veryfast"
 PIP_CRF_DEFAULT = "20"
 # 多输入时不能让每路解码/每个滤镜各自按 CPU 数扩张线程。
-# Keep small jobs inline; larger continuous jobs use bounded lossless small clips.
-PIP_INLINE_LIMIT = 32
+# A single shot can stay inline. Every multi-shot continuous track is prepared
+# sequentially: input count alone is not a safe decoder/filter memory budget.
+# Even 21 shots have stalled on real material below the previous 32-shot limit.
+PIP_INLINE_LIMIT = 1
 PIP_DECODER_THREADS = 1
 PIP_FILTER_THREADS = 1
 PIP_ENCODER_THREADS = min(4, os.cpu_count() or 1)
@@ -126,7 +128,12 @@ def _run_with_activity(cmd: list[str], timeout: int, *, interval: float = 10.0,
     reporter = threading.Thread(target=report, name="pycut-pip-activity", daemon=True)
     reporter.start()
     try:
-        return run_cmd(actual_cmd, timeout=timeout)
+        rc, out, err = run_cmd(actual_cmd, timeout=timeout)
+        if rc != 0 and progress_file is not None:
+            measured = _encoded_frames(progress_file)
+            if measured is not None:
+                err = f"{err}\n最后编码进度 {measured}/{total} 帧"
+        return rc, out, err
     finally:
         finished.set()
         reporter.join(timeout=0.6)
@@ -546,7 +553,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     parts = [f"[0:v]{head}[bg]"]
     cur = "bg"
     # 连续模式先拼成一条小窗视频流，再与主画面叠加一次，避免每帧
-    # 顺次穿过几十个全画布 overlay。大任务先做有界的无损小窗预处理。
+    # 顺次穿过几十个全画布 overlay。多段任务统一逐段准备无损小窗。
     budget = max(1, round(info.duration * fps))
     continuous = abs(entries[0]["start"]) < .001 and all(
         abs(right["start"] - (left["start"] + left["duration"])) < .002
