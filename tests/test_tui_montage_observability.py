@@ -325,10 +325,30 @@ def test_ffmpeg_progress_error_cleans_temp_without_reporting_success():
          mock.patch.object(pip, "progress") as stage, \
          mock.patch.object(pip, "log"):
         assert pip._run_with_activity(["ffmpeg", "render.mp4"], 30,
-                                       total_frames=360) == (2, "", "encoder failed")
+                                       total_frames=360) == (2, "", "encoder failed\n最后编码进度 360/360 帧")
     assert len(paths) == 1 and not paths[0].exists()
     reports = [c.args[1] for c in stage.call_args_list if c.args[0] == "画中画编码"]
     assert reports[0] == 0 and max(reports) == 359
+
+
+def test_ffmpeg_timeout_reports_actual_stalled_frame_before_cleanup():
+    import os
+    import pycut.core.montage_pip as pip
+    paths = []
+    def encoder(command, timeout):
+        path = Path(command[command.index("-progress") + 1])
+        paths.append(path)
+        path.write_text("frame=471\nprogress=continue\n", encoding="utf-8")
+        return -1, "", "timeout after 1013s\n[decoder] diagnostic"
+    with (mock.patch.dict(os.environ, {"PYCUT_PROGRESS": "1"}),
+          mock.patch.object(pip, "run_cmd", side_effect=encoder),
+          mock.patch.object(pip, "progress") as stage):
+        code, _, error = pip._run_with_activity(["ffmpeg", "out.mp4"], 1013,
+                                               total_frames=1520)
+    assert code == -1 and "[decoder] diagnostic" in error
+    assert "最后编码进度 471/1520 帧" in error
+    assert paths and not paths[0].exists()
+    assert not any(call.kwargs.get("success") for call in stage.call_args_list)
 
 
 # PiP: long FFmpeg calls report elapsed time and preserve the original command.
