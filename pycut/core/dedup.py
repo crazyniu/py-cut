@@ -851,6 +851,7 @@ def process_one(src: Path, dst: Path, opts: DedupOptions) -> dict:
         item.error = str(exc)
         item.seconds = time.time() - t0
     except Exception as e:  # noqa: BLE001 单文件失败不拖垮整批
+        item.ok = False
         item.error = f"{type(e).__name__}: {e}"
         item.seconds = time.time() - t0
         log(f"    [异常] {src.name}: {type(e).__name__} {e}")

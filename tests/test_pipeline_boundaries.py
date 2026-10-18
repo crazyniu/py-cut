@@ -172,6 +172,35 @@ def test_dedup_cancel_does_not_publish_or_replace_source(tmp_path, monkeypatch, 
     assert not list(tmp_path.glob('*.dedup_tmp*'))
 
 
+@pytest.mark.parametrize('in_place', [False, True])
+def test_dedup_publish_error_cannot_report_a_successful_self_check(tmp_path, monkeypatch, in_place):
+    source, output = tmp_path / 'source.mp4', tmp_path / 'out.mp4'
+    source.write_bytes(b'original source')
+    output.write_bytes(b'previous output')
+    info = SimpleNamespace(width=720, height=1280, duration=10, has_audio=False, bitrate=400000)
+    def encode(command, timeout):
+        Path(command[-1]).write_bytes(b'new video' * 300)
+        return 0, '', ''
+    def check(item, src, dst, opts):
+        item.ok = True
+    def publish(*args):
+        raise PermissionError('publication denied')
+    monkeypatch.setattr(dedup, 'probe_video', lambda p: info)
+    monkeypatch.setattr(dedup, '_video_duration', lambda p: 10)
+    monkeypatch.setattr(dedup, '_probe_size', lambda p: (720, 1280))
+    monkeypatch.setattr(dedup, 'build_params', lambda *a, **kw: {})
+    monkeypatch.setattr(dedup, '_build_cmd', lambda src, dst, *args: (['ffmpeg', str(dst)], []))
+    monkeypatch.setattr(dedup, 'run_cmd', encode)
+    monkeypatch.setattr(dedup, '_self_check', check)
+    monkeypatch.setattr(dedup.os, 'replace', publish)
+    result = dedup.process_one(source, source if in_place else output,
+                              dedup.DedupOptions(in_place=in_place, force=True))
+    assert not result['ok'] and 'publication denied' in result['error']
+    assert source.read_bytes() == b'original source'
+    assert output.read_bytes() == b'previous output'
+    assert not list(tmp_path.glob('*.dedup_tmp*'))
+
+
 def test_cover_cancel_after_processing_preserves_source_and_existing_output(tmp_path, monkeypatch):
     source, output = tmp_path / 'source.mp4', tmp_path / 'out'
     source.write_bytes(b'original source')
