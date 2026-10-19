@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 import re
 import unicodedata
+from uuid import uuid4
 
 BUCKETS = ("有人脸", "无人脸")
 
@@ -29,7 +30,26 @@ def slice_output_root(source: Path, explicit: str = "") -> Path:
 
 
 def montage_output(root: Path) -> Path:
-    return sibling(root, "混剪") / datetime.now().strftime("%m%d")
+    from .. import config
+    return (config.OUTPUT_DIR.expanduser().resolve()
+            if os.environ.get("PYCUT_OUTPUT_DIR", "").strip() else sibling(root, "混剪"))
+
+
+def montage_batch(root: Path) -> Path:
+    """One flat output folder per invocation, shared by all selected scripts."""
+    return root / (datetime.now().strftime("混剪-%Y%m%d-%H%M%S-") + uuid4().hex[:8])
+
+
+def montage_stem(source: Path, output: Path, count: int) -> str:
+    """Keep readable names and avoid overwriting same-named scripts in a batch."""
+    existing = {unicodedata.normalize("NFC", p.stem).casefold()
+                for p in output.iterdir() if p.suffix.lower() == ".mp4"} if output.exists() else set()
+    stem, suffix = source.stem, 1
+    while any(unicodedata.normalize("NFC", f"{stem}_{i}").casefold() in existing
+              for i in range(1, count + 1)):
+        suffix += 1
+        stem = f"{source.stem}_{suffix}"
+    return stem
 
 
 def flat_output(src: Path, root: Path) -> Path:

@@ -323,8 +323,13 @@ def _draw_montage(stdscr, batch: dict, history: deque[str], offset: int,
                 tui._safe_add(stdscr, y, 2, "当前任务 · " + detail, w, "dim")
                 y += 1
     elif finished and output_dirs:
-        tui._safe_add(stdscr, body + 4, 2,
-                      "输出目录：" + output_dirs[-1], w, "good")
+        remaining = "输出目录：" + output_dirs[-1]
+        y = body + 4
+        while remaining and y < h - 2:
+            part = tui._clip(remaining, w - 3)
+            tui._safe_add(stdscr, y, 2, part, w, "good")
+            remaining = remaining[len(part):]
+            y += 1
         y += 1
     if batch.get("log_path"):
         tui._safe_add(stdscr, y, 2, "日志文件：" + batch["log_path"], w, "accent")

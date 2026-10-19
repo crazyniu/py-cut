@@ -38,7 +38,8 @@ def register(subparsers) -> None:
     g.add_argument("--dedup-dir", action="append", default=None,
                    help=f"步骤C 画中画素材目录（默认 {config.MONTAGE_DEDUP_DIR}）")
     g.add_argument("--out-dir", default="",
-                   help=f"最终成片输出目录（默认 .env 输出目录；未配置时使用爆款目录同级混剪/MMDD）")
+                   help="成片输出根目录，每次执行新建一个批次目录，所有视频直接放在该目录内")
+    g.add_argument("--batch-dir", default="", help=argparse.SUPPRESS)
     g.add_argument("--intro-dir", action="append", default=None, help="前贴目录（默认读取 .env；空字符串禁用）")
     g.add_argument("--fission", type=int, default=1,
                    help="每支爆款视频裂变生成几支成片（每支随机选片/扰动不同、话术相同）")
@@ -214,7 +215,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
         return 2
     clip_dir = clip_dir[0] if len(clip_dir) == 1 else clip_dir
     dedup_dir = dedup_dir[0] if len(dedup_dir) == 1 else dedup_dir
-    from ..core.output_paths import montage_output
+    from ..core.output_paths import montage_output, montage_batch, montage_stem
 
     # --probe 只检查片段库，不需要基准视频、字幕或已有成片。
     if args.probe:
@@ -255,14 +256,21 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     srt = _resolve_srt(args, source)
 
     try:
-        relative_parent = source.resolve().parent.relative_to(config.REFERENCE_DIR.resolve())
+        source.resolve().relative_to(config.REFERENCE_DIR.resolve())
         reference_root = config.REFERENCE_DIR
     except ValueError:
-        relative_parent = Path()
         reference_root = source.parent
-    out_dir = (Path(args.out_dir).expanduser() if args.out_dir else
-               config.MONTAGE_OUT if os.environ.get("PYCUT_OUTPUT_DIR") else montage_output(reference_root))
-    out_dir = out_dir / relative_parent
+    output_root = (Path(args.out_dir).expanduser().resolve() if args.out_dir
+                   else montage_output(reference_root))
+    out_dir = Path(args.batch_dir).expanduser().resolve() if args.batch_dir else montage_batch(output_root)
+    if out_dir.parent != output_root:
+        log("[错误] 批次目录必须直接位于成片输出根目录下")
+        return 2
+    try:
+        output_stem = montage_stem(source, out_dir, args.fission)
+    except OSError as exc:
+        log(f"[错误] 无法读取成片输出目录：{exc}")
+        return 2
 
     t0 = time.time()
     canvas = config.MONTAGE_CANVAS
@@ -274,7 +282,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     intro_dir = intro_dir[0] if len(intro_dir) == 1 else intro_dir
     opts = montage_pipeline.MontageOptions(
         prepared=prepared,
-        out_name=f"{source.stem}_1.mp4",
+        out_name=f"{output_stem}_1.mp4",
         step=args.step,
         intro_dir=intro_dir or None,
         source=source,
@@ -350,7 +358,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
             log("")
             log(f"--- 裂变 {i}/{fission}（同一爆款视频，换 seed 重混）---")
             vopts = replace(opts, seed=base_seed + i * 10007,
-                            out_name=f"{source.stem}_{i}.mp4")
+                            out_name=f"{output_stem}_{i}.mp4")
             r = montage_pipeline.run_pipeline(vopts)
             if STOP.flag:
                 log(f"[中断] 裂变 {i}/{fission} 未完整完成，不再继续（退出码 130）")
@@ -387,4 +395,6 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     if STOP.flag:
         log("[中断] 混剪已取消（退出码 130）")
         return 130
+    if args.step != "a":
+        log(f"输出目录：{Path(result['final']).resolve().parent}")
     return 2 if failed_fissions else 0
