@@ -446,3 +446,39 @@ textarea {
   bottom: auto;
   z-index: 3;
 }
+
+.directory-list {
+  max-height: 52dvh;
+  overflow-y: auto;
+}
+.directory-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding-block: 16px;
+  border-bottom: 1px solid var(--mantine-color-dark-4);
+}
+.directory-row:first-child {
+  padding-top: 0;
+}
+.directory-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.directory-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--mantine-color-cyan-4);
+}
+.directory-info {
+  flex: 1;
+  min-width: 0;
+}
+.directory-path {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+.directory-actions {
+  flex-shrink: 0;
+}

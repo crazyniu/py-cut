@@ -14,6 +14,12 @@ actual processing state. The desktop requires an installed, logged-in Codex and 
 catalog for the shared AI settings.
 The CLI/TUI remains available during desktop compatibility acceptance.
 
+On macOS, run `./run-desktop.sh` to build and open the source workbench.
+Node.js, Rust and the Tauri macOS build prerequisites must already be installed.
+Project data persists in this checkout's ignored `work/desktop/app`, with disposable
+media cache in `work/desktop/cache`. Existing `PYCUT_DATA_DIR` and `PYCUT_CACHE_DIR`
+environment overrides take precedence.
+
 See [Desktop workbench](docs/DESKTOP.md) for development, packaging, data boundaries
 and native verification requirements. macOS 13.0 and Windows are packaging targets;
 compatibility depends on the bundled runtime and requires platform execution.

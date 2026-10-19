@@ -12,14 +12,14 @@ from unittest.mock import patch
 from pycut import config
 from pycut.desktop.library import LibraryIndexer
 from pycut.desktop.media import MediaCache, probe_metadata
-from pycut.desktop.store import Store, stamp
+from pycut.desktop.store import Store, stamp, DEFAULT_LIBRARIES
 
 
 class CatalogTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.base = Path(self.temporary.name)
+        self.base = Path(self.temporary.name).resolve()
         self.store = Store(self.base / "app")
         self.project = self.store.create_project("产品一")
         self.library = next(row for row in self.store.libraries(self.project["id"])
@@ -58,6 +58,62 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.update_project(other["id"], unknown=True)
 
+    def test_fixed_types_migrate_legacy_groups_without_losing_roots_removals_or_usage(self):
+        self.file()
+        self.scan()
+        original = self.assets()["items"][0]
+        self.store.set_removed(self.library["id"], [original["id"]], True)
+        extra = self.base / "extra"
+        extra.mkdir()
+        (extra / "other.mp4").write_bytes(b"other")
+        with self.store.connect() as db:
+            db.execute("DROP INDEX libraries_project_role")
+            db.execute("INSERT INTO libraries VALUES ('legacy',?,?,?,?)",
+                       (self.project["id"], "Custom group", "background", "old"))
+        self.store.add_roots("legacy", [str(self.root), str(extra)])
+        self.indexer.scan("legacy")
+        output = self.base / "output.mp4"
+        output.write_bytes(b"output")
+        self.store.record_output("history", self.project["id"], "job", str(output),
+                                 [{"asset_id": original["id"], "role": "background"}])
+        migrated = Store(self.base / "app")
+        libraries = migrated.libraries(self.project["id"])
+        self.assertEqual({(row["name"], row["role"]) for row in libraries}, set(DEFAULT_LIBRARIES))
+        library = next(row for row in libraries if row["role"] == "background")
+        self.assertEqual(library["id"], self.library["id"])
+        self.assertEqual({row["path"] for row in library["roots"]}, {str(self.root), str(extra)})
+        self.assertEqual([row["name"] for row in migrated.assets(library["id"])["items"]], ["other.mp4"])
+        self.assertEqual(migrated.assets(library["id"], removed=True)["items"][0]["id"], original["id"])
+        self.assertEqual(migrated.asset_detail(original["id"])["usage_count"], 1)
+        self.assertEqual(len(Store(self.base / "app").libraries(self.project["id"])), 5)
+
+    def test_single_directory_refresh_is_scoped_and_rejects_unassociated_paths(self):
+        first = self.file("one.mp4")
+        self.scan()
+        extra = self.base / "extra"
+        extra.mkdir()
+        second = extra / "two.mp4"
+        second.write_bytes(b"source")
+        self.store.add_roots(self.library["id"], [str(extra)])
+        opened = []
+        original_walk = LibraryIndexer._walk
+        def walk(root, errors):
+            opened.append(root)
+            return original_walk(root, errors)
+        with patch.object(self.indexer, "_walk", side_effect=walk):
+            result = self.indexer.scan(self.library["id"], [str(extra)])
+        self.assertEqual(opened, [extra])
+        self.assertEqual(result["indexed"], 1)
+        self.assertEqual({row["path"] for row in self.assets()["items"]}, {str(first), str(second)})
+        counts = {root["path"]: root["active_count"] for root in self.store.libraries(self.project["id"])[1]["roots"]}
+        self.assertEqual(counts, {str(self.root): 1, str(extra): 1})
+        for roots in ([], "not-a-list", [str(self.base / "outside")]):
+            with self.subTest(roots=roots), self.assertRaises(ValueError):
+                self.indexer.scan(self.library["id"], roots)
+        self.store.remove_root(self.library["id"], str(extra))
+        self.assertTrue(second.exists())
+        self.assertEqual(self.assets()["items"][0]["path"], str(first))
+
     def test_scan_reports_real_incremental_counts_and_final_state(self):
         events = []
         for number in range(26):
@@ -66,6 +122,30 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual([(e["indexed"], e["scanning"]) for e in events],
                          [(0, True), (25, True), (26, False)])
         self.assertEqual(events[-1]["available"], result["available"])
+
+    def test_changed_root_symlink_can_be_refreshed_and_removed_without_reading_target(self):
+        self.file()
+        self.scan()
+        original = self.base / "original"
+        self.root.rename(original)
+        target = self.base / "replacement"
+        target.mkdir()
+        (target / "video.mp4").write_bytes(b"replacement")
+        self.root.symlink_to(target, target_is_directory=True)
+        with patch.object(self.indexer, "_walk") as walk, patch.object(Path, "open") as opened:
+            result = self.indexer.scan(self.library["id"], [str(self.root)])
+        walk.assert_not_called()
+        opened.assert_not_called()
+        self.assertEqual(result["indexed"], 0)
+        self.assertEqual(result["offline"], 1)
+        self.assertIn("软链接", result["errors"][0]["error"])
+        self.assertFalse(self.store.libraries(self.project["id"])[1]["roots"][0]["available"])
+        self.assertEqual(self.assets(root=str(self.root))["total"], 1)
+        self.assertFalse(self.assets(root=str(self.root))["items"][0]["available"])
+        self.store.remove_root(self.library["id"], str(self.root))
+        self.assertEqual(self.store.libraries(self.project["id"])[1]["roots"], [])
+        self.assertTrue((original / "video.mp4").is_file())
+        self.assertEqual((target / "video.mp4").read_bytes(), b"replacement")
 
     def test_type_filter_counts_and_pages_match_visible_assets(self):
         self.file("reference.mp4")
@@ -96,7 +176,7 @@ class CatalogTests(unittest.TestCase):
         video = self.file()
         self.scan()
         asset = self.assets()["items"][0]
-        second = self.store.create_library(self.project["id"], "另一个素材库")
+        second = next(row for row in self.store.libraries(self.project["id"]) if row["role"] == "pip")
         self.store.add_roots(second["id"], [str(self.root)])
         self.indexer.scan(second["id"])
         self.store.set_removed(self.library["id"], [asset["id"]], True)

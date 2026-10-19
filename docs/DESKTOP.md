@@ -17,8 +17,13 @@ work remains indeterminate. Waiting, completed, review, failure and cancellation
 remain distinct. Internal stages never increase final-video counts. The finished-video
 library groups published outputs by batch and shows thumbnail previews without
 processing progress. Folder actions target the actual batch directories.
-Library selection uses a top Select; directory
-management and media details open in dialogs. Internal processing graphs, technical
+The five system material types (reference, background, PiP, intro and sticker) are
+fixed, with one catalog per type in each project. Users associate multiple recursive
+roots per type instead of creating custom groups. Legacy groups of the same role
+merge into the system catalog; existing removals remain removed. Directory management
+shows full paths, indexed counts and read status. Adding or refreshing a directory
+scans only the selected roots; removal cancels the association and preserves files.
+Type selection uses a top Select; directory management and media details open in dialogs. Internal processing graphs, technical
 parameters and routine logs stay out of the interface; failures offer copyable logs. Native window controls and dialogs remain
 system-owned. Libraries, task batches and outputs share one 9:16 thumbnail card
 with contained pictures, a top status tag and readable captions over the image.
@@ -71,6 +76,12 @@ discovery does not establish successful inference; uncertain results remain revi
 The legacy CLI/TUI and gateway path remain available.
 
 ## Native development and packaging
+
+On macOS, `./run-desktop.sh` installs locked frontend dependencies when needed,
+builds a debug application and opens it through Launch Services. Checkout-local
+data and cache default to `work/desktop/app` and `work/desktop/cache`; explicit
+`PYCUT_DATA_DIR` and `PYCUT_CACHE_DIR` overrides remain supported. The debug worker
+continues to bootstrap Python and media tools through the existing launcher.
 
 Install requirements.txt for source development, then run `npm ci` and
 `npm run tauri dev` inside desktop/. Rust and the platform's Tauri prerequisites

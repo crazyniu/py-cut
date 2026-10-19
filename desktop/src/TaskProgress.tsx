@@ -59,7 +59,6 @@ export function TaskActions({ job }: { job: Job }) {
     directory && directories.includes(directory) ? directory : directories[0];
   return (
     <Group gap="xs">
-      <Status value={job.status} />
       {directories.length > 1 && (
         <Select
           aria-label="本批成片目录"

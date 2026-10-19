@@ -46,14 +46,12 @@ class Service:
             return self.store.update_project(p["project_id"], **{k: v for k, v in p.items() if k != "project_id"})
         if method == "libraries.list":
             return self._libraries(p["project_id"])
-        if method == "libraries.create":
-            return self.store.create_library(p["project_id"], p["name"], p.get("role", "background"))
         if method == "libraries.add_roots":
             return self.store.add_roots(p["library_id"], p["roots"])
         if method == "libraries.remove_root":
             return self.store.remove_root(p["library_id"], p["path"])
         if method == "libraries.scan":
-            return self.indexer.scan(p["library_id"])
+            return self.indexer.scan(p["library_id"], p.get("roots"))
         if method == "assets.list":
             return self.store.assets(**p)
         if method in ("assets.remove", "assets.restore"):

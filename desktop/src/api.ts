@@ -70,6 +70,7 @@ export interface Library {
     available: boolean | number;
     error: string;
     scanned_at?: string;
+    active_count?: number;
   }[];
   active_count: number;
   removed_count: number;

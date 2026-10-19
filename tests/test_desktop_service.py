@@ -30,6 +30,21 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertTrue(self.service.dispatch("app.ping", {})["ready"])
         self.assertEqual(self.service.dispatch("projects.list", {})[0]["id"], self.project["id"])
 
+    def test_material_types_are_fixed_and_directories_are_repeatable(self):
+        with self.assertRaisesRegex(ValueError, "未知桌面接口"):
+            self.service.dispatch("libraries.create", {"project_id": self.project["id"], "name": "Extra"})
+        library = self.service.dispatch("libraries.list", {"project_id": self.project["id"]})[0]
+        roots = [self.base / "one", self.base / "two"]
+        for root in roots:
+            root.mkdir()
+        self.service.dispatch("libraries.add_roots", {"library_id": library["id"], "roots": list(map(str, roots))})
+        listed = self.service.dispatch("libraries.list", {"project_id": self.project["id"]})
+        self.assertEqual(len(listed), 5)
+        self.assertEqual(listed[0]["roots"], list(map(str, roots)))
+        with patch.object(self.service.indexer, "scan", return_value={}) as scan:
+            self.service.dispatch("libraries.scan", {"library_id": library["id"], "roots": [str(roots[1])]})
+        scan.assert_called_once_with(library["id"], [str(roots[1])])
+
     def test_library_dtos_expose_paths_and_status_separately(self):
         library = self.service.dispatch("libraries.list", {"project_id": self.project["id"]})[1]
         root = self.base / "素材"

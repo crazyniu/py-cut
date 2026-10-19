@@ -10,7 +10,7 @@ import uuid
 from .. import config
 from ..core.scan import VIDEO_EXTS, _is_system_dir
 from .media import PROBE_ARGS, probe_metadata, tool_identity
-from .store import Store, canonical, now, stamp
+from .store import Store, associated_path, canonical, now, stamp
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
@@ -58,11 +58,20 @@ class LibraryIndexer:
                 except OSError as error:
                     errors.append({"path": entry.path, "error": str(error)})
 
-    def scan(self, library_id: str) -> dict:
+    def scan(self, library_id: str, selected_roots: list[str] | None = None) -> dict:
         with self._lock:
             with self.store.connect() as db:
                 self.store.require(db, "libraries", library_id)
                 roots = [dict(row) for row in db.execute("SELECT * FROM roots WHERE library_id=?", (library_id,))]
+                if selected_roots is not None:
+                    if not isinstance(selected_roots, list) or not selected_roots or any(
+                            not isinstance(path, str) or not path.strip() for path in selected_roots):
+                        raise ValueError("请选择需要刷新的目录")
+                    known = {root["path"] for root in roots}
+                    requested = {associated_path(path, known) for path in selected_roots}
+                    if requested - known:
+                        raise ValueError("目录不属于当前素材类型")
+                    roots = [root for root in roots if root["path"] in requested]
             errors, indexed = [], set()
             self.progress({"library_id": library_id, "indexed": 0, "scanning": True})
             try:
@@ -70,11 +79,13 @@ class LibraryIndexer:
             except OSError as error:
                 probe_identity = ""
                 errors.append({"path": config.FFPROBE, "error": str(error)})
+            replaced_roots = []
             for root in roots:
                 folder = Path(root["path"])
                 root_errors = []
                 try:
                     if folder.is_symlink():
+                        replaced_roots.append(folder)
                         raise ValueError("目录已变成软链接，请选择实际目录")
                     with os.scandir(folder):
                         pass
@@ -109,8 +120,15 @@ class LibraryIndexer:
                 rows = db.execute("""SELECT DISTINCT a.id,a.path FROM assets a
                     JOIN asset_roots ar ON ar.asset_id=a.id JOIN roots r ON r.id=ar.root_id
                     WHERE r.library_id=?""", (library_id,)).fetchall()
+                selected_ids = {root["id"] for root in roots}
+                if selected_roots is not None:
+                    scoped_assets = {row[0] for root_id in selected_ids for row in db.execute(
+                        "SELECT asset_id FROM asset_roots WHERE root_id=?", (root_id,))}
+                    rows = [row for row in rows if row["id"] in scoped_assets]
                 for row in rows:
                     try:
+                        if any(Path(row["path"]).is_relative_to(root) for root in replaced_roots):
+                            raise FileNotFoundError(row["path"])
                         with Path(row["path"]).open("rb"):
                             pass
                         present = True

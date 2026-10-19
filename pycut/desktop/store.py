@@ -29,6 +29,12 @@ def canonical(path: str | Path) -> str:
     return os.path.normcase(str(Path(path).expanduser().resolve()))
 
 
+def associated_path(path: str, known_paths: set[str]) -> str:
+    """Keep a saved association address even when its filesystem target changes."""
+    address = os.path.normcase(os.path.abspath(os.path.expanduser(path)))
+    return address if address in known_paths else canonical(path)
+
+
 def stamp(path: Path) -> str:
     value = path.stat()
     return json.dumps([value.st_dev, value.st_ino, value.st_size,
@@ -99,6 +105,40 @@ class Store:
                 CREATE INDEX IF NOT EXISTS usage_asset ON usage(asset_id, output_id);
                 CREATE INDEX IF NOT EXISTS asset_roots_asset ON asset_roots(asset_id);
             """)
+            self._fixed_libraries(db)
+
+    @staticmethod
+    def _fixed_libraries(db):
+        """Fold legacy named groups into the five system roles without reviving removals."""
+        for project in db.execute("SELECT id FROM projects").fetchall():
+            for label, role in DEFAULT_LIBRARIES:
+                rows = db.execute("SELECT * FROM libraries WHERE project_id=? AND role=? ORDER BY created_at,id",
+                                  (project["id"], role)).fetchall()
+                if not rows:
+                    db.execute("INSERT INTO libraries VALUES (?,?,?,?,?)",
+                               (uuid.uuid4().hex, project["id"], label, role, now()))
+                    continue
+                target = next((row for row in rows if row["name"] == label), rows[0])
+                db.execute("UPDATE libraries SET name=? WHERE id=?", (label, target["id"]))
+                for row in rows:
+                    if row["id"] == target["id"]:
+                        continue
+                    db.execute("""INSERT INTO memberships(library_id,asset_id,removed)
+                        SELECT ?,asset_id,removed FROM memberships WHERE library_id=?
+                        ON CONFLICT(library_id,asset_id) DO UPDATE SET removed=MAX(memberships.removed,excluded.removed)
+                        """, (target["id"], row["id"]))
+                    for root in db.execute("SELECT * FROM roots WHERE library_id=?", (row["id"],)).fetchall():
+                        prior = db.execute("SELECT id FROM roots WHERE library_id=? AND path=?",
+                                           (target["id"], root["path"])).fetchone()
+                        if prior:
+                            db.execute("INSERT OR IGNORE INTO asset_roots SELECT ?,asset_id FROM asset_roots WHERE root_id=?",
+                                       (prior["id"], root["id"]))
+                            db.execute("DELETE FROM roots WHERE id=?", (root["id"],))
+                        else:
+                            db.execute("UPDATE roots SET library_id=? WHERE id=?", (target["id"], root["id"]))
+                    db.execute("DELETE FROM memberships WHERE library_id=?", (row["id"],))
+                    db.execute("DELETE FROM libraries WHERE id=?", (row["id"],))
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS libraries_project_role ON libraries(project_id,role)")
 
     @contextmanager
     def connect(self):
@@ -154,8 +194,11 @@ class Store:
             for row in db.execute("SELECT * FROM libraries WHERE project_id=? ORDER BY created_at,id",
                                   (project_id,)):
                 item = dict(row)
-                item["roots"] = [dict(root) for root in db.execute(
-                    "SELECT * FROM roots WHERE library_id=? ORDER BY rowid", (row["id"],))]
+                item["roots"] = [dict(root) for root in db.execute("""
+                    SELECT r.*,(SELECT COUNT(*) FROM asset_roots ar JOIN memberships m ON m.asset_id=ar.asset_id
+                        WHERE ar.root_id=r.id AND m.library_id=r.library_id AND m.removed=0) AS active_count
+                    FROM roots r WHERE r.library_id=? ORDER BY r.rowid
+                    """, (row["id"],))]
                 counts = db.execute("""
                     SELECT m.removed, COUNT(*) AS total FROM memberships m
                     WHERE m.library_id=? AND EXISTS (
@@ -167,17 +210,8 @@ class Store:
                 for count in counts:
                     item["removed_count" if count["removed"] else "active_count"] = count["total"]
                 result.append(item)
-            return result
-
-    def create_library(self, project_id: str, name: str, role: str = "background") -> dict:
-        if role not in ROLES:
-            raise ValueError("未知素材库用途")
-        item = dict(id=uuid.uuid4().hex, project_id=project_id,
-                    name=_name(name), role=role, created_at=now())
-        with self.connect() as db:
-            self.require(db, "projects", project_id)
-            db.execute("INSERT INTO libraries VALUES (:id,:project_id,:name,:role,:created_at)", item)
-        return {**item, "roots": [], "active_count": 0, "removed_count": 0}
+            order = {role: index for index, (_, role) in enumerate(DEFAULT_LIBRARIES)}
+            return sorted(result, key=lambda item: order[item["role"]])
 
     def add_roots(self, library_id: str, roots: list[str]) -> list[dict]:
         paths = []
@@ -199,7 +233,9 @@ class Store:
     def remove_root(self, library_id: str, path: str) -> None:
         with self.connect() as db:
             self.require(db, "libraries", library_id)
-            db.execute("DELETE FROM roots WHERE library_id=? AND path=?", (library_id, canonical(path)))
+            known = {row[0] for row in db.execute("SELECT path FROM roots WHERE library_id=?", (library_id,))}
+            db.execute("DELETE FROM roots WHERE library_id=? AND path=?",
+                       (library_id, associated_path(path, known)))
 
     def assets(self, library_id: str, query: str = "", removed: bool = False,
                sort: str = "name", root: str = "", offset: int = 0, limit: int = 100,
@@ -220,7 +256,8 @@ class Store:
                 WHERE ar.asset_id=a.id AND r.library_id=m.library_id"""
             if root:
                 condition += " AND r.path=?"
-                args.append(canonical(root))
+                known = {row[0] for row in db.execute("SELECT path FROM roots WHERE library_id=?", (library_id,))}
+                args.append(associated_path(root, known))
             condition += ")"
             if kind:
                 condition += " AND a.kind=?"

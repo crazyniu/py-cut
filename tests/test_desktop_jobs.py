@@ -67,11 +67,11 @@ class DesktopJobTests(unittest.TestCase):
             row = db.execute("SELECT request_json FROM desktop_jobs WHERE id=?", (identifier,)).fetchone()
         return json.loads(row[0])
 
-    def test_default_montage_merges_configured_role_pools_without_reselecting_libraries(self):
+    def test_default_montage_merges_configured_directories_without_reselecting_libraries(self):
         extra = self.root / "more-background"
         extra.mkdir()
         (extra / "extra.mp4").write_bytes(b"video")
-        library = self.store.create_library(self.project["id"], "Other clips", "background")
+        library = self.libraries["background"]
         self.store.add_roots(library["id"], [str(extra), str(Path(self.background["path"]).parent)])
         LibraryIndexer(self.store).scan(library["id"])
         pip = self.add_asset("pip", "picture.mp4")

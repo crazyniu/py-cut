@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActionIcon,
-  Badge,
+  Alert,
   Box,
   Button,
   Checkbox,
@@ -16,16 +15,15 @@ import {
   Table,
   Text,
   TextInput,
-  Tooltip,
 } from "@mantine/core";
 import {
+  IconFolderOpen,
   IconLayoutGrid,
   IconList,
   IconPlus,
   IconRefresh,
   IconSearch,
   IconTrash,
-  IconX,
 } from "@tabler/icons-react";
 import { useDebouncedValue } from "@mantine/hooks";
 import {
@@ -44,6 +42,7 @@ import {
   message,
   onEvent,
   roles,
+  openPath,
   rpc,
   type Asset,
   type Library,
@@ -71,9 +70,8 @@ export default function LibraryPage({ project }: { project: Project }) {
   const [scanned, setScanned] = useState<number | null>(null);
   const [revision, setRevision] = useState(0);
   const [directories, setDirectories] = useState(false);
-  const [create, setCreate] = useState(false);
-  const [name, setName] = useState("");
-  const [role, setRole] = useState<string | null>("background");
+  const [directoryError, setDirectoryError] = useState("");
+  const [directoryNotice, setDirectoryNotice] = useState("");
   const library = libraries.find((item) => item.id === libraryId);
   const loadLibraries = useCallback(
     () =>
@@ -176,6 +174,10 @@ export default function LibraryPage({ project }: { project: Project }) {
   }, [detailId, project.id, revision]);
   async function mutate(method: string, params: Record<string, unknown>) {
     setBusy(true);
+    setDirectoryError("");
+    setDirectoryNotice("");
+    const showDirectoryError = (text: string) =>
+      directories ? setDirectoryError(text) : report(new Error(text));
     try {
       const result = await rpc<{ errors?: { path: string; error: string }[] }>(
         method,
@@ -184,29 +186,24 @@ export default function LibraryPage({ project }: { project: Project }) {
       if (method === "libraries.add_roots") {
         const scan = await rpc<{ errors?: { path: string; error: string }[] }>(
           "libraries.scan",
-          { library_id: params.library_id },
+          { library_id: params.library_id, roots: params.roots },
         );
         if (scan.errors?.length)
-          report(
-            new Error(
-              scan.errors
-                .map((item) => `${item.path}: ${item.error}`)
-                .join("\n"),
-            ),
+          showDirectoryError(
+            scan.errors.map((item) => `${item.path}: ${item.error}`).join("\n"),
           );
       } else if (result?.errors?.length) {
-        report(
-          new Error(
-            result.errors
-              .map((item) => `${item.path}: ${item.error}`)
-              .join("\n"),
-          ),
+        showDirectoryError(
+          result.errors.map((item) => `${item.path}: ${item.error}`).join("\n"),
         );
       }
+      if (method === "libraries.remove_root" && root === params.path)
+        setRoot(null);
       await loadLibraries();
       setRevision((value) => value + 1);
     } catch (error) {
-      report(error);
+      if (method.startsWith("libraries.")) showDirectoryError(message(error));
+      else report(error);
     } finally {
       setBusy(false);
       setScanned(null);
@@ -215,30 +212,17 @@ export default function LibraryPage({ project }: { project: Project }) {
   async function addRoots() {
     if (!library) return;
     try {
-      const roots = await chooseDirectories();
-      if (roots.length)
-        await mutate("libraries.add_roots", { library_id: library.id, roots });
+      const chosen = await chooseDirectories();
+      if (!chosen.length) return;
+      const roots = chosen.filter((path) => !library.roots.includes(path));
+      if (!roots.length) {
+        setDirectoryError("");
+        setDirectoryNotice("所选目录已添加到当前类型。");
+        return;
+      }
+      await mutate("libraries.add_roots", { library_id: library.id, roots });
     } catch (error) {
       report(error);
-    }
-  }
-  async function createLibrary() {
-    if (!name.trim()) return;
-    setBusy(true);
-    try {
-      const item = await rpc<Library>("libraries.create", {
-        project_id: project.id,
-        name: name.trim(),
-        role,
-      });
-      await loadLibraries();
-      setLibraryId(item.id);
-      setCreate(false);
-      setName("");
-    } catch (error) {
-      report(error);
-    } finally {
-      setBusy(false);
     }
   }
   const toggle = (id: string) =>
@@ -258,7 +242,7 @@ export default function LibraryPage({ project }: { project: Project }) {
           w={170}
           data={libraries.map((item) => ({
             value: item.id,
-            label: `${item.name} · ${item.active_count} 个`,
+            label: `${roles[item.role]} · ${item.active_count} 个`,
           }))}
           value={libraryId}
           onChange={setLibraryId}
@@ -267,7 +251,11 @@ export default function LibraryPage({ project }: { project: Project }) {
         />
         <Button
           variant="default"
-          onClick={() => setDirectories(true)}
+          onClick={() => {
+            setDirectoryError("");
+            setDirectoryNotice("");
+            setDirectories(true);
+          }}
           disabled={!library}
         >
           管理目录
@@ -345,14 +333,6 @@ export default function LibraryPage({ project }: { project: Project }) {
           loading={busy}
         >
           刷新目录
-        </Button>
-        <Button
-          ml="auto"
-          variant="light"
-          leftSection={<IconPlus size={17} />}
-          onClick={() => setCreate(true)}
-        >
-          新建素材库
         </Button>
       </Group>
       <div>
@@ -602,122 +582,171 @@ export default function LibraryPage({ project }: { project: Project }) {
       <Modal
         opened={directories}
         onClose={() => setDirectories(false)}
-        title={`管理目录 · ${library?.name || "素材库"}`}
+        title="管理素材目录"
+        size={720}
         centered
       >
-        {library && (
-          <Stack>
-            {" "}
-            <Group justify="space-between" mb="sm">
-              <Text size="xs" c="dimmed">
-                关联目录
-              </Text>
-              <ActionIcon
-                variant="subtle"
-                onClick={addRoots}
-                aria-label="添加目录"
-                disabled={busy}
-              >
-                <IconPlus size={16} />
-              </ActionIcon>
-            </Group>
-            {library.roots.map((path) => (
-              <Group key={path} gap={3} wrap="nowrap" mb="xs">
-                <Tooltip
-                  label={
-                    library.root_status?.find((item) => item.path === path)
-                      ?.error || path
-                  }
-                  multiline
-                  w={250}
-                >
-                  <Text
-                    size="xs"
-                    c="dimmed"
-                    lineClamp={2}
-                    style={{ overflowWrap: "anywhere", flex: 1 }}
-                  >
-                    {path.split(/[\\/]/).filter(Boolean).slice(-2).join(" / ")}
-                    {library.root_status?.find((item) => item.path === path)
-                      ?.scanned_at &&
-                      !library.root_status?.find((item) => item.path === path)
-                        ?.available && (
-                        <Text component="span" size="xs" c="orange">
-                          {" "}
-                          · 离线
-                        </Text>
-                      )}
-                    {library.root_status?.find((item) => item.path === path)
-                      ?.error && (
-                      <Text component="span" size="xs" c="orange">
-                        {" "}
-                        · 读取异常
-                      </Text>
-                    )}
-                  </Text>
-                </Tooltip>
-                <ActionIcon
-                  size="sm"
-                  color="gray"
-                  variant="subtle"
-                  aria-label={`移除目录 ${path}`}
-                  onClick={() =>
-                    mutate("libraries.remove_root", {
-                      library_id: library.id,
-                      path,
-                    })
-                  }
-                  disabled={busy}
-                >
-                  <IconX size={12} />
-                </ActionIcon>
-              </Group>
-            ))}
-            <Button
-              fullWidth
-              mt="sm"
-              variant="default"
-              size="xs"
-              onClick={addRoots}
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            每种素材可关联多个目录，自动包含子文件夹。移除关联会保留本地文件。
+          </Text>
+          <Group gap="sm" wrap="nowrap">
+            <Select
+              aria-label="管理的素材类型"
+              w={170}
+              value={libraryId}
+              onChange={(value) => {
+                setLibraryId(value);
+                setDirectoryError("");
+                setDirectoryNotice("");
+              }}
+              allowDeselect={false}
               disabled={busy}
+              data={libraries.map((item) => ({
+                value: item.id,
+                label: roles[item.role],
+              }))}
+            />
+            <Text size="sm" c="dimmed">
+              {library?.roots.length || 0} 个目录
+            </Text>
+            <Button
+              ml="auto"
+              leftSection={<IconPlus size={16} />}
+              onClick={addRoots}
+              disabled={busy || !library}
             >
               添加目录
             </Button>
-          </Stack>
-        )}
-      </Modal>
-      <Modal
-        opened={create}
-        onClose={() => setCreate(false)}
-        title="新建素材库"
-        centered
-      >
-        <Stack>
-          <TextInput
-            label="素材库名称"
-            value={name}
-            onChange={(event) => setName(event.currentTarget.value)}
-            autoFocus
-          />
-          <Select
-            label="素材用途"
-            data={Object.entries(roles).map(([value, label]) => ({
-              value,
-              label,
-            }))}
-            value={role}
-            onChange={setRole}
-            allowDeselect={false}
-          />
-          <Group justify="flex-end">
-            <Button
-              disabled={!name.trim()}
-              loading={busy}
-              onClick={createLibrary}
-            >
-              创建素材库
-            </Button>
           </Group>
+          {busy && (
+            <Group gap="xs" role="status" aria-live="polite">
+              <Loader size="xs" />
+              <Text size="sm">
+                {scanned == null
+                  ? "正在更新目录…"
+                  : `正在读取，已收录 ${scanned} 项素材…`}
+              </Text>
+            </Group>
+          )}
+          {directoryError && (
+            <Alert color="orange" title="目录读取遇到问题">
+              <Text size="xs" className="directory-path">
+                {directoryError}
+              </Text>
+            </Alert>
+          )}
+          {directoryNotice && (
+            <Text size="sm" c="dimmed">
+              {directoryNotice}
+            </Text>
+          )}
+          {!library?.roots.length ? (
+            <Empty
+              title="尚未添加目录"
+              description={`为${library ? roles[library.role] : "当前类型"}添加本机目录后，素材会自动显示在这里。`}
+            />
+          ) : (
+            <div className="directory-list">
+              {library.roots.map((path) => {
+                const status = library.root_status?.find(
+                  (item) => item.path === path,
+                );
+                return (
+                  <div className="directory-row" key={path}>
+                    <IconFolderOpen
+                      size={20}
+                      stroke={1.6}
+                      className="directory-icon"
+                    />
+                    <Stack gap={5} className="directory-info">
+                      <Group gap="sm">
+                        <Text fw={500} size="sm">
+                          {path.split(/[\\/]/).filter(Boolean).at(-1) || path}
+                        </Text>
+                        <Text
+                          size="xs"
+                          c={
+                            !status?.scanned_at
+                              ? "dimmed"
+                              : status.error || !status.available
+                                ? "orange"
+                                : "teal"
+                          }
+                        >
+                          {!status?.scanned_at
+                            ? "待读取"
+                            : status.error
+                              ? "读取异常"
+                              : status.available
+                                ? "可用"
+                                : "离线"}
+                        </Text>
+                        {!!status?.scanned_at && (
+                          <Text size="xs" c="dimmed">
+                            已收录 {status.active_count || 0} 项
+                          </Text>
+                        )}
+                      </Group>
+                      <Text size="xs" className="directory-path">
+                        {path}
+                      </Text>
+                      {status?.error && (
+                        <Text
+                          size="xs"
+                          c="orange"
+                          className="directory-path"
+                          lineClamp={2}
+                          title={status.error}
+                        >
+                          {status.error}
+                        </Text>
+                      )}
+                    </Stack>
+                    <Group gap={6} wrap="nowrap" className="directory-actions">
+                      <Button
+                        variant="default"
+                        size="xs"
+                        aria-label={`打开目录 ${path}`}
+                        onClick={() => openPath(path).catch(report)}
+                      >
+                        打开
+                      </Button>
+                      <Button
+                        variant="default"
+                        size="xs"
+                        aria-label={`刷新目录 ${path}`}
+                        onClick={() =>
+                          mutate("libraries.scan", {
+                            library_id: library.id,
+                            roots: [path],
+                          })
+                        }
+                        disabled={busy}
+                      >
+                        刷新
+                      </Button>
+                      <Button
+                        variant="default"
+                        color="red"
+                        size="xs"
+                        aria-label={`移除目录 ${path}`}
+                        onClick={() =>
+                          mutate("libraries.remove_root", {
+                            library_id: library.id,
+                            path,
+                          })
+                        }
+                        disabled={busy}
+                      >
+                        移除
+                      </Button>
+                    </Group>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </Stack>
       </Modal>
     </>
