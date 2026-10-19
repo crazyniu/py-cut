@@ -28,7 +28,7 @@ import {
   VideoThumbnail,
 } from "./common";
 import TaskPage from "./TaskPage";
-import TaskProgress from "./TaskProgress";
+import TaskProgress, { TaskActions } from "./TaskProgress";
 
 export default function ProcessingPage({
   project,
@@ -84,8 +84,14 @@ export default function ProcessingPage({
   return (
     <>
       <PageHeading
-        title="视频处理"
-        description="统一查看混剪、字幕擦除和视频去重任务。"
+        title={
+          selected
+            ? `${kinds[selected.kind]} · ${dateTime(selected.created_at)}`
+            : "视频处理"
+        }
+        description={
+          selected ? undefined : "统一查看混剪、字幕擦除和视频去重任务。"
+        }
       />
       <Group gap="xs" mb="md" className="page-toolbar">
         {selectedId ? (
@@ -127,6 +133,7 @@ export default function ProcessingPage({
           </>
         )}
 
+        {selected && <TaskActions key={selected.id} job={selected} />}
         <Button
           variant="default"
           leftSection={<IconRefresh size={16} />}
@@ -155,15 +162,7 @@ export default function ProcessingPage({
       {!loaded ? (
         <LoadingPage />
       ) : selected ? (
-        <>
-          <Group gap="sm" mb="md">
-            <Text fw={600}>{kinds[selected.kind]}</Text>
-            <Text size="sm" c="dimmed">
-              {dateTime(selected.created_at)}
-            </Text>
-          </Group>
-          <TaskProgress key={selected.id} job={selected} />
-        </>
+        <TaskProgress key={selected.id} job={selected} />
       ) : !visible.length ? (
         <Empty
           title={jobs.length ? "暂无符合条件的任务" : "还没有处理任务"}

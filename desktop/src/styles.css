@@ -198,7 +198,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 24px;
-  padding-block: 20px;
+  padding-block: 12px;
 }
 .processing-journey > div {
   display: flex;
@@ -294,7 +294,6 @@ textarea {
   height: 36px;
 }
 .mantine-ActionIcon-root,
-.mantine-Button-inner,
 .mantine-Button-section {
   align-items: center;
   justify-content: center;

@@ -131,20 +131,15 @@ export default function App() {
           </Group>
           {project ? (
             <>
-              <Button
-                variant="subtle"
-                color="gray"
-                size="xs"
-                leftSection={<IconArrowLeft size={14} />}
-                justify="flex-start"
+              <NavLink
+                label="所有项目"
+                leftSection={<IconArrowLeft size={18} stroke={1.6} />}
                 onClick={() => {
                   setProjectId(null);
                   setPage("projects");
                 }}
                 mb="sm"
-              >
-                所有项目
-              </Button>
+              />
               <Select
                 aria-label="切换项目"
                 data={projects.map((item) => ({
