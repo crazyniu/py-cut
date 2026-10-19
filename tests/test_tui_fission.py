@@ -1,4 +1,4 @@
-"""混剪裂变数量可见输入、取消恢复和窗口尺寸变化测试。"""
+"""Variant-count editing, cancellation restoration, and terminal resize behavior."""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ class FissionTests(unittest.TestCase):
         )
 
     def test_editor_survives_window_resize_and_esc(self):
-        # 从 100×24 收缩至 60×15。原先固定 row=20，此时已越界。
+        # The initial row is out of bounds after shrinking from 100x24 to 60x15.
         screen = Screen([curses.KEY_RESIZE, ord("1"), ord("2"), 10],
                         on_resize=(15, 60))
         self.assertEqual(tui._prompt_int(screen, 20, 2, 100, "裂变", 1, 1, 99),

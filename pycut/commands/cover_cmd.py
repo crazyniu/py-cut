@@ -1,7 +1,6 @@
-"""cover 命令：递归读取用户提供的切片，单独检测并遮盖字幕。
+"""Public cover command: recursively merge supplied clips and blur detected subtitles.
 
-多目录合并读取，输入与字幕查重输出分离；--force 可忽略已有完成标记重跑。
-"""
+Keep source/output separate. --force reprocesses clips regardless of completion markers."""
 from __future__ import annotations
 
 import argparse
@@ -44,7 +43,7 @@ def register(subparsers) -> None:
 
 
 def _pick_clips(args: argparse.Namespace) -> list[Path]:
-    """返回去重后的 MP4 列表；显式文件缺失必须报错，不能悄悄跳过。"""
+    """Return unique MP4 paths; explicit missing files must fail rather than disappear."""
     if args.src_dir or not args.file:
         from ..core.scan import list_videos_recursive  # noqa: PLC0415
         selected = [
@@ -61,7 +60,7 @@ def _pick_clips(args: argparse.Namespace) -> list[Path]:
             if file.suffix.lower() != ".mp4":
                 raise ValueError(f"字幕擦除只支持 MP4 文件: {file}")
 
-    # 同一个文件通过别名或重复参数出现时，不能并行写相同临时文件。
+    # Deduplicate aliases before workers can write the same temporary output.
     unique: dict[Path, Path] = {}
     for file in selected:
         unique.setdefault(file.resolve(), file)
@@ -81,7 +80,7 @@ def run(args: argparse.Namespace) -> int:
         log("[错误] 所选范围没有可处理的 MP4 视频")
         return 1
 
-    from ..core.output_paths import flat_output, sibling, source_root, validate_targets, matching_root
+    from ..core.output_paths import flat_output, sibling, validate_targets, matching_root
     roots = args.src_dir or (config.CLIP_DIRS if not args.file else [])
     def destination(c: Path) -> Path:
         root = (Path(args.out_dir).expanduser() if args.out_dir else
@@ -134,7 +133,7 @@ def run(args: argparse.Namespace) -> int:
                         marker.unlink(missing_ok=True)
                 return status
 
-        except Exception as e:  # noqa: BLE001 单片段失败不拖垮整批
+        except Exception as e:  # noqa: BLE001 - isolate per-clip failures.
             log(f"  [异常] {c.name}: {type(e).__name__} {e}")
             return "fail"
 
@@ -160,7 +159,7 @@ def run(args: argparse.Namespace) -> int:
         f"{'失败':<6}{stat['fail']:>4}")
     if stat["review"]:
         log(f"[待复查] {stat['review']} 片识别不确定或仍可能有字幕；输出已保留，可继续后续任务")
-    if stat["dryrun"]:      # 试跑：只报检测到的区域，不落盘
+    if stat["dryrun"]:      # Dry-run reports detection without writing media.
         log(f"{'试跑命中':<10}{stat['dryrun']:>6}   （--dry-run，未改写文件）")
     note = f"（失败 {llm.failures}）"
     if llm.switched_to:

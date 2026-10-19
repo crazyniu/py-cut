@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""为自有/授权视频生成 ASS 两种字幕样式的可复现对照。
+"""Plan reproducible outline/box ASS comparisons for owned or authorized media.
 
-默认只生成两个 ASS、待执行的 FFmpeg 命令和 JSON 计划；显式指定
---execute --authorized 才编码视频。仅在独立输出目录写文件，失败时
-不会以残缺成片覆盖先前生成的结果。
-"""
+Default mode writes ASS and a JSON command plan only. --execute --authorized
+explicitly enables encoding into an isolated output directory. Failed renders
+never replace existing results with incomplete media."""
 from __future__ import annotations
 
 import argparse
@@ -38,7 +37,7 @@ def _canvas(text: str) -> tuple[int, int]:
 
 
 def _with_source_audio(command: list[str]) -> list[str]:
-    """复用生产线的字幕命令；对照视频额外保留授权来源的音频流。"""
+    """Reuse the production subtitle command while preserving authorized source audio."""
     cmd = list(command)
     try:
         index = cmd.index("-an")
@@ -50,7 +49,7 @@ def _with_source_audio(command: list[str]) -> list[str]:
 
 def make_plan(video: Path, srt: Path, output_dir: Path,
               canvas: tuple[int, int], font: str) -> dict:
-    """生成样式 ASS 与 FFmpeg 命令，不调用编码器或写源文件。"""
+    """Write ASS styles and return FFmpeg commands without encoding or modifying the source."""
     video, srt, output_dir = Path(video), Path(srt), Path(output_dir)
     if not video.is_file():
         raise ValueError(f"授权源视频不存在: {video}")
@@ -104,7 +103,7 @@ def _run_checked(command: list[str], description: str, timeout: int = 900) -> No
 
 
 def execute_plan(plan: dict, *, overwrite: bool = False) -> dict:
-    """仅发布经探测的完整视频；照片必须真实由该产物抽帧。"""
+    """Publish only validated videos and extract snapshots from those actual outputs."""
     source = Path(plan["source"])
     source_info = probe_video(source)
     if source_info is None:

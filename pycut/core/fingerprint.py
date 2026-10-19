@@ -1,23 +1,9 @@
-"""视频指纹自检：pHash（感知哈希）+ PSNR（峰值信噪比）。
+"""Video change measurements using perceptual hashes and grayscale PSNR.
 
-对应 `docs/DEDUP.md` 第 6 节「自检闭环」——去重不能只管改、不管改了多少，
-处理前后必须量化「视觉相似度下降了多少」与「画质掉了多少」：
-
-- **pHash 距离**：DCT 32x32 取左上 8x8 低频，去掉 DC 后按位打包成 64 位整数，
-  逐帧算汉明距离再取平均。距离越大 = 画面被改得越狠。
-  门禁参考 `config.DEDUP_MIN_PHASH_DIST`（改动够不够）。
-- **PSNR**：逐帧灰度 MSE → `10*log10(255^2/mse)` 后取平均，单位 dB，越高画质越好。
-  门禁参考 `config.DEDUP_MIN_PSNR`（画质掉太多就要回退参数）。
-
-本模块与去重编排（`core/dedup.py`）解耦，可独立用于 `--check` 基线测量。
-
-抽帧策略（`AGENTS.md` 第 5 节「双重 seek」坑）：这里**故意不做 seek**，
-而是用 cv2 顺序解码后按帧索引均匀取。视频关键帧间隔（常见 8.33s）往往远大于
-抽帧间隔，seek 会落到邻近关键帧上、抽到别的镜头的帧，导致自检数值失真；
-顺序解码虽然慢一些，但抽到的一定是第 i 帧本身。
-
-纯标准库 + cv2 + numpy，不引入新依赖。
-"""
+Sequentially decode and sample by frame index; keyframe seeks can select different
+shots and invalidate comparisons. pHash measures visual change; PSNR is a coarse
+damage floor after geometry changes, not a perceptual quality score. Neither
+measurement proves platform acceptance. Uses only cv2, numpy, and the standard library."""
 from __future__ import annotations
 
 import math
@@ -28,47 +14,41 @@ import numpy as np
 
 from .. import config
 
-# 默认抽帧数（门禁与报告里的 N 都用它，保持一致）
+
 DEFAULT_SAMPLES = config.DEDUP_PHASH_SAMPLES
 
-# pHash 参数：DCT 32x32 -> 左上 8x8 低频 -> 64 位
+
 _PHASH_DCT_SIZE = 32
 _PHASH_LOW_SIZE = 8
-_PHASH_BITS = _PHASH_LOW_SIZE * _PHASH_LOW_SIZE   # 64
 
-# PSNR 完全一致时的上限值：mse=0 会让 log10(0) 出 -inf，用它兜住。
-# 注意这是数学上的保护上限，不是标定出来的画质阈值。
+# Finite cap for identical frames (MSE=0); not a calibrated quality threshold.
 _PSNR_MAX = 99.0
 
-# PSNR 公式里的峰值信噪比基准（8bit 灰度）
+
 _PSNR_PEAK = 255.0 ** 2
 
 
 def phash(frame_bgr: np.ndarray) -> int:
-    """单帧 BGR -> 64 位感知哈希（整数）。
+    """Convert a BGR frame to a packed DCT perceptual hash.
 
-    做法：灰度 -> 缩放到 32x32 -> 二维 DCT -> 取左上 8x8 低频系数 ->
-    去掉 DC 分量（`[0,0]` 只反映整体亮度，留着会让哈希对整体亮度过于敏感）->
-    与其余 63 个系数的中位数比较得 64 个比特 -> 低位在前打包成 int。
-
-    打包时 DC 位恒为 0，所以哈希整体亮度不变；有效信息 63 bit。
-    """
+    Resize to 32x32, threshold the top-left 8x8 coefficients against the non-DC median,
+    and pack least-significant bit first. The DC bit stays zero (63 effective bits)."""
     if frame_bgr is None or getattr(frame_bgr, "size", 0) == 0:
         raise ValueError("phash: 传入的是空帧")
 
     gray = _to_gray(frame_bgr)
-    # INTER_AREA 是缩小时的正确插值（避免混叠把高频混进低频，影响稳定性）
+    # Area downsampling limits high-frequency aliasing in the low-frequency hash.
     small = cv2.resize(gray, (_PHASH_DCT_SIZE, _PHASH_DCT_SIZE),
                        interpolation=cv2.INTER_AREA)
     coeffs = cv2.dct(small.astype(np.float32))[:_PHASH_LOW_SIZE, :_PHASH_LOW_SIZE]
 
-    # 中位数只用非 DC 的 63 个系数算，避免 DC 把基准拉偏
+    # Exclude DC from the median so brightness does not shift the hash baseline.
     body = coeffs.reshape(-1).copy()
     body[0] = 0.0
     median = float(np.median(body[1:]))
 
     bits = (coeffs.reshape(-1) > median)
-    bits[0] = False                      # DC 位恒 0：哈希对整体亮度不敏感
+    bits[0] = False                      # Force the DC bit to zero for brightness invariance.
     value = 0
     for i, bit in enumerate(bits):
         if bit:
@@ -77,16 +57,14 @@ def phash(frame_bgr: np.ndarray) -> int:
 
 
 def phash_distance(a: int, b: int) -> int:
-    """两个 pHash 的汉明距离（0-64，越小越像；0 = 完全一致）。"""
+    """Return the Hamming distance between packed hashes; zero means identical hashes."""
     return int(a ^ b).bit_count()
 
 
 def sample_frames(path: Path | str, n: int = DEFAULT_SAMPLES) -> list[np.ndarray]:
-    """从视频均匀抽 n 帧，返回 BGR ndarray 列表（顺序解码后按索引取）。
+    """Return up to n BGR frames sampled by index during sequential decoding.
 
-    帧数不足 n 时返回实际能取到的全部帧（视频太短的正常情况）；
-    一帧都读不到（路径不存在 / 损坏 / 非视频）抛 RuntimeError。
-    """
+    Short videos return available frames. Raise RuntimeError if none can be read."""
     if n <= 0:
         return []
 
@@ -97,7 +75,7 @@ def sample_frames(path: Path | str, n: int = DEFAULT_SAMPLES) -> list[np.ndarray
     try:
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         if total <= 0:
-            # 容器元数据不可靠（少见）：只能顺序解码后全量取，再抽稀
+            # If metadata omits frame count, decode once and thin the sample stream.
             return _sample_without_count(cap, path, n)
 
         indices = _pick_indices(total, n)
@@ -106,8 +84,7 @@ def sample_frames(path: Path | str, n: int = DEFAULT_SAMPLES) -> list[np.ndarray
         idx = 0
         last = indices[-1]
         while idx <= last:
-            # grab 顺序解码但不把未选中的帧拷回 Python；仅目标帧 retrieve。
-            # 不使用关键帧随机 seek，以免 B 帧/非精确跳转改变 pHash/PSNR 口径。
+            # Decode sequentially; retrieve only selected frames and avoid keyframe-seek mismatches.
             if not cap.grab():
                 break
             if idx in wanted:
@@ -125,27 +102,16 @@ def sample_frames(path: Path | str, n: int = DEFAULT_SAMPLES) -> list[np.ndarray
 
 
 def phash_profile(path: Path | str, n: int = DEFAULT_SAMPLES) -> list[int]:
-    """视频的 pHash 序列（长度 = 实际抽到的帧数）。
-
-    读帧失败抛 RuntimeError，由调用方决定是否降级。
-    """
+    """Return hashes of sampled video frames; propagate read failures."""
     return [phash(f) for f in sample_frames(path, n)]
 
 
 def compare(src: Path | str, dst: Path | str,
             n: int = DEFAULT_SAMPLES) -> dict:
-    """去重自检主入口：对比原片与处理后视频的相似度与画质。
+    """Return phash_dist, psamples, psnr, and samples for paired video frames.
 
-    返回::
-
-        {"phash_dist": float,  # 两侧 pHash 序列的平均汉明距离（0-64）
-         "psamples": int,      # 实际配对比较的帧数
-         "psnr": float,        # 平均 PSNR(dB)
-         "samples": int}       # 源侧抽到的帧数
-
-    两序列长度不等时按可用配对数（较短一侧）计算。
-    任一侧读帧失败抛 RuntimeError——是否降级（比如跳过该条）由调用方决定。
-    """
+    Use the shorter available sample sequence for pairing. Read failures raise
+    RuntimeError; the caller owns the failure policy."""
     frames_a = sample_frames(src, n)
     frames_b = sample_frames(dst, n)
 
@@ -164,14 +130,10 @@ def compare(src: Path | str, dst: Path | str,
     }
 
 
-# ---------------------------------------------------------------------------
-# 内部实现
-# ---------------------------------------------------------------------------
 def _pick_indices(total: int, n: int) -> list[int]:
-    """在 [0, total-1] 上均匀取 n 个帧索引（含首尾），去重后升序。
+    """Return sorted unique sample indices, including endpoints when n permits.
 
-    帧数 <= n 时全取。取整后相邻索引步长 >= 1，结果长度恰好为 min(total, n)。
-    """
+    Videos shorter than n contribute every frame."""
     if total <= 0 or n <= 0:
         return []
     if total <= n:
@@ -183,17 +145,15 @@ def _pick_indices(total: int, n: int) -> list[int]:
 
 
 def _sample_without_count(cap, path: Path | str, n: int) -> list[np.ndarray]:
-    """元数据没有帧数时：顺序解码 + 流式均匀抽稀。
+    """Sample a stream with unknown frame count using at most 2n buffered frames.
 
-    事先不知道总帧数，没法直接算索引；这里的做法是每攒满 2n 帧就隔帧丢一半、
-    同时把步长翻倍——结束后剩余帧在时间轴上近似等距，且内存峰值只有 2n 帧。
-    只在容器元数据异常时走这条路径。
-    """
+    At 2n frames, discard alternating samples and double the stride; reduce the final
+    buffer to n approximately evenly spaced samples."""
     kept: list[np.ndarray] = []
-    stride = 1          # 当前保留步长（每隔 stride-1 帧丢一帧）
-    seen = 0            # 已解码帧数
+    stride = 1
+    seen = 0
     while cap.grab():
-        # 未知帧数的退化路径也只取回被采样的帧；抽稀索引和内存预算不变。
+        # The unknown-count fallback also retrieves only sampled frames within its memory budget.
         if (seen % stride) == 0:
             ok, frame = cap.retrieve()
             if not ok or frame is None:
@@ -206,12 +166,12 @@ def _sample_without_count(cap, path: Path | str, n: int) -> list[np.ndarray]:
 
     if not kept:
         raise RuntimeError(f"抽帧失败：{path}（读到 0 帧）")
-    # 抽稀后多于 n 帧时，按索引均匀压到 n 帧
+
     return [kept[i] for i in _pick_indices(len(kept), n)]
 
 
 def _to_gray(frame: np.ndarray) -> np.ndarray:
-    """BGR（或已是灰度）-> 灰度 uint8。"""
+    """Convert BGR or grayscale data to grayscale uint8."""
     if frame.ndim == 2:
         return frame if frame.dtype == np.uint8 else frame.astype(np.uint8)
     code = cv2.COLOR_BGR2GRAY if frame.shape[2] >= 3 else cv2.COLOR_BGRA2GRAY
@@ -220,7 +180,7 @@ def _to_gray(frame: np.ndarray) -> np.ndarray:
 
 def _psnr_from_frames(frames_a: list[np.ndarray],
                       frames_b: list[np.ndarray]) -> tuple[float, int]:
-    """逐帧 PSNR 取平均，返回 (平均 dB, 配对数)。"""
+    """Return (mean PSNR in dB, paired frame count)."""
     pairs = min(len(frames_a), len(frames_b))
     if pairs == 0:
         raise RuntimeError("PSNR 计算失败：两侧都没有可用帧")
@@ -230,7 +190,7 @@ def _psnr_from_frames(frames_a: list[np.ndarray],
         ga = _to_gray(frames_a[i])
         gb = _to_gray(frames_b[i])
         if ga.shape != gb.shape:
-            # 尺寸不同无法逐像素相减：统一缩到「宽高各取较小者」
+            # Resize both frames to their shared minimum dimensions before pixel subtraction.
             h = min(ga.shape[0], gb.shape[0])
             w = min(ga.shape[1], gb.shape[1])
             ga = cv2.resize(ga, (w, h), interpolation=cv2.INTER_AREA)

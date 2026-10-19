@@ -1,4 +1,4 @@
-"""蒙太奇的最终成片必须是 C/D/E 全部成功后的原子提交。"""
+"""Publish montage atomically only after all required C/D/E stages succeed."""
 from __future__ import annotations
 
 from pathlib import Path

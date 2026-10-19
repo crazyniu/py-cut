@@ -1,4 +1,4 @@
-"""混剪截取失败需保留真实原因，禁止覆盖已有成片。"""
+"""Retain segment-encoding root causes and preserve existing final output."""
 from pathlib import Path
 import shutil
 import tempfile

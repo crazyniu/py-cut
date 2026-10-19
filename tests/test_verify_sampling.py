@@ -1,4 +1,4 @@
-"""独立质检必须抽取真实片段编号，而不是从 0 起的列表索引。"""
+"""Independent QA samples actual segment numbers rather than zero-based list offsets."""
 import unittest
 from tools.verify import spread_sample
 

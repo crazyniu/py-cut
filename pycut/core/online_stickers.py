@@ -1,4 +1,4 @@
-"""生成时下载 Twemoji PNG 贴纸（CC BY 4.0），记录来源与许可。"""
+"""Download temporary Twemoji PNG stickers and retain CC BY 4.0 attribution."""
 from __future__ import annotations
 
 import json
@@ -23,7 +23,7 @@ ATTRIBUTION = {
 
 
 def download_stickers(directory: Path) -> list[Path]:
-    """每次请求原站，不用旧缓存；任一下载失败则让调用方拒绝发布。"""
+    """Fetch fresh stickers; propagate any download failure so the caller rejects publication."""
     directory.mkdir(parents=True, exist_ok=True)
     files = []
     for index, url in enumerate(SOURCES):

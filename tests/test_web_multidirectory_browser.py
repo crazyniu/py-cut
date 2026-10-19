@@ -62,10 +62,10 @@ def test_browser_multidirectory_flow(tmp_path):
     page.screenshot(path=str(tmp_path/'multidir-mobile.png'),full_page=True)
     assert page.evaluate('()=>document.documentElement.scrollWidth')<=390
     assert page.locator('fieldset[data-key=PYCUT_CLIP_DIR] .is-required').inner_text()=='必填'
-    # 最后一项滚到底时应完整出现在固定保存栏之上。
+
     page.evaluate('()=>window.scrollTo(0,document.documentElement.scrollHeight)')
     assert page.evaluate("()=>document.querySelector('#PYCUT_STICKER_DIR').getBoundingClientRect().bottom < document.querySelector('.bottom').getBoundingClientRect().top")
-    # 编辑后立即提示未保存；Ctrl+S 保存，恢复成功态。
+
     page.locator('#PYCUT_OUTPUT_DIR').fill(str(root/'out'))
     assert page.locator('#page-state').inner_text()=='未保存'
     page.keyboard.press('Control+s')

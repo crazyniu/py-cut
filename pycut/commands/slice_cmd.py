@@ -1,8 +1,7 @@
-"""slice 命令：短视频智能切片 + 人脸分流 + 字幕擦除。
+"""Internal legacy slicing adapter retained for shared helpers and regression coverage.
 
-这是当前已落地的主要功能。其它功能（混剪/转场/查重）作为独立命令挂载，
-但都复用本模块产出的切片桶（源目录同级 切片/有人脸 / 切片/无人脸）。
-"""
+This module is not registered in the public CLI or TUI. Keep explicit-file,
+output-collision, cancellation, and subtitle-review behavior for internal callers."""
 from __future__ import annotations
 
 import argparse
@@ -56,7 +55,7 @@ def register(subparsers) -> None:
 
 
 def _is_explicit_file(value: str) -> bool:
-    """路径形态与历史文件名关键词区分；`./name.mp4` 可消除歧义。"""
+    """Distinguish path syntax from legacy filename keywords; ./name.mp4 is explicit."""
     return "/" in value or value.startswith("~")
 
 
@@ -64,8 +63,7 @@ def _pick_files(args: argparse.Namespace) -> list[Path]:
     if args.max_depth is not None and args.max_depth < 0:
         sys.exit("[错误] --max-depth 必须 >= 0")
 
-    # 显式路径只处理这一支，不扫描默认素材目录，也不退回模糊匹配，
-    # 否则输入 /other/missing.mp4 可能误处理 SRC_DIR 内的同名文件。
+    # Explicit missing paths must fail rather than falling back to a similarly named source.
     if args.file and _is_explicit_file(args.file):
         try:
             path = Path(args.file).expanduser()
@@ -95,7 +93,7 @@ def _pick_files(args: argparse.Namespace) -> list[Path]:
 
 
 def _colliding_stems(files: list[Path]) -> list[list[Path]]:
-    """不同输入绝不能在同名输出目录互相覆盖（含 macOS 大小写不敏感目录）。"""
+    """Find inputs that would share an output name, including case-insensitive filesystems."""
     by_stem: dict[str, list[Path]] = {}
     for path in files:
         name = unicodedata.normalize("NFC", path.stem).casefold()
@@ -107,7 +105,7 @@ def run(args: argparse.Namespace) -> int:
     install_signal_handlers()
     reset_stop()
 
-    # 显式输出优先，默认画中画配置；未配置则源目录同级。
+    # Explicit output wins; otherwise use the configured PIP root or a source sibling.
     if args.src_dir:
         config.SRC_DIR = Path(args.src_dir).expanduser()
     from ..core.output_paths import slice_output_root
@@ -119,7 +117,7 @@ def run(args: argparse.Namespace) -> int:
     config.OUT_MANIFEST = od / "清单"
 
     t_all = time.time()
-    # 直接指定单文件时不要求默认 SRC_DIR 存在；其他 ffmpeg/cv2/磁盘自检照常执行。
+    # An explicit file does not require the default source root; still check tools and disk.
     cv2 = (self_check(require_src=False)
            if args.file and _is_explicit_file(args.file) else self_check())
     cascades = load_cascades(cv2)
@@ -174,7 +172,7 @@ def run(args: argparse.Namespace) -> int:
                 continue
             try:
                 r = process_video(llm, info, opts, manifest)
-            except Exception as exc:  # noqa: BLE001 单视频失败不拖垮其他素材
+            except Exception as exc:  # noqa: BLE001 - isolate per-video failures.
                 log(f"[处理异常] {f.name}: {type(exc).__name__}: {exc}")
                 results.append(_stub(f))
                 continue
@@ -232,7 +230,7 @@ def _summary(results, llm, manifest, t_detect, t_enc, t_all) -> int:
     log(f"{'LLM 调用':<12}{llm.calls:>10}  {llm_note}")
     log(f"{'清单':<12}{manifest.csv_path}")
     log("=" * 62)
-    # 任何切割、字幕失败或用户中断都不能误报成功，以免继续后续去重。
+    # Cut/subtitle failures and cancellation must stop dependent jobs with nonzero status.
     if _stopped():
         log("[中断] 任务未完整完成，退出码 130")
         return 130

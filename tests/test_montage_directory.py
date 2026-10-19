@@ -23,13 +23,13 @@ def test_montage_nested_chinese_libraries_and_specific_empty_message(tmp_path):
         flash.assert_not_called()
         for candidate in _collect_files(pip):
             candidate.unlink()
-        # 画中画目录配置了但无可用素材 → 勾选（默认开）后扫描为空，拒绝并提示。
+
         assert tui._wizard_montage(None, 100) is None
         warning = flash.call_args.args[1]
         assert '画中画素材不可用' in warning
         for candidate in _collect_files(background):
             candidate.unlink()
-        # 背景切片目录始终需要，清空后入口即拒绝。
+
         assert tui._wizard_montage(None, 100) is None
         warning = flash.call_args.args[1]
         assert '未找到混剪切片' in warning and str(background) in warning

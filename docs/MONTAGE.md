@@ -1,177 +1,184 @@
-# montage —— 混剪视频
+# Montage processing contract
 
-> 混剪沿用已有 A/B/C/D/E 流程；本文件只记录处理契约与技术约束，验证与交付证据记录在 PR。
+Durable requirements and implementation boundaries only. Keep validation/delivery
+runs in PRs. Current source and actual encoding determine support, not old measurements.
 
-## 当前生成契约
+## 1. Inputs, output, and invariants
 
-- 切片由用户提供；混剪切片、画中画与前贴支持多目录递归合并，同一文件只读取一次。话术根目录每个子文件夹放一个视频与同名 SRT，每次混剪新建一个批次目录，所有成片平铺，同名自动编号避免覆盖。
-- 成片固定 720×1280、9:16、30fps，与参考视频总时长一致；右上角默认画中画 216×384，保持比例适配。
-- 背景仅展示，与画中画及字幕内容无语义关联。两路素材独立随机编排并静音；背景与画中画各自按片段 seed 进行标准档几何/像素扰动，画中画额外保留轻量镜像，先在小窗内拼接再整体叠加一次；使用一次性计算并按真实帧预算有限复用的静态羽化遮罩和柔和阴影，小窗内预合成；连续模式只在主画面 overlay 一次，不恢复旧版逐段全画面羽化/阴影链，最后贴回参考原声。
-- 字幕使用参考视频同目录同名 SRT，保留原始时间戳与短字幕，不按随机镜头重新计时。
-- CLI/TUI 默认生成时下载在线 PNG 贴纸，使用 Twemoji（Twitter 及贡献者，CC BY 4.0）；来源与许可保存在下载目录 `credits.json`。指定 `--sticker-dir` 则用本地图片，`--no-sticker` 可关闭。在线下载失败拒绝发布，不悄悄使用旧缓存。
-- 默认段间淡化转场 0.2 秒，不缩短总时长；`--seam-fade 0` 可关闭。
-- 背景素材复用、画中画覆盖不足均拒绝发布；画中画连续模式会利用已有长片段填满时间轴。
-- 先完成输入检查与背景/画中画规划，再编码；明确无效的字幕或不足的素材在编码前报告。正常话术自带原声，原声只在正文画面与字幕完成后贴回。
-- 连续画中画保留完整的取用片段，先拼到超过正文时长，再在最终合成时截断。例如正文 180 秒，画中画拼成 182.5 秒，最终只输出 180 秒；不要求每一段恰好凑齐末帧。
-- `--fission N` 每个参考视频生成 N 条，保留设置并派生不同 seed；TUI 输入数量，默认 1。
-- 混剪输出目录只发布完成的视频，不生成同名 JSON 参数报告；seed 与各阶段诊断写在独立 `.log` 文件中。画面扰动不能证明暗水印已去除或平台不会检测到重复。
+- Users supply background/PIP/optional intro clips. Each supports multiple recursively
+  merged roots without duplicate files or directory-symlink traversal.
+- Each reference subfolder contains one video and same-stem SRT. Reference contributes
+  speech rhythm, body duration, subtitle timing, and original audio; its picture is
+  not a background source. Random library footage need not match the spoken semantics.
+- Body output is fixed 720x1280, 9:16, 30 FPS and retains reference video duration.
+  Optional intro increases final duration by its complete length.
+- Independently select background/PIP and apply standard geometry/pixel variation.
+  Background/PIP picture stages are silent; attach reference audio after subtitles.
+- Default PIP is top-right 216x384 with aspect-preserving fit, random mirroring,
+  feathering, and shadow. Preserve its existing subtitles; never run cover on it.
+- Default stickers are newly downloaded Twemoji PNGs (Twitter/contributors, CC BY 4.0);
+  temporary credits.json retains attribution. Explicit --sticker-dir uses local images;
+  --no-sticker disables. Download/selected-image failure rejects publication.
+- Default seam fade is 0.2 seconds without overlap or duration loss; --seam-fade 0 disables.
+- Reject repeated background material, insufficient coverage, or failed stages. Check
+  inputs and plan both pools before encoding. Preserve prior output on failure/interruption.
+- --fission N produces N independently seeded variants per reference. Share preparation
+  only within that command, never random choices or processing-success state.
+- Output is one newly created flat video-only batch for all references/variants. No
+  per-video JSON is written; seeds/diagnostics remain in separate logs. Effects do not
+  prove embedded-watermark removal or platform acceptance.
 
-所有示例参数须以当前环境、素材容量和真实编码验证；不要用历史运行数字证明当前验收。
+## 2. Stage A — reference profile and rhythm
 
-## 1. 需求原文与解读
+`core/montage_source.py` reads dimensions, duration, FPS, audio presence, and speech
+intervals. Reuse the full metadata query/cache shared by background/PIP/subtitle paths.
+Body timing must use video-stream duration, not a potentially longer audio/container.
 
-用户给的三步流程：
+Run silencedetect with video/subtitle/data decoding disabled. Parse silence events
+from stderr, not stdout. Speech is the complement of silence; close an unmatched
+trailing silence at duration. Use calibrated -20 dB / 0.35-second silence defaults,
+merge gaps below 0.05 seconds, drop speech below 0.8 seconds, and cap long intervals
+at 8 seconds. Continuous background music can change detection; evaluate the audio
+before tuning thresholds.
 
-| 步骤 | 素材 | 要求 |
-|---|---|---|
-| **A** | `话术/a/1.mp4`，或 `--source` 指定路径 | 提取视频话术，作为**时长与节奏基准** |
-| **B** | `materials/background`，或 `--clip-dir` 指定目录 | 随机取片段混剪，**片段不重复**、去重、**静音**；成片时长 = 步骤A |
-| **C** | `materials/去重`，或 `--dedup-dir` 指定画中画目录 | 取片段随机编排、按段标准档去重干扰，**以画中画形式显示在右上角**，静音；时长 = 步骤A |
+When SRT exists, derive shot-length budgets from cues; rendering still retains each
+cue's original timestamp and short text. Otherwise use speech rhythm. Fill pauses/
+tails with bounded slots to cover the complete body, comparing target frame budgets
+rather than adding shots for sub-frame residue. Slot positions are timing budgets,
+not instructions to cut pictures from the reference.
 
-三条硬约束（来自原文）：
-1. **时长对齐**：最终成片以步骤A参考视频的**视频流时长**为准，避免较长音轨拉长容器时长，也不再乘 0.98；30fps 恒定帧率允许一帧以内的量化误差，超出则拒绝发布。
-2. **片段不重复**：B/C 两步都不能重复使用同一素材；
-3. **静音**：B 步与 C 步产出都无音轨。
+No ASR is needed for this path. Semantic selection/transcription would require a
+separate design and dependency/quality evaluation.
 
-## 2. 素材适配边界
+## 3. Stage B — background selection and normalization
 
-素材库可能混入横屏或重复文件；默认按侧边比 `config.MONTAGE_MAX_SIDE_RATIO=1.40` 过滤，`--allow-landscape` 可显式放开。可用时长与完整覆盖必须基于本次探测，不能拿历史库数量推断。
+`core/montage_clips.py` scans supported videos using filesystem traversal, filters
+landscape by width/height <=1.40 unless --allow-landscape is explicit, and retains
+real source durations until selection. Concurrent probes carry explicit indices to
+retain stable source order and seeded reproducibility. Per-file invalid metadata
+is skipped; real directory errors surface.
 
-## 3. 实现方案
+Deduplicate by file size, weak first/last-chunk signature, then full digest for
+collisions. A partial hash alone cannot establish identical content. Pick seeded
+unused material for each duration slot. The planner can report reused/shortfall fields;
+the complete generation path rejects either rather than silently repeating/filling
+with frozen frames.
 
-### 步骤A：话术基准（`core/montage_source.py`）
+Apply optional seeded mirror/speed/sticker choices. Reserve take * speed source
+seconds before acceleration so output slots stay full. Fit using proportional scale
+and pad; never stretch or crop source content merely to fill the canvas.
 
-用 ffmpeg `silencedetect` 提取语音区间：
+Encode each segment once with fused geometry/pixel effects, sticker, and fades.
+Double seek (coarse input plus fine output) ensures accurate cuts. Fade timing is
+shifted by fine seek to keep the visible fade. Normalize dimensions/FPS/SAR/pixel
+format/codec, use silent libx264 CFR, then concat by video stream copy. Direct
+inpoint/outpoint concat or mixed formats can silently truncate despite rc=0.
+Validate every segment and resulting duration before atomic publication.
 
-```
-# ⚠️ 下面是「反面教材」：-32dB 在带背景音乐的素材上检出 0 段静音（整条被判连续语音）。
-#    实际配置用的是 -20dB（config.MONTAGE_SILENCE_NOISE_DB）。
-ffmpeg -i 1.mp4 -af silencedetect=noise=-20d:d=0.35 -f null -
-```
+## 4. Stage C — bounded picture-in-picture
 
-- 结果在 **stderr**（stdout 为空），需正则解析 `silence_start:` / `silence_end:`；
-- **语音段 = 静音区间的补集**（尾部静音缺 `silence_end` 时要补到结尾，否则漏最后一段）；
-- 过滤 <0.8s 的碎段、截断 >8s 的长段、合并间隔 <0.05s 的相邻段；
-- ⚠️ **阈值强依赖音频动态**：本基准素材有持续 BGM（`volumedetect` mean −13.6dB /
-  max 0.0dB，音量压根不往下掉），实测 `-32/-28/-25/-22dB` 全部检出 **0 段**，
-  `-20dB` 才有 7 段。换新素材若节奏明显不对，**首调这个值**；
-- 再由语音段规划出**时间槽**（每个槽 = 成片里该段应有的长度），
-  以语音为节奏骨架，让成片节奏与原话术一致——这是混剪的核心价值。
-- **有字幕文件时按字幕切槽**（56 条字幕比 7 个语音段细得多，一槽一字幕才不丢话术），
-  没字幕才退回「语音段 + 连续补槽」。
+`core/montage_pip.py` scans the optional pool and plans nonoverlapping intervals with
+seeded source/offset choices. Never request offset+duration beyond source availability;
+clamp after rounding/truncation. PIP material is not reused to disguise shortages.
 
-> **为什么不接 ASR**：混剪只需要「时长 + 节奏」，不需要文字内容。
-> 引入 ASR 要额外装模型（whisper 等），违反 `AGENTS.md` 里
-> 「保持标准库 + cv2 + numpy，不引入未装依赖」的约定。如将来要做
-> 「按话术语义选片段」，再单独评估。
+Continuous mode starts at zero without gaps and plans complete shots beyond the body
+for rounding slack. Prepare multi-shot tracks sequentially: scale and apply standard
+variation with derive_seed(seed, "pip", i), preserve random mirroring, restore SAR=1,
+and save lossless FFV1/BGRA small windows. Record actual encoded frames from progress;
+individual clips may be one frame short if the whole real track covers the body.
+Concat demuxer opens the prepared windows sequentially; do not open every original
+source at once. Final composition has two video inputs and one main-canvas overlay.
 
-### 步骤B：随机混剪（`core/montage_clips.py`）
+Small-window feather width is 22% of window width; shadow spread is 3.5%, alpha 45%.
+Compute spatial alpha/shadow once and repeat only static masks for a finite budget.
+Never repeat source tail frames or restore per-shot full-canvas double overlays.
+Optional ASS burns during this final encode.
 
-1. 并发探测素材（ffprobe 串行 509 个要几分钟，用线程池），按竖屏 + 时长过滤；
-2. **内容级去重**：按「大小分组 → 只对同大小读首尾各 1MB 比指纹」去重，否则同一画面会在成片反复出现；
-3. 按槽依次随机分配素材，同一素材**不重复使用**；规划器会标记 `reused`/`shortfall`，
-   完整生成流程检测到复用或缺口时拒绝发布；
-4. **画面扰动**（按 seed 逐段决定，同 seed 可复现）：
-   - 随机镜像 `hflip`（`--mirror-chance`，素材含文字/包装时调低）；
-   - 随机加速 `setpts=PTS/speed`（`--speed-max`，如 1.5 表示 1.0~1.5x 随机）；
-     **加速会让段长不足**，所以从源素材按 `take × speed` 取更久再压缩；
-   - 贴纸叠加（见下）；
-5. 拼接：**素材分辨率不一致**（720x1280 / 544x960），统一画布为 720×1280，
-   用 `scale + pad` 适配（**保持比例，严禁拉伸变形**，不足处补黑）；
-6. `-an` 静音 + libx264 + `-fps_mode cfr` + 原子替换。
+Single-shot mode renders directly. Explicit --pip-gap retains gapped intervals with
+shifted PTS and enable expressions. Continuous tails must not inherit the gapped-mode
+minimum duration. Quantize cumulative frame boundaries and truncate once to the body
+frame budget; framesync/CFR cannot extend it. Verify real PIP coverage on the visible
+stream; insufficient frames reject publication instead of tpad/frozen-tail padding.
 
-> 拼接采用**两阶段**（每段双 seek 截取 → 统一规格 → 再 concat）。
-> concat demuxer 的 inpoint/outpoint 不能用：实测 rc=0 但产物短一大截。
+For the normalized stream-copy background, retain -reinit_filter 0 so BT.709/601
+metadata switches do not reconstruct the graph and reset PIP counters/static masks.
+Keep original diagnostics on errors/timeouts and clean small windows on every exit.
 
-### 步骤C：画中画叠加（`core/montage_pip.py`）
+## 5. Stage D — reference subtitles
 
-- 每个画中画是**独立输入**（`-ss <offset> -t <duration>` 在输入侧截取，互不干扰）；
-- 多段连续模式逐段缩放和扰动，先保存 FFV1/BGRA 无损小窗，再顺序拼接；不同时打开全部原素材，最终仅主画面与小窗两路输入，对主画面仅做**一次** `overlay` 和字幕编码。单段直接合成；间隔模式仍按 `enable='between(t,...)'` 在指定时段叠加；
-- 帧时间轴按模式归一化：连续模式每段 `setpts=N/(fps*TB)` 再拼接，记录各段实际编码帧数，单段少于名义帧数时继续拼接；总轨道达到正文所需真实帧后，最终一次截断。间隔模式 `setpts=PTS-STARTPTS+起点`；严禁用 `tpad` 克隆末帧冒充素材；
-- 默认固定 216×384，等比放大后裁切适配小窗；右侧留白约 8%，顶部留白 7.5%；
-- 对每个小窗片段复用 `montage_variation` 标准档几何/像素干扰，按 `derive_seed(seed, "pip", i)` 独立生成，保留现有随机镜像；干扰后恢复 SAR=1。恢复历史羽化宽度（小窗宽 22%）、扩散阴影（小窗宽 3.5%，alpha 45%）：在已拼接的小窗流上使用只计算一帧再有限重复的空间 alpha 遮罩与投影，先小窗合成后仅做一次主画面 overlay；间隔模式每个可见区间同样在小窗内预合成。绝不克隆源视频帧或恢复逐段双重全画面 overlay。
-- 默认**连续显示**（`MONTAGE_PIP_CONTINUOUS`）：从 t=0 直接拼接零间隔完整片段，按一个常规镜头长度预留余量，不再二次重排或提前裁成微小尾段。余量不足而正文覆盖足够时仍可输出；整轨真实帧不足时拒绝发布。使用 `--pip-gap` 可显式允许间隔。
+`core/montage_subtitles.py` parses SRT, builds styled ASS, and burns through libass.
+Keep original timestamps, including short cues; clip only outside body bounds. Do
+not assign subtitles to random shot order.
 
-### 步骤D：字幕烧录（`core/montage_subtitles.py`）
+Scale text/margins with the canvas (font ratio 0.042, about 54 px at the default
+height). BorderStyle=3 uses a translucent black box, bottom-centred, clear of PIP.
+Style comparison helpers may explicitly request outline mode; do not change defaults
+without visual validation. Discover CJK font families with fc-list, not hard-coded
+font-file existence (macOS fonts can live in on-demand AssetsV2 paths). Available
+font candidates and renderer behavior depend on the actual host.
 
-- SRT → ASS → libass 烧录（本机 ffmpeg 已 `--enable-libass`）；
-- **保留 SRT 原时间轴**：成片沿用原声与总时长，镜头槽不改变字幕时间；
-- 字幕仅裁到成片边界，保留短字幕，避免丢字或与原声错位；
-- 样式：`BorderStyle=3`（半透明黑底框）+ PingFang SC **54px**
-  （画布高 × `MONTAGE_SUB_FONT_RATIO` 4.2%），底部居中，与右上角画中画不冲突；
-  改纯描边把 `MONTAGE_SUB_BORDER_STYLE` 改 1；
-- 字体探测必须用 `fc-list : family`（libass 走 fontconfig），
-  **不能用「字体文件是否存在」判断**——PingFang.ttc 在 AssetsV2 里，路径探测会误判；
-- 字幕滤镜的路径转义只需处理 `\` `:` `'` 三个字符，全转义反而会切断滤镜串。
+Wrap text manually using ASS hard line breaks. For a single-quoted subtitles filename,
+escape backslash, colon, and quote in the existing parser order; leave quoted commas,
+brackets, semicolons, equals signs, spaces, and Unicode literal. Extra escaping can
+break the filter. With PIP, burn ASS in its final graph; otherwise use the separate
+subtitle encode. The caller owns temporary ASS cleanup.
 
-### 步骤E：贴回基准音轨
+SRT resolution: --no-sub or --srt "" disables; explicit path wins and must exist;
+--srt auto (default) pairs the source stem in the same directory. Missing automatic
+matches log a skip; missing explicit paths fail before encoding.
 
-- 步骤B/C/D 都用 `-an`（片段自带声音是杂音、字幕烧录也会抹掉音轨），
-  **最后**把基准视频原声贴回去，否则成片是静音的；
-- 用 `-map 0:v:0 -map 1:a:0`、`-c:v copy -c:a copy` 和正文时长上限直接封装，不滤波、变速或补长，不使用 `-shortest` 截短画面。仅原声音频编码不受 MP4 支持时兼容转码 AAC，并明确提示。
-- **顺序很关键**：贴音轨必须在字幕烧录之后，否则被字幕那步的 `-an` 抹掉。
-- 默认要求参考原声：基准没有音轨时拒绝发布，并保留已有成片；显式 `--no-audio` 可关闭此要求。
+## 6. Stage E — original audio, then optional intro
 
-### 贴纸（`core/montage_sticker.py`，在步骤B 内逐段叠加）
+Silent B/C/D processing finishes before audio attachment so later -an cannot remove
+reference sound. Map video and reference audio explicitly and stream-copy both when
+compatible. Do not filter, speed up, or extend reference audio. Bound excess audio to
+picture duration; short audio never truncates picture via -shortest. Use an explicit
+AAC fallback only for container incompatibility. Missing reference audio rejects
+normal publication; --no-audio explicitly permits silence.
 
-- 素材：默认通过 `core/online_stickers.py` 在生成时下载 Twemoji PNG，并保存来源许可；显式 `--sticker-dir` 可提供本地产品图；
-- 视觉规则（用户要求）：**背面半透明**（`alpha × 0.55`，能看见底下的画面）
-  + **边缘羽化**（四边渐隐融进主画面，不是矩形硬块）；
-- 羽化权重取两方向**平均**而非连乘：连乘会让距边 100px、带宽 90px 处权重只剩 0.55，
-  再乘不透明度后主体几乎不可见（实测踩过）；
-- 图片输入**不能加 `-loop 1`**（ffmpeg 永不结束），单帧 + overlay 的
-  `eof_action=repeat` 够用；
-- 叠加在**片段级**（拼接前），而不是拼接后，否则分不清哪段配哪张。
-- 片段应使用已选定的贴纸完整路径；不得在叠加阶段重新随机读取默认贴纸目录。用户启用贴纸而素材目录为空、或指定贴纸的 FFmpeg 处理失败时拒绝发布，避免静默产出无贴纸视频。
+Absent/empty intro roots skip. A nonempty pool selects one complete intro, applies
+existing variation/stickers without subtitle coverage, and retains its own sound
+(or supplies silence). Adapt only intro video as needed; copy completed body video.
+Join after body processing; audio may transcode to AAC for uniform format. Genuine
+access/probe/encode/join errors preserve any prior final output. Temporary replacements
+must share the target filesystem.
 
-## 4. 命令
-
-```bash
-./run.sh montage                      # 全部五步
-./run.sh montage --step a             # 只提取基准（看语音节奏）
-./run.sh montage --step b             # 只到片段混剪
-./run.sh montage --no-pip             # 不叠画中画
-./run.sh montage --no-sub             # 不烧字幕
-./run.sh montage --no-sticker         # 不叠贴纸
-./run.sh montage --no-audio           # 不贴原声（产出静音片）
-./run.sh montage --probe              # 只统计素材规模（竖屏/横屏/时长分布）
-./run.sh montage --seed 2026          # 固定选片/扰动结果可复现
-./run.sh montage --sticker-chance 0.9 # 贴纸更密
-./run.sh montage --speed-max 1.5      # 加速上限
-./run.sh montage --mirror-chance 0.5  # 镜像概率
-./run.sh montage --allow-landscape    # 放开横屏（默认排除）
-```
-
-### 字幕来源（`--srt`）
-
-默认 `--srt auto`：**自动找与基准视频同目录、同名的 `.srt`**。
-例如基准视频是 `爆款素材/快手/1.mp4`，字幕就是 `爆款素材/快手/1.srt`。
-批量切不同素材时，每支视频自动带自己的话术，不用手改固定路径。
+## 7. CLI, TUI, and output ownership
 
 ```bash
-./run.sh montage --srt /path/to/xx.srt   # 显式指定字幕文件
-./run.sh montage --srt ""                # 不烧字幕（同 --no-sub）
-./run.sh montage --no-sub                # 不烧字幕
+./run.sh montage --source /media/reference/a/1.mp4 --fission 5
+./run.sh montage --step a                  # Profile only
+./run.sh montage --step b                  # Keep normalized background
+./run.sh montage --no-pip --intro-dir ""    # Disable optional material
+./run.sh montage --no-sub --no-sticker
+./run.sh montage --no-audio                # Explicit silent output
+./run.sh montage --probe                   # Library statistics only
+./run.sh montage --seed 2026
+./run.sh montage --sticker-chance 0.9
+./run.sh montage --speed-max 1.5 --mirror-chance 0.5
+./run.sh montage --allow-landscape
+./run.sh montage --srt /media/custom.srt
 ```
 
-找不到同名字幕时自动跳过烧字幕并打印提示，不会中断混剪。
+TUI uses Web/.env roots: select reference videos -> enter one common 1..99 count ->
+confirm. Preserve selection/count when returning. Explicit --out-dir overrides
+configured root; fallback is `混剪/` beside the reference root. Every invocation
+creates `混剪-YYYYMMDD-HHMMSS-<unique>/`; all selected references/variants share it,
+flat, with numbered filename collisions and only completed videos. Print its full path.
 
-TUI 从 Web/.env 读取话术、混剪切片、画中画与可选前贴目录；多选话术后统一输入每个话术的裂变数量，汇总确认执行。`--out-dir` 优先于配置的输出根目录，未配置时使用话术根目录同级 `混剪/`。每次执行在根目录下新建 `混剪-YYYYMMDD-HHMMSS-唯一编号/` 批次目录，多选话术与所有裂变视频共用该目录，不再创建话术子目录；同名文件自动加编号。目录内只保存视频，结束时打印完整批次目录路径。
+Use isolated backgrounds/segment directories/concat lists per invocation. Successful
+step b retains its background; other success/failure/interruption paths clean it.
+Later stages operate privately and publish once complete. Check cancellation around
+encoding, verification, and publication; no incomplete overwrite is allowed.
 
-## 5. 输出位置
+## 8. Validation
 
-| 产物 | 位置 |
-|---|---|
-| 步骤B 中间产物 | `/tmp/pycut_montage/base_<seed>.mp4`（不进桌面） |
-| 最终成片 | `OUT/混剪-YYYYMMDD-HHMMSS-唯一编号/<基准名>_n.mp4` |
-
-## 6. 验证方法与边界
-
-- 使用短视频、同名 SRT、独立背景片段和切片目录运行完整流程，检查固定规格、完整解码及画中画覆盖；抽帧目视检查字幕、贴纸和构图。
-- 比较成片与参考视频的视频流时长，以及解码后的音频波形；字幕必须保留 SRT 原时间戳，包括短字幕。
-- 使用 `--fission 2` 检查输出数量、日志中的独立 seed 及画面差异；单条成片内背景和画中画素材不足时拒绝复用。
-- 用无音轨参考、无效字幕、素材不足及中断检查失败退出码，确保已有成片不会被不完整产物覆盖。
-- LLM 模拟可验证请求与响应处理，不能证明真实识别准确率；pHash 差异也不能证明暗水印已去除或平台不会识别。
-
-测试实现见 `tests/test_montage_*.py` 和 `tests/test_llm_safety.py`；执行方式见 README。实际验证与交付证据记录在 PR。
-
+Use authorized short reference/SRT/background/PIP inputs for a real full path. Check
+fixed geometry, frame count, full decode, body/PIP tail coverage, subtitle timing,
+stickers, composition, audio source/duration, and optional intro duration. Inspect
+frames and listen to audio. --fission 2 checks count, independent seeds, and visible
+variation. Test no-audio reference, invalid SRT, material shortage, and interruption
+for nonzero exits and existing-output preservation. Mocks/metrics do not prove model
+accuracy, visual quality, watermark removal, or platform acceptance. Short inputs do
+not establish long-video performance. Tests live in test_montage_*.py/test_pip_*.py;
+record actual execution/evidence in PRs.

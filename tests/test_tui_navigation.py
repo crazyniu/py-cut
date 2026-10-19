@@ -156,7 +156,6 @@ class NavigationTests(unittest.TestCase):
              mock.patch.object(tui, "list_videos_recursive", return_value=[video]), \
              mock.patch.object(tui, "_multi_select",
                                return_value=selection) as multiselect, \
-             mock.patch.object(tui, "_count_sticker_images", return_value=1), \
              mock.patch.object(tui, "_set_fission_counts", return_value=True), \
              mock.patch.object(tui, "_confirm", side_effect=[False, True]):
             commands = tui._wizard_montage(Screen([]), 100)

@@ -1,4 +1,4 @@
-"""真实 HTTP/.env 与矩形马赛克的回归，不调用外部 LLM。"""
+"""Real local HTTP/.env and coverage-rectangle checks without external LLM calls."""
 import json
 import tempfile
 import unittest
@@ -95,11 +95,11 @@ class ConfigTests(unittest.TestCase):
             url = web_config.start(open_browser=False)
             self.addCleanup(web_config.stop)
             quoted = urllib.parse.quote(str(root))
-            # 无 token 拒绝
+
             with self.assertRaises(urllib.error.HTTPError) as error:
                 self.urlopen(url + 'api/dirs?path=' + quoted)
             self.assertEqual(error.exception.code, 403)
-            # 带 token 返回真实绝对路径与中文空格目录
+
             headers = {'X-Config-Token': web_config._TOKEN}
             req = urllib.request.Request(url + 'api/dirs?path=' + quoted, headers=headers)
             with self.urlopen(req) as response:
@@ -107,7 +107,7 @@ class ConfigTests(unittest.TestCase):
             self.assertIsNone(data['error'])
             self.assertEqual(data['path'], str(root.resolve()))
             self.assertIn('中文 空格', [d['name'] for d in data['dirs']])
-            # 不存在的路径返回清晰错误
+
             req = urllib.request.Request(url + 'api/dirs?path=' + urllib.parse.quote(str(root / 'nope')), headers=headers)
             with self.urlopen(req) as response:
                 data = json.loads(response.read())
@@ -125,7 +125,6 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(values['PYCUT_MAIN_KEY'], 'legacy-secret')
             self.assertEqual(values['PYCUT_CLIP_DIR'], 'external')
             self.assertIn('混剪切片目录', settings.overrides())
-
 
 
 if __name__ == '__main__':

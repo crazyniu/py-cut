@@ -1,4 +1,4 @@
-"""只在本机提供 .env 配置页面，不执行视频任务。"""
+"""Loopback-only .env settings service; never executes video tasks."""
 from __future__ import annotations
 import html
 import json
@@ -60,7 +60,7 @@ def page() -> str:
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
-        pass  # 不记录请求中的配置或密钥
+        pass  # Never log settings payloads or credentials.
 
     def reply(self, code, body, kind='application/json'):
         payload = (json.dumps(body, ensure_ascii=False) if kind == 'application/json' else body).encode('utf-8')

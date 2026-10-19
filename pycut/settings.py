@@ -1,4 +1,4 @@
-"""项目 .env 的读取、校验和原子保存；Web 与终端共用。"""
+"""Shared .env parsing, validation, and atomic persistence for Web and CLI."""
 from __future__ import annotations
 import json
 import os

@@ -1,4 +1,4 @@
-"""Issue #22：Ken Burns 逐帧动画计划/滤镜/错误回滚，无需真实视频。"""
+"""Optional Ken Burns planning, graphs, and rollback without real video."""
 from __future__ import annotations
 
 import json

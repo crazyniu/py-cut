@@ -1,4 +1,4 @@
-"""TUI 子进程运行器安全日志与结果页测试（无真实 ffmpeg/终端）。"""
+"""Offline TUI subprocess-log safety and result-page regression; no real media/terminal."""
 
 from __future__ import annotations
 

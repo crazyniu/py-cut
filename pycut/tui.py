@@ -1,8 +1,7 @@
-"""三个视频处理向导：Web/.env 配置目录，终端预览素材、确认任务、显示日志。"""
+"""Three processing wizards using Web/.env settings and CLI subprocesses."""
 from __future__ import annotations
 
 import curses
-import curses.textpad  # noqa: F401  必须显式导入：不会随 import curses 自动加载
 import os
 import sys
 from pathlib import Path
@@ -11,20 +10,18 @@ from . import cli, config
 from .core.scan import list_videos_recursive
 from .folder_picker import choose_directory
 
-# ---------------------------------------------------------------------------
-# 配色主题（Claude Code 风格：深底 + 琥珀强调）
-# ---------------------------------------------------------------------------
+
 _COLOR_DEFS: dict[str, tuple[str, int, int]] = {
-    "accent":    ("amber",     214,            -1),  # 强调 / 选中 / 标题
-    "dim":       ("gray",      244,            -1),  # 弱化 / 说明
-    "muted":     ("dimgray",   238,            -1),  # 更弱的占位 / 边框
-    "text":      ("white",     255,            -1),  # 正文
-    "good":      ("green",     114,            -1),  # 成功 / 勾选
-    "warn":      ("yellow",    221,            -1),  # 警告
-    "bad":       ("red",       203,            -1),  # 错误 / 危险
-    "info":      ("cyan",      81,             -1),  # 信息
-    "keyword":   ("purple",    141,            -1),  # 命令名 / 关键字
-    "value":     ("blue",      117,            -1),  # 参数值
+    "accent":    ("amber",     214,            -1),
+    "dim":       ("gray",      244,            -1),
+    "muted":     ("dimgray",   238,            -1),
+    "text":      ("white",     255,            -1),
+    "good":      ("green",     114,            -1),
+    "warn":      ("yellow",    221,            -1),
+    "bad":       ("red",       203,            -1),
+    "info":      ("cyan",      81,             -1),
+    "keyword":   ("purple",    141,            -1),
+    "value":     ("blue",      117,            -1),
 }
 
 _FALLBACK_8 = {
@@ -97,11 +94,9 @@ def _init_colors() -> None:
 
 
 def _detect_light_bg() -> bool:
-    """通过终端的 COLORFGBG 约定识别浅色背景；未知时使用默认配色。
+    """Read COLORFGBG; keep the default palette when the background is unknown.
 
-    curses.color_content 返回 0..1000 的颜色分量，不能靠读取黑色索引
-    判断终端背景，原有 >40000 的判定永远不会成立。
-    """
+    Curses palette entries do not identify the actual terminal background."""
     value = os.environ.get("COLORFGBG", "").split(";")
     try:
         return bool(value) and int(value[-1]) in (7, 15)
@@ -115,9 +110,6 @@ def _attr(name: str) -> int:
     return curses.color_pair(1 + list(_COLOR_DEFS).index(name))
 
 
-# ---------------------------------------------------------------------------
-# 功能菜单文案
-# ---------------------------------------------------------------------------
 FEATURES = [
     ("cover", "字幕擦除", "擦除画面中的字幕"),
     ("dedup", "去重",    "调整视频画面，降低相似度"),
@@ -131,9 +123,6 @@ FEATURE_HINTS = {
 }
 
 
-# ---------------------------------------------------------------------------
-# 渲染辅助
-# ---------------------------------------------------------------------------
 def _char_width(char: str) -> int:
     import unicodedata  # noqa: PLC0415
     if unicodedata.combining(char) or unicodedata.category(char) in ("Mn", "Me", "Cf"):
@@ -146,7 +135,7 @@ def _disp_width(s: str) -> int:
 
 
 def _clip(s: str, width: int, *, tail: bool = False) -> str:
-    """按终端显示列而不是 Python 字符数裁剪，保留宽字符完整性。"""
+    """Clip by terminal display columns without splitting wide characters."""
     if width <= 0:
         return ""
     chars = reversed(s) if tail else iter(s)
@@ -264,11 +253,8 @@ def _home_brand(stdscr) -> int:
     return _brand(stdscr) + 1
 
 
-# ---------------------------------------------------------------------------
-# 输入框（数字 / 简单文本，带默认值）
-# ---------------------------------------------------------------------------
 def _prompt_int(stdscr, y, x, w, title, default, lo, hi) -> int | None:
-    """可编辑整数输入，首个数字覆盖默认值；越界需改正而非悄悄钳制。"""
+    """Edit an integer; the first digit replaces the default and invalid values stay editable."""
     buf = str(default)
     untouched = True
     error = ""
@@ -351,7 +337,7 @@ def _prompt_text(stdscr, y, x, w, title, default="", *, validate=None) -> str | 
             stdscr.move(line_y + 1, 0)
             stdscr.clrtoeol()
         except curses.error:
-            # 窗口也可能恰好在绘制时发生尺寸变化。
+            # The terminal can resize between measurement and drawing.
             continue
         prompt = f"{title}："
         if x + _disp_width(prompt) + 4 >= w:
@@ -387,7 +373,6 @@ def _prompt_text(stdscr, y, x, w, title, default="", *, validate=None) -> str | 
         elif isinstance(k, int) and 32 <= k <= 126:
             buf += chr(k)
             error = ""
-
 
 
 def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
@@ -433,19 +418,13 @@ def _pick_dir(stdscr, title: str, start: Path | None = None) -> str | None:
     return str(folder)
 
 
-# ---------------------------------------------------------------------------
-# 确认页（汇报数量 + 开关 + 执行确认）
-# ---------------------------------------------------------------------------
 def _confirm(stdscr, lines: list[tuple[str, str]],
              toggles: list[tuple[str, str, bool]] | None = None,
              out_vals: list[bool] | None = None) -> bool:
-    """展示一段汇报 + 若干开关，返回是否确认执行。
+    """Return whether Enter confirmed the task.
 
-    lines: [(label, value, color?)] 展示项。
-    toggles: [(label, 说明, 初始bool)] 可切换开关（空格切换）。
-    out_vals: 传入一个可变 list，确认后回写每个开关的最终值（默认 [初始值]*N，
-      用户切换后与之同步）；不传则结果丢弃。
-    """
+    lines contains (label, value) pairs. toggles contains (label, description, initial)
+    triples; out_vals receives their current states, including edits before returning."""
     toggle_vals = [t[2] for t in toggles] if toggles else []
     if out_vals is not None:
         out_vals[:] = toggle_vals
@@ -545,9 +524,6 @@ def _confirm(stdscr, lines: list[tuple[str, str]],
                 out_vals[:] = toggle_vals
 
 
-# ---------------------------------------------------------------------------
-# 多选列表（混剪话术视频）
-# ---------------------------------------------------------------------------
 def _reference_label(source: Path) -> str:
     try:
         return str(source.resolve().relative_to(config.REFERENCE_DIR.resolve()))
@@ -558,7 +534,7 @@ def _reference_label(source: Path) -> str:
 def _multi_select(stdscr, title: str, files: list[Path],
                   initial: tuple[list[Path], dict[str, int]] | None = None
                   ) -> tuple[list[Path], dict[str, int]] | None:
-    """多选话术，下一步统一设置数量；返回时保留上次的共同数量。"""
+    """Select reference videos while retaining selections and the common variant count."""
     if not files:
         return None
     previous_files, previous_counts = initial if initial is not None else ([], {})
@@ -626,9 +602,8 @@ def _multi_select(stdscr, title: str, files: list[Path],
             return chosen, {str(f): fission[str(f)] for f in chosen}
 
 
-
 def _set_fission_counts(stdscr, chosen: list[Path], counts: dict[str, int]) -> bool:
-    """只输入一次，每个已选话术生成相同数量；取消不修改已保存值。"""
+    """Apply one count to every selected reference; cancellation preserves saved counts."""
     if not chosen:
         return False
     _, w = stdscr.getmaxyx()
@@ -647,9 +622,6 @@ def _set_fission_counts(stdscr, chosen: list[Path], counts: dict[str, int]) -> b
     return True
 
 
-# ---------------------------------------------------------------------------
-# 主循环
-# ---------------------------------------------------------------------------
 def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
     """Up/down moves, Right/Enter opens, Back never exits the home screen."""
     try:
@@ -719,12 +691,10 @@ def _loop(stdscr) -> tuple[str, list[list[str]]] | None:
         _loop._feat_sel = feat_sel
 
 
-
 def _run_feature_wizard(stdscr, key: str, w: int) -> list[list[str]] | str | None:
-    """执行某个功能的引导式向导，返回 argv 列表（多支成片 = 多个 argv）。
+    """Reload settings and return CLI argument lists for the selected wizard.
 
-    返回特殊值 "__BACK__" 表示回到主菜单；None 表示取消。
-    """
+    None cancels; the legacy __BACK__ sentinel returns to the home menu."""
     from . import settings, web_config
     config.refresh()
     keys = ("PYCUT_CLIP_DIR",) if key in ("cover", "dedup") else ("PYCUT_REFERENCE_DIR", "PYCUT_CLIP_DIR", "PYCUT_OUTPUT_DIR", "PYCUT_INTRO_DIR")
@@ -745,9 +715,6 @@ def _run_feature_wizard(stdscr, key: str, w: int) -> list[list[str]] | str | Non
     return None
 
 
-# ---------------------------------------------------------------------------
-# 各功能向导
-# ---------------------------------------------------------------------------
 def _library_summary(paths: list[Path]) -> str:
     return "；".join(str(p) for p in paths) or "未配置"
 
@@ -783,17 +750,6 @@ def _wizard_dedup(stdscr, w: int) -> list[list[str]] | None:
                         ("输出", "各输入目录同级的去重目录")]):
         return [["dedup", "--src-dir", settings.encoded_directories(paths)]]
     return None
-
-
-def _count_sticker_images(folder: Path) -> int:
-    """Count available stickers for the existing montage overlay."""
-    if not folder.is_dir():
-        return 0
-    try:
-        return sum(p.is_file() and p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")
-                   for p in folder.rglob("*"))
-    except OSError:
-        return 0
 
 
 def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
@@ -886,7 +842,7 @@ def _flash(stdscr, msg: str, color: str = "bad") -> None:
 
 
 def run() -> int:
-    """终端交互入口：每次处理后留在主菜单，错误码不再被误报成功。"""
+    """Run interactive tasks, return to the menu, and retain nonzero task exit codes."""
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         cli.build_parser().print_help()
         return 0
@@ -912,12 +868,11 @@ def run() -> int:
         print(f"[配置页面] {url}")
         return curses.wrapper(_app)
     except Exception as e:  # noqa: BLE001
-        # curses.wrapper 负责在任何异常下恢复终端，错误必须有非零退出码。
+        # curses.wrapper restores terminal state; report application failures with a nonzero exit code.
         print(f"[TUI 运行失败] {type(e).__name__}: {e}", file=sys.stderr)
         return 2
     finally:
         web_config.stop()
 
 
-# _loop 的选中记忆（静态属性）
 _loop._feat_sel = 0

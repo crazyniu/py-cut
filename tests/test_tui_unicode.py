@@ -1,7 +1,4 @@
-"""TUI Unicode 输入框的文件系统与 fake curses 回归测试。
-
-不访问真实素材，不依赖 FFmpeg、LLM 或交互终端。
-"""
+"""Filesystem/fake-curses Unicode input regression without user media, FFmpeg, LLM, or terminal."""
 
 from __future__ import annotations
 
@@ -84,7 +81,7 @@ class UnicodeEditorTests(unittest.TestCase):
         self.assertEqual(result, phrase)
 
     def test_backspace_deletes_decomposed_combining_character(self):
-        # 分解式 e + 组合重音应只占一个可见字素。
+        # Decomposed e plus a combining accent is one visible grapheme.
         result = tui._prompt_text(Screen(["e", "\u0301", 127, "婚", 10]),
                                   4, 2, 100, "关键词")
         self.assertEqual(result, "婚")
@@ -102,7 +99,7 @@ class UnicodeEditorTests(unittest.TestCase):
         self.assertTrue(any("关键词" in s for s in screen.printed))
 
     def test_resize_while_editing_keeps_input_and_cannot_move_outside_screen(self):
-        # 初始输入框在第 20 行，收缩到高度 15 必须动态移动。
+        # Shrinking the screen must move an input row that is now out of bounds.
         screen = Screen([curses.KEY_RESIZE, "婚", ord("1"), 10],
                         size=(24, 100), sizes=[(15, 60)])
         result = tui._prompt_text(screen, 20, 2, 100, "中文搜索")

@@ -1,4 +1,4 @@
-"""仅验证本次视频处理性能修复的行为边界（DEV-462）。"""
+"""Probe reuse, bounded segment encoding, and selective frame retrieval regression."""
 from __future__ import annotations
 
 import subprocess
@@ -23,7 +23,7 @@ def test_probe_library_uses_single_scan_and_cached_statistics(tmp_path):
         return [sample]
 
     with mock.patch.object(montage_clips, "scan_library", side_effect=scan) as scanner, \
-         mock.patch.object(montage_cmd, "_is_portrait", side_effect=AssertionError("duplicate probe")), \
+         mock.patch("subprocess.run", side_effect=AssertionError("duplicate probe")), \
          mock.patch.object(montage_cmd, "log") as logger:
         assert montage_cmd._probe_library(tmp_path, False, 0) == 0
     scanner.assert_called_once()

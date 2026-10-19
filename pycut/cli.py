@@ -1,9 +1,7 @@
-"""pycut 命令行入口（CLI 路由）。
+"""CLI routing for the public cover, dedup, and montage commands.
 
-TUI 友好设计：所有子命令通过 COMMANDS 注册表集中管理，每个命令模块暴露
-register(subparsers) 与 run(args)。以后接 TUI 时，只需复用 COMMANDS 与 run，
-无需改动各命令实现。
-"""
+COMMANDS maps names to modules exposing register(subparsers) and run(args).
+The TUI launches these same commands through tui_runner."""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +11,7 @@ from . import __version__
 from .commands import cover_cmd, dedup_cmd, montage_cmd
 from .core.utils import log
 
-# 命令注册表：名称 -> 命令模块（含 register / run）。新增功能在此登记即可。
+# Public command registry: each module provides register and run.
 COMMANDS = {
     "cover": cover_cmd,
     "dedup": dedup_cmd,
@@ -34,14 +32,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def list_commands() -> list[str]:
-    """暴露给 TUI / 帮助，列出可用命令。"""
+    """Return registered public command names in menu order."""
     return list(COMMANDS.keys())
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
 
-    # TUI 启动器：显式 `tui` 子命令，或无子命令且为交互终端时进入
     if argv and argv[0] == "tui":
         from . import tui  # noqa: PLC0415
         return tui.run()

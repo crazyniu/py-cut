@@ -1,4 +1,4 @@
-# ---- Python 通用 ----
+# Python artifacts
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -11,26 +11,24 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
-# ---- 本机 / 系统 ----
+# Local/system files
 .DS_Store
-.workbuddy/            # 项目记忆（含个人/会话信息，不入库）
 
-# ---- 密钥（用户自行配置，绝不入库；模板见 .env.example）----
+# Credentials are local; only .env.example is committed
 .env
 .env.local
 *.key
 !.env.example
 
-# ---- 运行副产物（切片 / 遮盖过程文件，通常落在桌面而非仓库）----
+# Processing intermediates
 *.tmp.mp4
 *.tmp_cover.mp4
 *.covered.json
 .workbuddy
-.workbuddy/**
 
-# 本地测试输入、脚本和渲染产物
+# Local test inputs, scripts, and rendered output
 /work/
 /materials/
 
-# .env 默认的视频成片、清单与报告（个人运行数据）
+# Private default output, manifests, and reports
 /output/

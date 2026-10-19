@@ -4,8 +4,7 @@ version = "0.1.0"
 description = "短视频处理工具箱：字幕擦除 / 去重 / 混剪"
 readme = "README.md"
 requires-python = ">=3.13"
-# 依赖由「自带 cv2 的托管解释器」提供（cv2 / numpy / ffmpeg-full）。
-# 核心视频依赖依旧由本机托管解释器/requirements.txt 提供；TUI 引入成熟的开源选择器。
+# Launchers/requirements.txt supply video dependencies; package metadata adds the picker.
 dependencies = [
     "textual-fspicker==1.0.1",
     "windows-curses>=2.4; sys_platform == 'win32'",

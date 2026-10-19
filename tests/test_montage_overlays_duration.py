@@ -1,4 +1,4 @@
-"""混剪现有功能的回归：参考时长、连续画中画、指定贴纸与实际 FFmpeg 像素。"""
+"""Reference duration, continuous PIP, explicit stickers, and real FFmpeg pixel checks."""
 from __future__ import annotations
 
 from contextlib import ExitStack

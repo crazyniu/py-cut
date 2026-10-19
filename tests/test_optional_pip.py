@@ -1,4 +1,4 @@
-"""画中画可选：未配置 PYCUT_PIP_DIR 不扫描/不渲染；勾选才校验并复用 --no-pip。"""
+"""Optional PIP: skip absent/disabled roots; validate only when selected."""
 import os
 from pathlib import Path
 from unittest import mock
@@ -13,7 +13,7 @@ def _selection(source):
 
 
 def _wizard_env(background, pip, source, confirm_side_effect=None):
-    """构造 montage 向导环境，返回 (jobs, flash, confirm_mock, collect)。"""
+    """Build montage wizard mocks and return (jobs, flash, confirm_mock, collect)."""
     with mock.patch.object(config, 'CLIP_DIRS', [background]), \
          mock.patch.object(config, 'PIP_DIRS', [pip] if settings.directories(os.environ.get('PYCUT_PIP_DIR', '')) else []), \
          mock.patch.object(tui, 'list_videos_recursive', return_value=[source]), \
@@ -46,7 +46,7 @@ def test_montage_without_pip_dir_passes_no_pip_and_does_not_scan(tmp_path):
     args = cli.build_parser().parse_args(jobs[0])
     assert args.no_pip is True
     assert not args.dedup_dir
-    # 未配置 → 复选框默认关；且从未扫描画中画目录。
+
     assert confirm.call_args.args[2][0][2] is False
     assert pip not in scanned
     flash.assert_not_called()
@@ -145,12 +145,11 @@ def test_montage_back_keeps_pip_choice_and_fission_count(tmp_path, enabled):
 
 
 def test_settings_pip_dir_is_optional_but_validated_when_set(tmp_path):
-    # 留空不再报「尚未配置」。
     assert settings.problems({'PYCUT_REFERENCE_DIR': str(tmp_path),
                               'PYCUT_CLIP_DIR': str(tmp_path),
                               'PYCUT_OUTPUT_DIR': str(tmp_path),
                               'PYCUT_PIP_DIR': ''}) == []
-    # 配置了不存在的目录仍报错。
+
     missing = tmp_path / '不存在'
     assert '不存在或无法访问' in '；'.join(
         settings.problems({'PYCUT_PIP_DIR': str(missing)}, require_all=False))

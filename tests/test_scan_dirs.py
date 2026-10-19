@@ -1,7 +1,4 @@
-"""目录浏览回归：外接盘、系统目录、失效链接及键盘导航。
-
-不访问真实 /Volumes，也不依赖 FFmpeg、终端或用户素材。
-"""
+"""Compatibility directory navigation with temporary mounts/links and fake curses."""
 from __future__ import annotations
 
 import curses
@@ -15,7 +12,7 @@ from pycut.core import scan
 
 
 class _Screen:
-    """仅实现目录选择器使用的 curses 接口。"""
+    """Minimal curses screen protocol for directory-picker tests."""
 
     def __init__(self, keys):
         self._keys = iter(keys)

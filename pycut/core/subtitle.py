@@ -1,4 +1,7 @@
-"""检测字幕高度，在全视频宽度的矩形内覆盖单层毛玻璃，保留音轨并原子替换。"""
+"""Locate subtitles and apply one full-width rectangular Gaussian blur.
+
+Preserve audio, write through a temporary file, and persist completion only after
+verification. Uncertain detection requires review rather than a no-subtitle marker."""
 from __future__ import annotations
 
 import json
@@ -17,21 +20,19 @@ from .runtime import STOP
 from .utils import log
 from .frame_sampling import FrameExtractionError, grab_frames
 
-SAMPLES = 5             # 每片段抽帧检测数（越多越能覆盖所有文字行）
-DETECT_WIDTH = 480      # 送检帧宽（足够 LLM 定位，省 token）
-PAD_Y = 0.12  # 按字幕高度增加上下余量
-DETECT_TIMEOUT = 30.0   # 每轮检测共用等待预算，不按采样帧反复等待90秒
+SAMPLES = 5
+DETECT_WIDTH = 480
+PAD_Y = 0.12
+DETECT_TIMEOUT = 30.0   # One shared detection deadline per round, not a separate long wait per frame.
 
 
 class SubtitleReviewNeeded(RuntimeError):
-    """识别不确定，保留产物等待复查，不当作编码失败。"""
+    """Detection is uncertain; retain review status rather than reporting an encoding failure."""
 
 
-WORKERS = 4             # 并发片段数（每片段 = 定位/复检各1次多图LLM + 1次原生模糊）
+WORKERS = 4
 
-# 切片桶在运行时可能被 slice/dedup 的 --src-dir/--out-dir 覆盖，故 collect_clips
-# 直接读 config.OUT_FACE/OUT_NOFACE（动态），不再用 import 时的快照列表。
-
+# Read current config buckets at call time; internal callers may override paths.
 DETECT_PROMPT = (
     "这些是竖屏短视频的采样帧。逐张检测画面中人为叠加的文字层"
     "(包括大号艺术标题、对白字幕、警示条、免责声明行等后期叠加的文字, "
@@ -42,7 +43,7 @@ DETECT_PROMPT = (
 
 
 def _grab_frame(clip: Path, t: float, jp: Path, width: int = DETECT_WIDTH, *, timeout: float = 60) -> bool:
-    """ffmpeg 单帧抽图（检测用途，不要求帧级精度，输入侧 seek 足够）。"""
+    """Extract a detection frame using input seek; detection does not require frame accuracy."""
     r = subprocess.run(
         [FFMPEG, "-y", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(clip),
          "-frames:v", "1", "-vf", f"scale={width}:-2", "-q:v", "4", str(jp)],
@@ -52,15 +53,12 @@ def _grab_frame(clip: Path, t: float, jp: Path, width: int = DETECT_WIDTH, *, ti
 
 def detect_region(llm: LLMClient, clip: Path,
                   samples: int = SAMPLES) -> tuple[int, int, int, int, list[str]] | None:
-    """返回字幕区域或明确的“无字幕”(None)；探测失败抛 RuntimeError。
+    """Return a subtitle rectangle or confirmed absence (None); raise on uncertain detection.
 
-    检测不到文字与抽帧/LLM 全部失败不是同一个状态。失败时禁止写入
-    “无字幕”标记，否则往后每次重跑都会直接跳过可能存在的字幕。
-    """
+    Extraction/model failures must not persist a no-subtitle marker and suppress retries."""
     if samples < 1:
         raise RuntimeError("至少需要抽取一帧进行字幕检测")
-    # 编码与检测共用已有 ffprobe 元数据缓存，避免每轮 3 次探测；
-    # 只在文件尚未落盘（例如注入假帧的单测）或探测异常时兼容旧封装。
+    # Reuse cached metadata; fall back to scalar probes for unavailable/invalid metadata.
     from .montage_clips import _probe_one
     info = _probe_one(clip) if Path(clip).is_file() else None
     if info is not None:
@@ -142,8 +140,7 @@ def detect_region(llm: LLMClient, clip: Path,
             uncertain_positive += 1
 
     if not boxes:
-        # 只有过半采样点得到明确否定且不存在“检测到字幕但框无效”
-        # 的冲突回复，才能持久标记无字幕。其余情形保留重试机会。
+        # Persist absence only after a majority of explicit negatives without invalid-box conflicts.
         if clean_replies >= (samples // 2 + 1) and uncertain_positive == 0:
             return None
         raise SubtitleReviewNeeded(
@@ -155,12 +152,12 @@ def detect_region(llm: LLMClient, clip: Path,
     x1, y1 = min(b[0] for b in boxes), min(b[1] for b in boxes)
     x2, y2 = max(b[2] for b in boxes), max(b[3] for b in boxes)
 
-    # 高度跟随字幕边界，宽度固定覆盖整个视频。
+    # Cover the full video width while following detected subtitle height.
     pad = PAD_Y * (y2 - y1)
     y1 = max(0.0, y1 - pad)
     y2 = min(1.0, y2 + pad)
 
-    # 像素化 + 偶数对齐（h264 要求偶数尺寸）
+    # Convert normalized coordinates to pixels and align dimensions for H.264.
     X, Y = 0, int(y1 * H)
     BW, BH = W, int((y2 - y1) * H)
     X -= X % 2
@@ -175,7 +172,7 @@ def detect_region(llm: LLMClient, clip: Path,
 
 
 def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
-    """FFmpeg 内完成全宽矩形单层高斯模糊，避免整帧往返 Python。"""
+    """Apply a single full-width Gaussian blur inside FFmpeg without round-tripping full frames."""
     import os
     import time
     from .montage_clips import _probe_one
@@ -258,7 +255,7 @@ def verified_clip(clip: Path) -> bool:
 
 def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
                  dry_run: bool = False, samples: int = SAMPLES) -> str:
-    """处理单个切片，返回状态: covered / nosub / skip / review / fail / dryrun。"""
+    """Return covered, nosub, skip, review, fail, or dryrun for one clip."""
     mk = _marker(clip)
     if verified_clip(clip) and not force:
         return "skip"
@@ -275,7 +272,7 @@ def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
         return "fail"
     if region is None:
         if not llm.enabled:
-            return "review"  # LLM 不可用时不能盲盖，也不阻断已有切片
+            return "review"  # Unavailable vision requires review; never apply an unlocated blur.
         if dry_run:
             log(f"  [无字幕] {clip.name}")
             return "nosub"
@@ -310,7 +307,7 @@ def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
 
 
 def collect_clips(paths: list[Path] | None = None) -> list[Path]:
-    """收集待遮盖切片：指定路径优先，否则遍历两个切片桶。"""
+    """Collect explicit paths first; otherwise scan the configured face/no-face buckets."""
     if paths:
         out = []
         for p in paths:

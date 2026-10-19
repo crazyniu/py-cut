@@ -1,4 +1,4 @@
-"""段级效果只编码一次，标准段拼接不再次损失画质。"""
+"""Fuse segment effects into one encode and stream-copy normalized concat."""
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,7 +20,7 @@ def test_effect_order_double_seek_and_frame_budget(tmp_path):
     graph = cmd[cmd.index('-filter_complex') + 1]
     old_graph = old[old.index('-filter_complex') + 1]
     assert graph.index('setpts=PTS/1.15000') < graph.index('hflip')
-    assert 'tpad=' not in graph  # 源视频提前结束时不克隆末帧
+    assert 'tpad=' not in graph
     assert graph.index('geq=') < graph.index('fade=')
     assert old_graph.replace('[0:v]', '[segment]') in graph
     assert 'fade=t=in:st=0.347826:d=0.200000' in graph
@@ -46,7 +46,7 @@ def test_normalized_concat_is_video_copy(tmp_path):
     assert cmd[cmd.index('-c:v') + 1] == 'copy'
     assert '-vf' not in cmd and '-r' not in cmd
     assert cmd[cmd.index('-map') + 1] == '0:v:0'
-    assert cmd[-1] != str(tmp_path / 'out.mp4')  # 仍先写原子发布临时文件。
+    assert cmd[-1] != str(tmp_path / 'out.mp4')
 
 
 def test_fractional_remainder_does_not_add_a_zero_budget_shot(tmp_path):

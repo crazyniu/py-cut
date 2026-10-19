@@ -1,4 +1,4 @@
-"""前贴最后拼到完整正文之前；只适配前贴，正文视频流始终复制。"""
+"""Prepend an optional intro after the body is complete; copy the body video stream."""
 from __future__ import annotations
 
 import json
@@ -17,7 +17,7 @@ from .utils import log, run_cmd
 
 
 def _video_signature(path: Path) -> dict | None:
-    """读流规格、帧数和音轨；H.264 的 SPS/PPS 不要求字节相同。"""
+    """Read video format, frame count, and audio presence; do not compare SPS/PPS bytes."""
     cmd = [
         config.FFPROBE, "-v", "error", "-show_entries",
         "stream=codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,"
@@ -41,7 +41,7 @@ def _video_signature(path: Path) -> dict | None:
 
 
 def _compatible(left: dict, right: dict) -> bool:
-    """concat 自动转 Annex B 携带各段参数集，profile/level 差异无需重编码。"""
+    """Allow profile/level differences handled by concat Annex B parameter sets."""
     fields = ("codec_name", "width", "height", "pix_fmt", "sample_aspect_ratio",
               "r_frame_rate", "time_base")
     return (left.get("codec_name") == "h264"
@@ -49,7 +49,7 @@ def _compatible(left: dict, right: dict) -> bool:
 
 
 def _adapt_intro(intro: Path, body_info: dict, output: Path, crf: str) -> Path:
-    """仅重封装时间基或适配前贴，绝不把完成的正文传入视频编码器。"""
+    """Remux or adapt only the intro; never re-encode the completed body video."""
     info = _video_signature(intro)
     if info is None:
         raise RuntimeError("无法读取已处理前贴的流参数")
@@ -87,7 +87,7 @@ def _adapt_intro(intro: Path, body_info: dict, output: Path, crf: str) -> Path:
 def _video_copy_cmd(concat_file: Path, body: Path, intro_source: Path,
                     has_intro_audio: bool, duration: float,
                     keep_audio: bool, output: Path, *, body_duration: float) -> list[str]:
-    """视频 stream-copy；音轨沿既有来源独立拼接，短原声不裁短画面。"""
+    """Copy video and join source audio; short audio must not shorten the picture."""
     cmd = [config.FFMPEG, "-y", "-loglevel", "error", "-nostdin",
            "-f", "concat", "-safe", "0", "-auto_convert", "1", "-i", str(concat_file)]
     if keep_audio:
@@ -125,7 +125,7 @@ def prepend(video: Path, folder: Path, *, seed: int, canvas: tuple[int, int],
     body_info = _video_signature(video)
     if body_info is None or (keep_audio and not body_info["has_audio"]):
         raise RuntimeError("完整正文的视频流或原声音轨不可用")
-    # 完整读取前贴；输出帧数由已有 CFR 预算量化，不再 floor 丢掉边界末帧。
+    # Read the complete intro; use CFR frame quantization without flooring away its final frame.
     segment = {"item": item, "offset": 0.0, "take": item.duration,
                "dedup_seed": derive_seed(seed, "intro", source.name)}
     if stickers:

@@ -1,18 +1,10 @@
-"""dedup 命令：视频去重（过平台查重）。
+"""Public dedup command: seeded effects, encoding, fingerprint checks, and optional reports.
 
-对已有切片/视频做分层扰动（容器元数据 → 几何 → 像素 → 时间 → 结构 → 音频），
-降低被平台判为「重复内容」的概率。需求与技术方案见 docs/DEDUP.md。
-
-流水线：
-  参数随机化(seed) → 构造滤镜链 → ffmpeg 重编码 → 自检(pHash 距离 + PSNR) → JSON 报告
-
-自检不通过（改动不足 / 画质损失过大）时文件仍保留，只是报告里 ok=False，
-由使用者决定是否采用——去重没有「绝对通过」，只能量化「改了多少、损失多少」。
-"""
+Report measurable change and verification status; platform acceptance is not
+guaranteed. Core processing owns output retention and in-place safety."""
 from __future__ import annotations
 
 import argparse
-import os
 import json
 import sys
 import time
@@ -27,7 +19,6 @@ from ..core.dedup_profiles import (ExplicitBoolean, ExplicitValue,
                                    ProfileError, apply_account_profile)
 from ..core.ffmpeg import self_check
 from ..core.runtime import STOP, install_signal_handlers, reset_stop
-from ..core.subtitle import collect_clips
 from ..core.utils import fmt_dur, log
 
 
@@ -114,7 +105,7 @@ def _pick_srcs(args: argparse.Namespace) -> list[Path]:
             sys.exit(f"[错误] 仅支持 MP4 视频文件: {invalid[0]}")
         return srcs
     if args.src_dir or config.CLIP_DIRS:
-        # 递归扫描指定目录下所有视频（不限切片桶结构，也不要求 --all）
+        # Scan configured roots recursively; legacy bucket layout and --all are not required.
         from ..core.scan import list_videos_recursive  # noqa: PLC0415
         srcs = [p for p in list_videos_recursive(args.src_dir or config.CLIP_DIRS, max_depth=None, raise_on_error=True)
                 if p.suffix.lower() == ".mp4"]
@@ -128,8 +119,8 @@ def _pick_srcs(args: argparse.Namespace) -> list[Path]:
 
 
 def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
-    """只自检模式：与已有去重产物比对，不产出。"""
-    from ..core.fingerprint import compare  # noqa: PLC0415 延迟导入，未用到不加载 cv2
+    """Compare sources with existing dedup outputs without producing new media."""
+    from ..core.fingerprint import compare  # noqa: PLC0415 - defer cv2 loading until verification is used.
 
     from ..core.quality_vmaf import VMAFError, assess  # noqa: PLC0415
 

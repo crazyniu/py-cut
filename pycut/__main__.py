@@ -1,4 +1,4 @@
-"""python -m pycut 入口。"""
+"""Entry point for python -m pycut."""
 import sys
 
 from pycut.cli import main

@@ -1,23 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-verify.py —— 切片流水线独立质检脚本（位于 tools/，属 pycut 的 QA 工具）
+"""Independent QA for the internal legacy slicing pipeline.
 
-设计原则：不信任 slicer 自己的产物清单作为"真值"，一切标定都从源视频重新推导。
-所有检查失败都以清晰 FAIL 输出，不以异常堆栈崩溃退出。
-
-用法：
-    python3 tools/verify.py
-    python3 tools/verify.py --video "财源滚滚来__.mp4" --samples 5
-    python3 tools/verify.py --manifest ~/Desktop/切片_清单/切片清单_xxx.csv
-"""
+Re-derive checks from source media instead of trusting the generated manifest as
+ground truth. Report failures clearly and return nonzero rather than showing a traceback.
+Use --video and --manifest to select authorized local test inputs."""
 
 from __future__ import annotations
 
 import os
 import sys
 
-# 让本脚本作为独立文件运行时也能 import pycut 包（取项目根目录）
+# Allow standalone execution to import the project package.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pycut.config import (  # noqa: E402
     FFMPEG, FFPROBE, SRC_DIR, OUT_FACE, OUT_NOFACE, OUT_MANIFEST as MANIFEST_DIR,
@@ -34,16 +28,16 @@ import subprocess
 import tempfile
 import unicodedata
 
-# 判定阈值
-MAE_PASS = 10.0          # 帧精度 MAE 阈值（静止帧实测 ~1-2，运动帧可达 ~8）
-DUR_TOL = 0.15           # 时长允许误差（秒）
-MIN_CLIP_BYTES = 1024    # 小于 1KB 视为坏文件
-COARSE_SEEK_BACK = 2.0   # 输入侧粗 seek 回退秒数（双 seek）
-COMPARE_WIDTH = 320      # MAE 比对时的统一宽度
-MIN_CLIP_DUR = 2.0       # 切片最短时长(秒)，低于此值视为不合格（满足"大于两秒"）
-MAX_CLIP_DUR = 15.0      # 用户确认的镜头切片上限
+# QA thresholds; keep the calibrated values unchanged.
+MAE_PASS = 10.0
+DUR_TOL = 0.15
+MIN_CLIP_BYTES = 1024
+COARSE_SEEK_BACK = 2.0   # Coarse input-seek backoff in seconds before accurate output seek.
+COMPARE_WIDTH = 320
+MIN_CLIP_DUR = 2.0
+MAX_CLIP_DUR = 15.0
 
-# 清单列名候选（不同版本 slicer 可能有细微差异）
+# Manifest column aliases support legacy schemas.
 COL_VIDEO = ["video", "video_name", "source", "source_video", "src", "文件名", "视频"]
 COL_INDEX = ["seg_index", "index", "idx", "seg", "id", "片段序号", "序号"]
 COL_START = ["start", "start_s", "start_sec", "begin", "起点", "开始"]
@@ -53,13 +47,11 @@ COL_DECIDE = ["decided_by", "decision_by", "decision", "策略", "判定方式"]
 DECIDE_STRICT = "haar_strict"
 DECIDE_CLEAN = "haar_clean"
 DECIDE_FALLBACK = "haar_fallback"
-DECIDE_MIN_RATIO = 0.85  # haar_strict + haar_clean 占比下限
+DECIDE_MIN_RATIO = 0.85  # Minimum strict/clean Haar decision fraction.
 
-
-# ---------------------------------------------------------------- 小工具
 
 class Check:
-    """单条检查结果。"""
+    """One named check result with detail and fatality."""
 
     def __init__(self, name: str, ok: bool, detail: str = "", fatal: bool = False):
         self.name = name
@@ -73,7 +65,7 @@ def _err(msg: str):
 
 
 def pick_col(fieldnames, candidates):
-    """按候选列表挑选实际存在的列名（大小写不敏感）。"""
+    """Choose an existing manifest column by case-insensitive candidate order."""
     if not fieldnames:
         return None
     lower = {f.strip().lower(): f for f in fieldnames}
@@ -84,7 +76,7 @@ def pick_col(fieldnames, candidates):
 
 
 def run(cmd, timeout=120):
-    """执行命令，返回 (rc, stdout, stderr)；异常不抛出。"""
+    """Return (returncode, stdout, stderr); convert timeout/process errors into failure results."""
     try:
         p = subprocess.run(cmd, capture_output=True, timeout=timeout)
         return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
@@ -95,7 +87,7 @@ def run(cmd, timeout=120):
 
 
 def probe(path):
-    """ffprobe 取流信息。失败返回 None。"""
+    """Return stream metadata from FFprobe, or None on failure."""
     rc, out, _ = run([
         FFPROBE, "-v", "error",
         "-show_entries", "format=duration",
@@ -119,10 +111,8 @@ def stream_info(info, codec_type):
     return None
 
 
-# ---------------------------------------------------------------- 自动发现
-
 def find_source_videos():
-    """列出源目录下的视频文件（递归一层）。"""
+    """List source videos at the root and one directory level below it."""
     if not os.path.isdir(SRC_DIR):
         return []
     out = []
@@ -143,7 +133,7 @@ def has_output(stem):
 
 
 def detect_source_video():
-    """挑选"有输出目录"且输出目录最近被修改的源视频。"""
+    """Choose the source whose existing output directory was modified most recently."""
     candidates = []
     for p in find_source_videos():
         stem = os.path.splitext(os.path.basename(p))[0]
@@ -157,7 +147,7 @@ def detect_source_video():
 
 
 def detect_manifest():
-    """挑选清单目录下最新的清单 CSV（切片清单_*.csv）。"""
+    """Choose the newest slicing-manifest CSV in the configured manifest directory."""
     if not os.path.isdir(MANIFEST_DIR):
         return None
     found = []
@@ -171,7 +161,7 @@ def detect_manifest():
 
 
 def resolve_video_arg(spec):
-    """把 --video 参数解析成绝对路径。"""
+    """Resolve --video to an absolute source path."""
     if not spec:
         return detect_source_video()
     if os.path.sep in spec or (os.path.altsep and os.path.altsep in spec):
@@ -182,10 +172,8 @@ def resolve_video_arg(spec):
     return p
 
 
-# ---------------------------------------------------------------- 清单读取
-
 def load_manifest(path):
-    """读取清单，返回 (rows, fieldnames, encoding_report)。失败时返回 (None, None, reason)。"""
+    """Return (rows, fieldnames, encoding_report), or (None, None, reason) on failure."""
     try:
         with open(path, "rb") as f:
             raw = f.read()
@@ -218,8 +206,6 @@ def load_manifest(path):
     return rows, reader.fieldnames or [], enc
 
 
-# ---------------------------------------------------------------- 帧提取与比对
-
 def extract_first_frame(src, dst):
     rc, _, err = run([
         FFMPEG, "-y", "-v", "error", "-i", src,
@@ -229,7 +215,7 @@ def extract_first_frame(src, dst):
 
 
 def extract_source_frame(src, t, dst):
-    """双 seek（输入侧粗 seek + 输出侧精 seek）抓取源视频 t 秒处的帧。"""
+    """Extract at source time t using coarse input seek plus accurate output seek."""
     coarse = max(0.0, t - COARSE_SEEK_BACK)
     fine = t - coarse
     rc, _, err = run([
@@ -242,8 +228,9 @@ def extract_source_frame(src, t, dst):
 
 
 def frame_mae(a_path, b_path, mask_rows=None):
-    """返回 (mae, 备注)。失败返回 (None, 原因)。
-    mask_rows=(r1,r2)：归一化行区间，比对时排除该行带（字幕遮盖区）。"""
+    """Return (MAE, note), or (None, reason) on failure.
+
+    mask_rows is a normalized row interval excluded from comparison for covered subtitles."""
     try:
         import cv2
         import numpy as np
@@ -287,10 +274,8 @@ def frame_mae(a_path, b_path, mask_rows=None):
     return mae, f"{na.shape[1]}x{na.shape[0]} 比对窗口{note_ext}"
 
 
-# ---------------------------------------------------------------- 抽样
-
 def spread_sample(items, n):
-    """在列表上做跨越全程的均匀抽样（含首尾），非只取前 n 个。"""
+    """Sample across the full sequence, including endpoints when n permits."""
     m = len(items)
     if not items or n <= 0:
         return []
@@ -302,7 +287,7 @@ def spread_sample(items, n):
 
 
 def list_clips(stem):
-    """返回 [(seg_index, abs_path, bucket)]。"""
+    """Return (segment_index, absolute_path, bucket) tuples."""
     clips = []
     for bucket, base in (("有人脸", OUT_FACE), ("无人脸", OUT_NOFACE)):
         d = base
@@ -320,14 +305,12 @@ def list_clips(stem):
 
 
 def index_clips(clips):
-    """seg_index -> path（重复索引只保留第一个）。"""
+    """Map actual segment indices to paths, keeping the first duplicate index."""
     out = {}
     for seg, path, bucket in clips:
         out.setdefault(seg, (path, bucket))
     return out
 
-
-# ---------------------------------------------------------------- 主检查
 
 def main():
     global SRC_DIR, OUT_FACE, OUT_NOFACE, MANIFEST_DIR
@@ -669,7 +652,7 @@ def main():
 
 
 def report(checks, extra=None):
-    """打印结果表并给出总结；返回退出码。"""
+    """Print the check table/summary and return an exit code."""
     print()
     print("=" * 96)
     print(f"{'检查项':<26}{'结果':<8}详情")
@@ -708,6 +691,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         _err("已中断")
         sys.exit(130)
-    except Exception as e:  # 兜底：绝不给用户看堆栈
+    except Exception as e:  # Convert unexpected failures into a clear nonzero report instead of a traceback.
         _err(f"未预期的错误: {type(e).__name__}: {e}")
         sys.exit(3)

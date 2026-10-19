@@ -1,4 +1,4 @@
-"""回归：切片不得丢掉结尾画面，也不能把 FFmpeg 失败误报成无切点。"""
+"""Preserve complete segment tails and distinguish FFmpeg failure from no scene cuts."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,7 +26,7 @@ class SceneSafetyTests(unittest.TestCase):
         self.assertEqual(scene.build_segments([], 1.9, 2, 15), [])
 
     def test_short_trailing_segment_is_merged_without_losing_end(self):
-        # 过去尾段 [3.0, 3.5] 被“合并”成 [0, 3.0]，导致丢掉末尾 0.5s。
+        # Merging [3.0, 3.5] must retain 3.5, not drop the final half-second.
         self.assertEqual(scene.build_segments([3.0], 3.5, 2.0, 60.0),
                          [(0.0, 3.5)])
         self.assertEqual(scene.build_segments([2.0, 4.0], 4.5, 2.0, 60.0),

@@ -1,8 +1,6 @@
-"""ffmpeg / ffprobe 封装：视频探测、启动自检、probe_scalar 单字段查询。
+"""FFmpeg probing and startup checks.
 
-硬件编码走 h264_videotoolbox（仅支持 -b:v，不支持 CRF）；
-ffmpeg 9.0 起 -vsync 已移除，统一用 -fps_mode cfr。
-"""
+VideoToolbox uses bitrate rather than CRF. FFmpeg 9 removed -vsync; use -fps_mode cfr."""
 from __future__ import annotations
 
 import json
@@ -27,12 +25,12 @@ class VideoInfo:
     width: int
     height: int
     has_audio: bool
-    rotation: int          # 0/90/180/270，仅用于提示与抽帧方向兜底
+    rotation: int          # Degrees; used for display and extraction-orientation fallback.
     bitrate: str
 
 
 def probe_video(path: Path) -> VideoInfo | None:
-    """探测视频基础信息；失败返回 None。"""
+    """Return basic video metadata, or None when probing fails."""
     args = [
         FFPROBE, "-v", "error",
         "-select_streams", "v:0",
@@ -63,8 +61,7 @@ def probe_video(path: Path) -> VideoInfo | None:
     width = int(_f(vs.get("width")))
     height = int(_f(vs.get("height")))
     if width <= 0 or height <= 0:
-        # 破损容器可能有合法时长，却没有可解码的视频尺寸。
-        # 不可把 0×0 当作正常视频传给切片/编码模块。
+        # A valid duration does not make a zero-dimension stream decodable.
         return None
     dur = _f(vs.get("duration"))
     if dur <= 0:
@@ -72,7 +69,6 @@ def probe_video(path: Path) -> VideoInfo | None:
     if dur <= 0:
         return None
 
-    # 旋转信息：stream_tags.rotate 或 side_data rotation
     rotation = 0
     v = (vs.get("tags") or {}).get("rotate")
     if v is not None:
@@ -110,7 +106,9 @@ def probe_video(path: Path) -> VideoInfo | None:
 
 
 def probe_scalar(path: Path, entry: str) -> str:
-    """ffprobe 取单个字段（default=nw=1:nk=1 格式），失败返回空串。"""
+    """Return raw default=nw=1:nk=1 probe output, or an empty string on failure.
+
+    Without stream selection the output can contain multiple lines."""
     rc, out, _ = run_cmd(
         [FFPROBE, "-v", "error", "-show_entries", entry,
          "-of", "default=nw=1:nk=1", str(path)],
@@ -120,7 +118,7 @@ def probe_scalar(path: Path, entry: str) -> str:
 
 
 def self_check(require_src: bool = True) -> Any:
-    """启动自检：cv2 / ffmpeg / ffprobe /（可选）源目录 / 磁盘空间。失败直接 sys.exit。"""
+    """Check cv2, media tools, optional source directory, and free disk space; exit on failure."""
     try:
         import cv2  # noqa: PLC0415
     except Exception as e:  # noqa: BLE001

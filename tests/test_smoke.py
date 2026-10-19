@@ -1,8 +1,6 @@
-"""pycut 冒烟测试：验证包结构、配置、CLI 注册表、去重参数可复现性。
+"""Package/config/CLI/preset smoke checks with explicit real-media opt-in.
 
-运行：python3 -m pytest tests/ 或 python3 tests/test_smoke.py
-（仅做导入与结构断言，不触发实际 ffmpeg 编码 / LLM 调用 / 大批量视频处理。）
-"""
+Ordinary tests do not run FFmpeg, external LLMs, or bulk processing."""
 from __future__ import annotations
 
 import os
@@ -16,7 +14,7 @@ from pycut.commands import cover_cmd, dedup_cmd, slice_cmd  # noqa: E402
 
 
 def _require_media_environment() -> None:
-    """本机 FFmpeg 和真实素材验证仅在明确授权后运行，不污染纯逻辑测试。"""
+    """Require explicit opt-in before local FFmpeg/user-media acceptance checks."""
     if os.environ.get("PYCUT_TEST_MEDIA") != "1":
         raise unittest.SkipTest(
             "需要真实媒体环境；设置 PYCUT_TEST_MEDIA=1 后才会检查本机 FFmpeg/素材"
@@ -31,7 +29,6 @@ def test_config_paths_exist():
 
 
 def test_gateways_present():
-    # 只有主网关 / 备用网关两个，不按厂商命名
     assert set(config.GATEWAYS) == {"main", "backup"}
     assert config.DEFAULT_GATEWAY == "main"
     assert config.apply_llm_overrides("main")[0] == config.GATEWAYS["main"]["url"]
@@ -42,7 +39,7 @@ def test_gateways_present():
 def test_cli_registers_commands():
     assert set(cli.list_commands()) == {"cover", "dedup", "montage"}
     parser = cli.build_parser()
-    # 每个命令模块都应暴露 register / run
+
     for mod in (slice_cmd, cover_cmd):
         assert hasattr(mod, "register")
         assert hasattr(mod, "run")
@@ -52,7 +49,7 @@ def test_internal_slice_subparser_has_key_args():
     import argparse
     parser = argparse.ArgumentParser()
     slice_cmd.register(parser.add_subparsers(dest='command'))
-    # 通过解析验证 slice 子命令参数齐全
+
     ns = parser.parse_args(["slice", "--dry-run", "--gateway", "backup"])
     assert ns.command == "slice"
     assert ns.dry_run is True
@@ -64,38 +61,36 @@ def test_internal_slice_subparser_has_key_args():
 
 
 def test_dedup_registered():
-    """去重命令已挂到注册表，且档位/门槛配置齐备。"""
+    """Check public registration, preset gates, and recursive CLI input parsing."""
     assert "dedup" in cli.list_commands()
     assert set(config.DEDUP_PRESETS) == {"light", "standard", "aggressive"}
     assert config.DEFAULT_GATEWAY == "main"
     ns = cli.build_parser().parse_args(["dedup", "--all", "--preset", "aggressive"])
     assert ns.command == "dedup" and ns.all is True and ns.preset == "aggressive"
-    # dedup 支持 --src-dir 递归扫描
+
     ns2 = cli.build_parser().parse_args(["dedup", "--src-dir", "/tmp"])
     assert ns2.src_dir == ["/tmp"]
 
 
 def test_tui_wizard_structure():
-    """向导式 TUI 结构：3 个处理功能、内部目录读取、混剪裂变。"""
+    """Check the three public wizards, shared scan helper, and montage variant arguments."""
     import pycut.tui as tui  # noqa: PLC0415
     from pycut.core import scan  # noqa: PLC0415
 
-    # 主菜单仅有 3 个视频处理功能，不提供独立“查素材”页面
     names = [f[1] for f in tui.FEATURES]
     assert names == ["字幕擦除", "去重", "混剪"]
-    # 目录扫描工具
-    assert hasattr(scan, "count_videos_recursive")
-    assert hasattr(scan, "list_videos_flat")
+
+    assert callable(scan.list_videos_recursive)
     assert hasattr(scan, "list_dirs")
-    # 递归深度限制默认 3 层
+    # Compatibility helpers retain their default depth; production wizards request unlimited recursion.
     assert scan.DEFAULT_MAX_DEPTH == 3
-    # 混剪支持 --fission 裂变（直接解析验证）
+
     ns = cli.build_parser().parse_args(["montage", "--fission", "3"])
     assert ns.fission == 3
 
 
 def test_dedup_presets_deterministic():
-    """同 seed 同档位必须产出完全一致的参数（可复现是去重的基本要求）。"""
+    """Fixed seed/preset inputs must produce the same processing parameters."""
     from pycut.core import dedup_presets as dp  # noqa: PLC0415
 
     a = dp.build_params("standard", 42, has_audio=True, width=720, height=1280)
@@ -103,10 +98,10 @@ def test_dedup_presets_deterministic():
     assert a == b
     c = dp.build_params("standard", 43, has_audio=True, width=720, height=1280)
     assert (a["crf"], a["crop_px"], a["noise"]) != (c["crf"], c["crop_px"], c["noise"])
-    # 无音轨 -> 不允许变调
+
     d = dp.build_params("standard", 42, has_audio=False)
     assert d["pitch"] == 1.0
-    # 轻档强度必须小于激进档
+
     light = dp.build_params("light", 7)
     aggr = dp.build_params("aggressive", 7)
     assert light["crop_px"] <= aggr["crop_px"]
@@ -114,7 +109,7 @@ def test_dedup_presets_deterministic():
 
 
 def test_fingerprint_identical_is_zero():
-    """真实视频自比依赖 FFmpeg 和测试素材，不应在跨环境 CI 静默通过。"""
+    """Require real-media opt-in for video self-comparison; do not silently pass unavailable media."""
     _require_media_environment()
     from pycut.core import fingerprint as fp  # noqa: PLC0415
 
@@ -135,7 +130,7 @@ if __name__ == "__main__":
         import pytest  # noqa: PLC0415
         sys.exit(pytest.main([__file__, "-q"]))
     except ModuleNotFoundError:
-        # 本机没装 pytest：逐个直跑，至少把断言跑完
+        # Fallback runner for hosts without pytest; execute the assertions once.
         ok = fail = skipped = 0
         for _name in [n for n in dir() if n.startswith("test_")]:
             try:

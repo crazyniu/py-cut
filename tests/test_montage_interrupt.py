@@ -1,4 +1,4 @@
-"""混剪 SIGINT/SIGTERM 后必须返回中断状态且不启动后续裂变。"""
+"""Montage interruption must stop subsequent variants and return interrupted status."""
 from __future__ import annotations
 
 import tempfile

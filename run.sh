@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
-# pycut 一键运行脚本：自动装依赖 -> 读 .env（密钥/网关/模型）-> 运行入口
+# Bootstrap dependencies, .env settings, and the unified entry point.
 #
-# 用法:
-#   ./run.sh                              # 无参数：交互终端进入 TUI
-#   ./run.sh tui                          # 显式进入 TUI
-#   ./run.sh cover                        # 用户切片字幕擦除
-#   ./run.sh dedup                        # 用户切片去重
-#   ./run.sh montage --source "话术/a/1.mp4"
+# Usage: ./run.sh [tui|cover|dedup|montage] [arguments]
+# No arguments in an interactive terminal opens the TUI.
 #
-# 说明：密钥与网关配置全部在项目根 .env（首次运行会自动从 .env.example 生成）。
+# Keep credentials and material paths in ignored project .env.
 set -uo pipefail
 
 cd "$(dirname "$0")" || exit 1
@@ -19,13 +15,12 @@ case "$PLATFORM" in
 esac
 echo "[pycut] 系统: $PLATFORM"
 
-# 只在缺少工具时调用系统包管理器；不下载并执行远程安装脚本。
+# Install only missing system packages; never execute downloaded installer scripts.
 install_system_package() {
   local package="$1"
   local admin=()
-  # Bash 3.2 的 set -u 下，空数组直接 "${admin[@]}" 会报 "admin[@]: unbound variable"。
-  # 用 "${admin[@]+"${admin[@]}"}" 让空数组展开为零个参数（root 不加 sudo）、
-  # 非空数组逐元素展开（非 root 加 sudo）；所有包管理器调用统一经 run_admin 走这里。
+  # Bash 3.2 with set -u cannot expand an unset/empty array directly.
+  # The conditional array expansion below supplies zero arguments for root or sudo otherwise.
   run_admin() { "${admin[@]+"${admin[@]}"}" "$@"; }
   if [ "$PLATFORM" = Darwin ]; then
     command -v brew >/dev/null 2>&1 || {
@@ -67,7 +62,7 @@ install_system_package() {
   fi
 }
 
-# ---------- 1. 选解释器：优先自带 cv2 的托管解释器 ----------
+# 1. Select the project venv, managed Python, or system interpreter.
 MANAGED="/Users/apple/.workbuddy/binaries/python/versions/3.13.12/bin/python3"
 if [ -x "$PWD/.venv/bin/python3" ]; then
   PY="$PWD/.venv/bin/python3"
@@ -91,7 +86,7 @@ else
 fi
 echo "[pycut] 解释器: $PY"
 
-# ---------- 2. .env：没有就由模板生成，并提示填密钥 ----------
+# 2. Create .env from the safe template only when missing.
 if [ ! -f .env ]; then
   if [ -f .env.example ]; then
     cp .env.example .env
@@ -101,8 +96,8 @@ if [ ! -f .env ]; then
   fi
 fi
 
-# ---------- 3. 检查核心依赖与纯 TUI 目录组件 ----------
-# CLI 只需核心视频依赖；TUI 另外使用成熟的 textual-fspicker。
+# 3. Validate imports before installing missing requirements.
+# CLI needs video dependencies; TUI also imports curses/Textual and the picker.
 IS_TUI=0
 if [ "$#" -eq 0 ] || [ "${1:-}" = "tui" ]; then
   IS_TUI=1
@@ -136,7 +131,7 @@ if ! "$PY" -c "$REQUIRED_IMPORTS" >/dev/null 2>&1; then
   exit 1
 fi
 
-# ---------- FFmpeg：使用与处理代码一致的工具路径，安装后复检 ----------
+# Validate the same media-tool paths used by processing; recheck after installation.
 check_media_tools() {
   "$PY" - <<'PY'
 import subprocess
@@ -168,14 +163,14 @@ if [ "$IS_TUI" -eq 1 ] && ! "$PY" -c 'import textual, textual_fspicker' >/dev/nu
   echo "        运行: $PY -m pip install -r requirements.txt"
   exit 1
 fi
-# ---------- 4. 硬校验 cv2（没有就别往下跑，切片必然失败）----------
+# 4. Require compatible Haar support before entering the application.
 if ! "$PY" -c 'import cv2; assert hasattr(cv2, "CascadeClassifier")' >/dev/null 2>&1; then
   echo "[pycut] 错误: 当前解释器 ($PY) 缺少兼容的 OpenCV 4 Haar 支持。"
   echo "        手动安装: $PY -m pip install -r requirements.txt"
   exit 1
 fi
 
-# ---------- 5. 打印生效的网关配置（不打印密钥），缺密钥则告警 ----------
+# 5. Describe gateway readiness without printing credentials.
 "$PY" -c "
 import sys
 sys.path.insert(0, '.')
@@ -187,5 +182,5 @@ if not config.key_ready():
     print('         字幕擦除需在设置页填写视觉模型和密钥；去重、混剪不依赖此密钥。')
 " 2>/dev/null || echo "[pycut] 警告: 无法读取网关配置，请检查 .env"
 
-# ---------- 6. 运行入口（无参数且为交互终端会自动进 TUI）----------
+# 6. Delegate to the unified CLI/TUI entry point and preserve its exit status.
 exec "$PY" pycut.py "$@"

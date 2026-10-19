@@ -1,4 +1,4 @@
-"""目录浏览后端（web_dir_browser）单元测试：真实绝对路径、隐藏目录、中文空格、错误映射。"""
+"""Directory backend: absolute paths, hidden entries, Unicode/spaces, and error mapping."""
 from __future__ import annotations
 
 import os
@@ -103,7 +103,7 @@ class RootsTests(unittest.TestCase):
             names = [r["name"] for r in got]
             self.assertIn("主目录", names)
             self.assertIn("桌面", names)
-            self.assertNotIn("文档", names)  # 不存在则不出现
+            self.assertNotIn("文档", names)
             self.assertTrue(all(Path(r["path"]).is_dir() for r in got))
 
 
