@@ -1,42 +1,660 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ActionIcon, Badge, Box, Button, Checkbox, Divider, Group, Modal, Pagination, Paper, ScrollArea, SegmentedControl, Select, SimpleGrid, Stack, Table, Text, TextInput, Title, Tooltip } from '@mantine/core';
-import { IconFolderOpen, IconLayoutGrid, IconList, IconPlus, IconRefresh, IconSearch, IconTrash, IconX } from '@tabler/icons-react';
-import { useDebouncedValue } from '@mantine/hooks';
-import { AssetThumb, Empty, ErrorNotice, MediaPreview, PageHeading, report } from './common';
-import { chooseDirectories, duration, message, reveal, roles, rpc, type Asset, type Library, type Project, type Use } from './api';
+import { useCallback, useEffect, useState } from "react";
+import {
+  ActionIcon,
+  Badge,
+  Box,
+  Button,
+  Checkbox,
+  Divider,
+  Group,
+  Modal,
+  Pagination,
+  Paper,
+  ScrollArea,
+  SegmentedControl,
+  Select,
+  SimpleGrid,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  Title,
+  Tooltip,
+} from "@mantine/core";
+import {
+  IconFolderOpen,
+  IconLayoutGrid,
+  IconList,
+  IconPlus,
+  IconRefresh,
+  IconSearch,
+  IconTrash,
+  IconX,
+} from "@tabler/icons-react";
+import { useDebouncedValue } from "@mantine/hooks";
+import {
+  AssetThumb,
+  Empty,
+  ErrorNotice,
+  MediaPreview,
+  PageHeading,
+  report,
+} from "./common";
+import {
+  chooseDirectories,
+  duration,
+  message,
+  reveal,
+  roles,
+  rpc,
+  type Asset,
+  type Library,
+  type Project,
+  type Use,
+} from "./api";
 export default function LibraryPage({ project }: { project: Project }) {
-  const [libraries, setLibraries] = useState<Library[]>([]); const [libraryId, setLibraryId] = useState<string | null>(null);
-  const [assets, setAssets] = useState<Asset[]>([]); const [total, setTotal] = useState(0); const [page, setPage] = useState(1);
-  const [query, setQuery] = useState(''); const [debouncedQuery] = useDebouncedValue(query, 250); const [sort, setSort] = useState<string | null>('name');
-  const [root, setRoot] = useState<string | null>(null); const [removed, setRemoved] = useState('active'); const [layout, setLayout] = useState('grid');
-  const [selected, setSelected] = useState<string[]>([]); const [detailId, setDetailId] = useState<string | null>(null); const [detail, setDetail] = useState<(Asset & { uses: Use[] }) | null>(null);
-  const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [revision, setRevision] = useState(0);
-  const [create, setCreate] = useState(false); const [name, setName] = useState(''); const [role, setRole] = useState<string | null>('background');
-  const library = libraries.find(item => item.id === libraryId);
-  const loadLibraries = useCallback(() => rpc<Library[]>('libraries.list', { project_id: project.id }).then(items => { setLibraries(items); setLibraryId(value => value && items.some(item => item.id === value) ? value : items[0]?.id || null); }).catch(error => setError(message(error))), [project.id]);
-  useEffect(() => { void loadLibraries(); }, [loadLibraries]);
-  useEffect(() => { setPage(1); setSelected([]); setDetailId(null); setRoot(null); }, [libraryId]);
-  useEffect(() => { setPage(1); setSelected([]); }, [debouncedQuery, sort, root, removed]);
-  const loadAssets = useCallback(() => { if (!libraryId) return; let current = true; setError(''); rpc<{ items: Asset[]; total: number }>('assets.list', { library_id: libraryId, query: debouncedQuery, sort, root, removed: removed === 'removed', offset: (page - 1) * 24, limit: 24 }).then(result => { if (current) { setAssets(result.items); setTotal(result.total); } }).catch(error => { if (current) setError(message(error)); }); return () => { current = false; }; }, [libraryId, debouncedQuery, sort, root, removed, page]);
+  const [libraries, setLibraries] = useState<Library[]>([]);
+  const [libraryId, setLibraryId] = useState<string | null>(null);
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [query, setQuery] = useState("");
+  const [debouncedQuery] = useDebouncedValue(query, 250);
+  const [sort, setSort] = useState<string | null>("name");
+  const [root, setRoot] = useState<string | null>(null);
+  const [removed, setRemoved] = useState("active");
+  const [layout, setLayout] = useState("grid");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<(Asset & { uses: Use[] }) | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const [create, setCreate] = useState(false);
+  const [name, setName] = useState("");
+  const [role, setRole] = useState<string | null>("background");
+  const library = libraries.find((item) => item.id === libraryId);
+  const loadLibraries = useCallback(
+    () =>
+      rpc<Library[]>("libraries.list", { project_id: project.id })
+        .then((items) => {
+          setLibraries(items);
+          setLibraryId((value) =>
+            value && items.some((item) => item.id === value)
+              ? value
+              : items[0]?.id || null,
+          );
+        })
+        .catch((error) => setError(message(error))),
+    [project.id],
+  );
+  useEffect(() => {
+    void loadLibraries();
+  }, [loadLibraries]);
+  useEffect(() => {
+    setPage(1);
+    setSelected([]);
+    setDetailId(null);
+    setRoot(null);
+  }, [libraryId]);
+  useEffect(() => {
+    setPage(1);
+    setSelected([]);
+  }, [debouncedQuery, sort, root, removed]);
+  const loadAssets = useCallback(() => {
+    if (!libraryId) return;
+    let current = true;
+    setError("");
+    rpc<{ items: Asset[]; total: number }>("assets.list", {
+      library_id: libraryId,
+      query: debouncedQuery,
+      sort,
+      root,
+      removed: removed === "removed",
+      offset: (page - 1) * 24,
+      limit: 24,
+    })
+      .then((result) => {
+        if (current) {
+          setAssets(result.items);
+          setTotal(result.total);
+        }
+      })
+      .catch((error) => {
+        if (current) setError(message(error));
+      });
+    return () => {
+      current = false;
+    };
+  }, [libraryId, debouncedQuery, sort, root, removed, page]);
   useEffect(loadAssets, [loadAssets, revision]);
-  useEffect(() => { setDetail(null); if (!detailId) return; let disposed = false; rpc<Asset & { uses: Use[] }>('assets.detail', { asset_id: detailId, project_id: project.id }).then(result => { if (!disposed) setDetail(result); }).catch(report); return () => { disposed = true; }; }, [detailId, project.id, revision]);
-  async function mutate(method: string, params: Record<string, unknown>) { setBusy(true); try { await rpc(method, params); await loadLibraries(); setRevision(value => value + 1); } catch (error) { report(error); } finally { setBusy(false); } }
-  async function addRoots() { if (!library) return; try { const roots = await chooseDirectories(); if (roots.length) await mutate('libraries.add_roots', { library_id: library.id, roots }); } catch (error) { report(error); } }
-  async function createLibrary() { if (!name.trim()) return; setBusy(true); try { const item = await rpc<Library>('libraries.create', { project_id: project.id, name: name.trim(), role }); await loadLibraries(); setLibraryId(item.id); setCreate(false); setName(''); } catch (error) { report(error); } finally { setBusy(false); } }
-  const toggle = (id: string) => setSelected(ids => ids.includes(id) ? ids.filter(value => value !== id) : [...ids, id]);
-  return <><PageHeading title="素材库" description="关联本地目录，统一查找和管理素材。移除素材仅影响当前素材库。" actions={<Button variant="light" leftSection={<IconPlus size={17}/>} onClick={() => setCreate(true)}>新建素材库</Button>}/>
-    <div className={`library-layout ${detailId ? 'with-detail' : ''}`}><Paper withBorder p="sm" className="library-sidebar"><Text size="xs" c="dimmed" mb="sm" px={6}>此项目的素材库</Text>{libraries.map(item => <button key={item.id} className={`library-item ${item.id === libraryId ? 'active' : ''}`} onClick={() => setLibraryId(item.id)}><span><Text size="sm" fw={500}>{item.name}</Text><Text size="xs" c="dimmed">{roles[item.role]}</Text></span><Badge variant="light" color="gray" size="sm">{item.active_count}</Badge></button>)}{!libraries.length && <Text p="sm" size="sm" c="dimmed">暂无素材库</Text>}
-      {library && <><Divider my="md"/><Group justify="space-between" mb="sm"><Text size="xs" c="dimmed">关联目录</Text><ActionIcon variant="subtle" onClick={addRoots} aria-label="添加目录" disabled={busy}><IconPlus size={16}/></ActionIcon></Group>{library.roots.map(path => <Group key={path} gap={3} wrap="nowrap" mb="xs"><Tooltip label={path} multiline w={250}><Text size="xs" c="dimmed" lineClamp={2} style={{ overflowWrap: 'anywhere', flex: 1 }}>{path}</Text></Tooltip><ActionIcon size="xs" color="gray" variant="subtle" aria-label={`移除目录 ${path}`} onClick={() => mutate('libraries.remove_root', { library_id: library.id, path })} disabled={busy}><IconX size={12}/></ActionIcon></Group>)}<Button fullWidth mt="sm" variant="default" size="xs" onClick={addRoots} disabled={busy}>添加目录</Button></>}
-    </Paper><Box className="library-main">
-    {library && <><Group justify="space-between" mb="md"><Group gap="sm"><Title order={3} size="h5">{library.name}</Title><Text c="dimmed" size="sm">{total} 个素材</Text></Group><Button size="xs" variant="default" leftSection={<IconRefresh size={14}/>} onClick={() => mutate('libraries.scan', { library_id: library.id })} loading={busy}>刷新目录</Button></Group>
-      <Group mb="sm" gap="sm"><TextInput placeholder="搜索素材名称" aria-label="搜索素材" leftSection={<IconSearch size={16}/>} value={query} onChange={event => setQuery(event.currentTarget.value)} style={{ flex: 1, minWidth: 150 }}/><Select aria-label="排序" w={120} data={[{ value: 'name', label: '按名称' },{ value: 'usage', label: '按使用次数' },{ value: 'duration', label: '按时长' }]} value={sort} onChange={setSort} allowDeselect={false}/><SegmentedControl aria-label="显示方式" value={layout} onChange={setLayout} data={[{ value: 'grid', label: <IconLayoutGrid size={16}/> },{ value: 'list', label: <IconList size={16}/> }]}/></Group>
-      <Group justify="space-between" mb="md"><SegmentedControl size="xs" value={removed} onChange={setRemoved} data={[{ value: 'active', label: '全部素材' },{ value: 'removed', label: '已移除' }]}/><Select clearable placeholder="全部来源目录" aria-label="筛选来源目录" w={220} data={library.roots.map(path => ({ value: path, label: path }))} value={root} onChange={setRoot}/></Group>
-      {selected.length > 0 && <Paper withBorder p="xs" mb="md"><Group justify="space-between"><Text size="sm">已选 {selected.length} 个</Text><Group><Button size="xs" variant="subtle" color="gray" onClick={() => setSelected([])}>取消选择</Button><Button size="xs" variant="light" color={removed === 'active' ? 'red' : 'cyan'} leftSection={removed === 'active' ? <IconTrash size={14}/> : undefined} loading={busy} onClick={async () => { await mutate(removed === 'active' ? 'assets.remove' : 'assets.restore', { library_id: library.id, asset_ids: selected }); setSelected([]); }}>{removed === 'active' ? '从当前库移除' : '恢复到素材库'}</Button></Group></Group></Paper>}
-      {error && <ErrorNotice error={error} retry={() => setRevision(value => value + 1)}/>}
-      {!assets.length && !error ? <Empty title={removed === 'removed' ? '没有已移除素材' : '素材库为空'} description={library.roots.length ? '尝试刷新目录或调整搜索条件。' : '添加一个或多个目录，素材将从原位置读取。'} action={!library.roots.length ? <Button onClick={addRoots} variant="light">添加目录</Button> : undefined}/> : layout === 'grid' ? <SimpleGrid cols={{ base: 2, md: detailId ? 3 : 4, xl: detailId ? 4 : 5 }} spacing="sm">{assets.map(asset => <Paper withBorder key={asset.id} className={`asset-card ${detailId === asset.id ? 'active' : ''}`}><Box className="thumb-select"><Checkbox aria-label={`选择 ${asset.name}`} checked={selected.includes(asset.id)} onChange={() => toggle(asset.id)}/></Box><button className="asset-open" onClick={() => setDetailId(asset.id)} aria-label={`查看 ${asset.name}`}><AssetThumb asset={asset}/><Box p="xs"><Text size="sm" lineClamp={1} fw={500} title={asset.name}>{asset.name}</Text><Group justify="space-between" gap={4} mt={4}><Text size="xs" c="dimmed">{duration(asset.duration)}</Text><Text size="xs" c="dimmed">{asset.usage_count == null ? '未统计' : `使用 ${asset.usage_count} 次`}</Text></Group></Box></button></Paper>)}</SimpleGrid> : <Table.ScrollContainer minWidth={520}><Table highlightOnHover verticalSpacing="sm"><Table.Thead><Table.Tr><Table.Th w={40}/><Table.Th>素材</Table.Th><Table.Th>时长</Table.Th><Table.Th>尺寸</Table.Th><Table.Th>使用</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{assets.map(asset => <Table.Tr key={asset.id}><Table.Td><Checkbox aria-label={`选择 ${asset.name}`} checked={selected.includes(asset.id)} onChange={() => toggle(asset.id)}/></Table.Td><Table.Td><button className="text-button" onClick={() => setDetailId(asset.id)}>{asset.name}</button>{!asset.available && <Badge ml={6} color="gray" size="xs">离线</Badge>}</Table.Td><Table.Td>{duration(asset.duration)}</Table.Td><Table.Td>{asset.width ? `${asset.width}×${asset.height}` : '—'}</Table.Td><Table.Td>{asset.usage_count ?? '未统计'}</Table.Td></Table.Tr>)}</Table.Tbody></Table></Table.ScrollContainer>}
-      {total > 24 && <Group justify="center" mt="lg"><Pagination total={Math.ceil(total / 24)} value={page} onChange={setPage}/></Group>}
-    </>}
-    </Box>{detailId && <Paper withBorder p="md" className="asset-detail"><Group justify="space-between" mb="md"><Text fw={600}>素材详情</Text><ActionIcon variant="subtle" color="gray" aria-label="关闭详情" onClick={() => setDetailId(null)}><IconX size={18}/></ActionIcon></Group>{detail && <Stack gap="md">{detail.kind !== 'subtitle' && detail.available && <MediaPreview id={detail.id} image={detail.kind === 'image'}/>}<Text fw={500} style={{ overflowWrap: 'anywhere' }}>{detail.name}</Text><Group gap="xs"><Badge variant="light" color="gray">{duration(detail.duration)}</Badge><Badge variant="light" color="gray">{detail.width ? `${detail.width}×${detail.height}` : detail.kind}</Badge>{!detail.available && <Badge color="gray">离线</Badge>}</Group><Text size="xs" c="dimmed" style={{ overflowWrap: 'anywhere' }}>{detail.path}</Text><Button variant="default" size="xs" leftSection={<IconFolderOpen size={15}/>} onClick={() => reveal(detail.path).catch(report)}>在文件夹中显示</Button>{detail.srt_path && <Box><Text size="xs" c="dimmed">关联字幕</Text><Text size="sm" style={{ overflowWrap: 'anywhere' }}>{detail.srt_path}</Text></Box>}<Divider/><Text size="sm" fw={600}>成片使用记录 · {detail.usage_count ?? '未统计'}</Text><ScrollArea mah={240}>{detail.uses?.length ? detail.uses.map((use, index) => <Box key={index} mb="sm"><Text size="sm" lineClamp={2}>{use.name || use.output_path || use.path || '成片'}</Text><Text size="xs" c="dimmed">{use.role || ''} {use.created_at || ''}</Text></Box>) : <Text size="xs" c="dimmed">尚无桌面端成片使用记录</Text>}</ScrollArea></Stack>}</Paper>}</div>
-    <Modal opened={create} onClose={() => setCreate(false)} title="新建素材库" centered><Stack><TextInput label="素材库名称" value={name} onChange={event => setName(event.currentTarget.value)} autoFocus/><Select label="素材用途" data={Object.entries(roles).map(([value,label]) => ({ value,label }))} value={role} onChange={setRole} allowDeselect={false}/><Button disabled={!name.trim()} loading={busy} onClick={createLibrary}>创建素材库</Button></Stack></Modal>
-  </>;
+  useEffect(() => {
+    setDetail(null);
+    if (!detailId) return;
+    let disposed = false;
+    rpc<Asset & { uses: Use[] }>("assets.detail", {
+      asset_id: detailId,
+      project_id: project.id,
+    })
+      .then((result) => {
+        if (!disposed) setDetail(result);
+      })
+      .catch(report);
+    return () => {
+      disposed = true;
+    };
+  }, [detailId, project.id, revision]);
+  async function mutate(method: string, params: Record<string, unknown>) {
+    setBusy(true);
+    try {
+      await rpc(method, params);
+      await loadLibraries();
+      setRevision((value) => value + 1);
+    } catch (error) {
+      report(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function addRoots() {
+    if (!library) return;
+    try {
+      const roots = await chooseDirectories();
+      if (roots.length)
+        await mutate("libraries.add_roots", { library_id: library.id, roots });
+    } catch (error) {
+      report(error);
+    }
+  }
+  async function createLibrary() {
+    if (!name.trim()) return;
+    setBusy(true);
+    try {
+      const item = await rpc<Library>("libraries.create", {
+        project_id: project.id,
+        name: name.trim(),
+        role,
+      });
+      await loadLibraries();
+      setLibraryId(item.id);
+      setCreate(false);
+      setName("");
+    } catch (error) {
+      report(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const toggle = (id: string) =>
+    setSelected((ids) =>
+      ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id],
+    );
+  return (
+    <>
+      <PageHeading
+        title="素材库"
+        description="关联本地目录，统一查找和管理素材。移除素材仅影响当前素材库。"
+        actions={
+          <Button
+            variant="light"
+            leftSection={<IconPlus size={17} />}
+            onClick={() => setCreate(true)}
+          >
+            新建素材库
+          </Button>
+        }
+      />
+      <div className={`library-layout ${detailId ? "with-detail" : ""}`}>
+        <Paper withBorder p="sm" className="library-sidebar">
+          <Text size="xs" c="dimmed" mb="sm" px={6}>
+            此项目的素材库
+          </Text>
+          {libraries.map((item) => (
+            <button
+              key={item.id}
+              className={`library-item ${item.id === libraryId ? "active" : ""}`}
+              onClick={() => setLibraryId(item.id)}
+            >
+              <span>
+                <Text size="sm" fw={500}>
+                  {item.name}
+                </Text>
+                <Text size="xs" c="dimmed">
+                  {roles[item.role]}
+                </Text>
+              </span>
+              <Badge variant="light" color="gray" size="sm">
+                {item.active_count}
+              </Badge>
+            </button>
+          ))}
+          {!libraries.length && (
+            <Text p="sm" size="sm" c="dimmed">
+              暂无素材库
+            </Text>
+          )}
+          {library && (
+            <>
+              <Divider my="md" />
+              <Group justify="space-between" mb="sm">
+                <Text size="xs" c="dimmed">
+                  关联目录
+                </Text>
+                <ActionIcon
+                  variant="subtle"
+                  onClick={addRoots}
+                  aria-label="添加目录"
+                  disabled={busy}
+                >
+                  <IconPlus size={16} />
+                </ActionIcon>
+              </Group>
+              {library.roots.map((path) => (
+                <Group key={path} gap={3} wrap="nowrap" mb="xs">
+                  <Tooltip label={path} multiline w={250}>
+                    <Text
+                      size="xs"
+                      c="dimmed"
+                      lineClamp={2}
+                      style={{ overflowWrap: "anywhere", flex: 1 }}
+                    >
+                      {path}
+                    </Text>
+                  </Tooltip>
+                  <ActionIcon
+                    size="xs"
+                    color="gray"
+                    variant="subtle"
+                    aria-label={`移除目录 ${path}`}
+                    onClick={() =>
+                      mutate("libraries.remove_root", {
+                        library_id: library.id,
+                        path,
+                      })
+                    }
+                    disabled={busy}
+                  >
+                    <IconX size={12} />
+                  </ActionIcon>
+                </Group>
+              ))}
+              <Button
+                fullWidth
+                mt="sm"
+                variant="default"
+                size="xs"
+                onClick={addRoots}
+                disabled={busy}
+              >
+                添加目录
+              </Button>
+            </>
+          )}
+        </Paper>
+        <Box className="library-main">
+          {library && (
+            <>
+              <Group justify="space-between" mb="md">
+                <Group gap="sm">
+                  <Title order={3} size="h5">
+                    {library.name}
+                  </Title>
+                  <Text c="dimmed" size="sm">
+                    {total} 个素材
+                  </Text>
+                </Group>
+                <Button
+                  size="xs"
+                  variant="default"
+                  leftSection={<IconRefresh size={14} />}
+                  onClick={() =>
+                    mutate("libraries.scan", { library_id: library.id })
+                  }
+                  loading={busy}
+                >
+                  刷新目录
+                </Button>
+              </Group>
+              <Group mb="sm" gap="sm">
+                <TextInput
+                  placeholder="搜索素材名称"
+                  aria-label="搜索素材"
+                  leftSection={<IconSearch size={16} />}
+                  value={query}
+                  onChange={(event) => setQuery(event.currentTarget.value)}
+                  style={{ flex: 1, minWidth: 150 }}
+                />
+                <Select
+                  aria-label="排序"
+                  w={120}
+                  data={[
+                    { value: "name", label: "按名称" },
+                    { value: "usage", label: "按使用次数" },
+                    { value: "duration", label: "按时长" },
+                  ]}
+                  value={sort}
+                  onChange={setSort}
+                  allowDeselect={false}
+                />
+                <SegmentedControl
+                  aria-label="显示方式"
+                  value={layout}
+                  onChange={setLayout}
+                  data={[
+                    { value: "grid", label: <IconLayoutGrid size={16} /> },
+                    { value: "list", label: <IconList size={16} /> },
+                  ]}
+                />
+              </Group>
+              <Group justify="space-between" mb="md">
+                <SegmentedControl
+                  size="xs"
+                  value={removed}
+                  onChange={setRemoved}
+                  data={[
+                    { value: "active", label: "全部素材" },
+                    { value: "removed", label: "已移除" },
+                  ]}
+                />
+                <Select
+                  clearable
+                  placeholder="全部来源目录"
+                  aria-label="筛选来源目录"
+                  w={220}
+                  data={library.roots.map((path) => ({
+                    value: path,
+                    label: path,
+                  }))}
+                  value={root}
+                  onChange={setRoot}
+                />
+              </Group>
+              {selected.length > 0 && (
+                <Paper withBorder p="xs" mb="md">
+                  <Group justify="space-between">
+                    <Text size="sm">已选 {selected.length} 个</Text>
+                    <Group>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        color="gray"
+                        onClick={() => setSelected([])}
+                      >
+                        取消选择
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="light"
+                        color={removed === "active" ? "red" : "cyan"}
+                        leftSection={
+                          removed === "active" ? (
+                            <IconTrash size={14} />
+                          ) : undefined
+                        }
+                        loading={busy}
+                        onClick={async () => {
+                          await mutate(
+                            removed === "active"
+                              ? "assets.remove"
+                              : "assets.restore",
+                            { library_id: library.id, asset_ids: selected },
+                          );
+                          setSelected([]);
+                        }}
+                      >
+                        {removed === "active" ? "从当前库移除" : "恢复到素材库"}
+                      </Button>
+                    </Group>
+                  </Group>
+                </Paper>
+              )}
+              {error && (
+                <ErrorNotice
+                  error={error}
+                  retry={() => setRevision((value) => value + 1)}
+                />
+              )}
+              {!assets.length && !error ? (
+                <Empty
+                  title={
+                    removed === "removed" ? "没有已移除素材" : "素材库为空"
+                  }
+                  description={
+                    library.roots.length
+                      ? "尝试刷新目录或调整搜索条件。"
+                      : "添加一个或多个目录，素材将从原位置读取。"
+                  }
+                  action={
+                    !library.roots.length ? (
+                      <Button onClick={addRoots} variant="light">
+                        添加目录
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              ) : layout === "grid" ? (
+                <SimpleGrid
+                  cols={{ base: 2, md: detailId ? 3 : 4, xl: detailId ? 4 : 5 }}
+                  spacing="sm"
+                >
+                  {assets.map((asset) => (
+                    <Paper
+                      withBorder
+                      key={asset.id}
+                      className={`asset-card ${detailId === asset.id ? "active" : ""}`}
+                    >
+                      <Box className="thumb-select">
+                        <Checkbox
+                          aria-label={`选择 ${asset.name}`}
+                          checked={selected.includes(asset.id)}
+                          onChange={() => toggle(asset.id)}
+                        />
+                      </Box>
+                      <button
+                        className="asset-open"
+                        onClick={() => setDetailId(asset.id)}
+                        aria-label={`查看 ${asset.name}`}
+                      >
+                        <AssetThumb asset={asset} />
+                        <Box p="xs">
+                          <Text
+                            size="sm"
+                            lineClamp={1}
+                            fw={500}
+                            title={asset.name}
+                          >
+                            {asset.name}
+                          </Text>
+                          <Group justify="space-between" gap={4} mt={4}>
+                            <Text size="xs" c="dimmed">
+                              {duration(asset.duration)}
+                            </Text>
+                            <Text size="xs" c="dimmed">
+                              {asset.usage_count == null
+                                ? "未统计"
+                                : `使用 ${asset.usage_count} 次`}
+                            </Text>
+                          </Group>
+                        </Box>
+                      </button>
+                    </Paper>
+                  ))}
+                </SimpleGrid>
+              ) : (
+                <Table.ScrollContainer minWidth={520}>
+                  <Table highlightOnHover verticalSpacing="sm">
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th w={40} />
+                        <Table.Th>素材</Table.Th>
+                        <Table.Th>时长</Table.Th>
+                        <Table.Th>尺寸</Table.Th>
+                        <Table.Th>使用</Table.Th>
+                      </Table.Tr>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {assets.map((asset) => (
+                        <Table.Tr key={asset.id}>
+                          <Table.Td>
+                            <Checkbox
+                              aria-label={`选择 ${asset.name}`}
+                              checked={selected.includes(asset.id)}
+                              onChange={() => toggle(asset.id)}
+                            />
+                          </Table.Td>
+                          <Table.Td>
+                            <button
+                              className="text-button"
+                              onClick={() => setDetailId(asset.id)}
+                            >
+                              {asset.name}
+                            </button>
+                            {!asset.available && (
+                              <Badge ml={6} color="gray" size="xs">
+                                离线
+                              </Badge>
+                            )}
+                          </Table.Td>
+                          <Table.Td>{duration(asset.duration)}</Table.Td>
+                          <Table.Td>
+                            {asset.width
+                              ? `${asset.width}×${asset.height}`
+                              : "—"}
+                          </Table.Td>
+                          <Table.Td>{asset.usage_count ?? "未统计"}</Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                </Table.ScrollContainer>
+              )}
+              {total > 24 && (
+                <Group justify="center" mt="lg">
+                  <Pagination
+                    total={Math.ceil(total / 24)}
+                    value={page}
+                    onChange={setPage}
+                  />
+                </Group>
+              )}
+            </>
+          )}
+        </Box>
+        {detailId && (
+          <Paper withBorder p="md" className="asset-detail">
+            <Group justify="space-between" mb="md">
+              <Text fw={600}>素材详情</Text>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                aria-label="关闭详情"
+                onClick={() => setDetailId(null)}
+              >
+                <IconX size={18} />
+              </ActionIcon>
+            </Group>
+            {detail && (
+              <Stack gap="md">
+                {detail.kind !== "subtitle" && detail.available && (
+                  <MediaPreview
+                    id={detail.id}
+                    image={detail.kind === "image"}
+                  />
+                )}
+                <Text fw={500} style={{ overflowWrap: "anywhere" }}>
+                  {detail.name}
+                </Text>
+                <Group gap="xs">
+                  <Badge variant="light" color="gray">
+                    {duration(detail.duration)}
+                  </Badge>
+                  <Badge variant="light" color="gray">
+                    {detail.width
+                      ? `${detail.width}×${detail.height}`
+                      : detail.kind}
+                  </Badge>
+                  {!detail.available && <Badge color="gray">离线</Badge>}
+                </Group>
+                <Text size="xs" c="dimmed" style={{ overflowWrap: "anywhere" }}>
+                  {detail.path}
+                </Text>
+                <Button
+                  variant="default"
+                  size="xs"
+                  leftSection={<IconFolderOpen size={15} />}
+                  onClick={() => reveal(detail.path).catch(report)}
+                >
+                  在文件夹中显示
+                </Button>
+                {detail.srt_path && (
+                  <Box>
+                    <Text size="xs" c="dimmed">
+                      关联字幕
+                    </Text>
+                    <Text size="sm" style={{ overflowWrap: "anywhere" }}>
+                      {detail.srt_path}
+                    </Text>
+                  </Box>
+                )}
+                <Divider />
+                <Text size="sm" fw={600}>
+                  成片使用记录 · {detail.usage_count ?? "未统计"}
+                </Text>
+                <ScrollArea mah={240}>
+                  {detail.uses?.length ? (
+                    detail.uses.map((use, index) => (
+                      <Box key={index} mb="sm">
+                        <Text size="sm" lineClamp={2}>
+                          {use.name || use.output_path || use.path || "成片"}
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          {use.role || ""} {use.created_at || ""}
+                        </Text>
+                      </Box>
+                    ))
+                  ) : (
+                    <Text size="xs" c="dimmed">
+                      尚无桌面端成片使用记录
+                    </Text>
+                  )}
+                </ScrollArea>
+              </Stack>
+            )}
+          </Paper>
+        )}
+      </div>
+      <Modal
+        opened={create}
+        onClose={() => setCreate(false)}
+        title="新建素材库"
+        centered
+      >
+        <Stack>
+          <TextInput
+            label="素材库名称"
+            value={name}
+            onChange={(event) => setName(event.currentTarget.value)}
+            autoFocus
+          />
+          <Select
+            label="素材用途"
+            data={Object.entries(roles).map(([value, label]) => ({
+              value,
+              label,
+            }))}
+            value={role}
+            onChange={setRole}
+            allowDeselect={false}
+          />
+          <Button
+            disabled={!name.trim()}
+            loading={busy}
+            onClick={createLibrary}
+          >
+            创建素材库
+          </Button>
+        </Stack>
+      </Modal>
+    </>
+  );
 }
