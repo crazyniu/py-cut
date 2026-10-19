@@ -17,6 +17,7 @@ import {
   fileUrl,
   message,
   rpc,
+  reveal,
   statusColor,
   statusNames,
   type Asset,
@@ -144,11 +145,13 @@ export function MediaPreview({
   id,
   output = false,
   image = false,
+  onDuration,
 }: {
   method?: string;
   id: string;
   output?: boolean;
   image?: boolean;
+  onDuration?: (seconds: number) => void;
 }) {
   const [state, setState] = useState<{ path?: string; error?: string }>({});
   useEffect(() => {
@@ -179,6 +182,9 @@ export function MediaPreview({
             src={state.path}
             controls
             preload="metadata"
+            onLoadedMetadata={(event) =>
+              onDuration?.(event.currentTarget.duration)
+            }
             onError={() =>
               setState({
                 error: "当前文件无法播放，请在系统中打开或重新扫描素材。",
@@ -188,6 +194,105 @@ export function MediaPreview({
         )
       ) : (
         <Loader size="sm" />
+      )}
+    </Box>
+  );
+}
+
+export function PreviewDetails({
+  id,
+  path,
+  seconds,
+  output = false,
+  kind = "video",
+  available = true,
+}: {
+  id: string;
+  path: string;
+  seconds?: number | null;
+  output?: boolean;
+  kind?: string;
+  available?: boolean;
+}) {
+  const [length, setLength] = useState(seconds);
+  useEffect(() => {
+    setLength(seconds);
+  }, [id, seconds]);
+  return (
+    <div className="preview-layout">
+      {kind !== "subtitle" && available && (
+        <MediaPreview
+          id={id}
+          method={output ? "media.output_preview" : "media.preview"}
+          output={output}
+          image={kind === "image"}
+          onDuration={setLength}
+        />
+      )}
+      <Stack gap="lg" justify="center">
+        {kind === "video" && (
+          <Box>
+            <Text size="sm" c="dimmed">
+              视频时长
+            </Text>
+            <Text mt={4}>
+              {length != null ? `${length.toFixed(1)} 秒` : "—"}
+            </Text>
+          </Box>
+        )}
+        <Box>
+          <Text size="sm" c="dimmed">
+            文件路径
+          </Text>
+          <Text mt={4} size="sm" className="preview-path">
+            {path}
+          </Text>
+        </Box>
+        <Button variant="default" onClick={() => reveal(path).catch(report)}>
+          在文件夹中显示
+        </Button>
+      </Stack>
+    </div>
+  );
+}
+
+export function VideoThumbnail({
+  id,
+  output = false,
+  available = true,
+}: {
+  id?: string;
+  output?: boolean;
+  available?: boolean;
+}) {
+  const [src, setSrc] = useState("");
+  useEffect(() => {
+    let disposed = false;
+    setSrc("");
+    if (id && available)
+      rpc<{ path: string }>(
+        output ? "media.output_thumbnail" : "media.thumbnail",
+        output ? { output_id: id } : { asset_id: id },
+      )
+        .then((result) => {
+          if (!disposed) setSrc(fileUrl(result.path));
+        })
+        .catch(() => {});
+    return () => {
+      disposed = true;
+    };
+  }, [id, output, available]);
+  return (
+    <Box className="asset-thumb">
+      {src ? (
+        <img src={src} alt="" loading="lazy" />
+      ) : (
+        <IconVideo size={32} color="var(--mantine-color-dimmed)" />
+      )}
+      {!available && (
+        <Badge color="gray" className="thumb-badge">
+          离线
+        </Badge>
       )}
     </Box>
   );

@@ -148,6 +148,9 @@ def run(args: argparse.Namespace) -> int:
                  output=str(destination(clips[0]).parent))
     report()
     def tracked(c):
+        callback = getattr(args, "on_start", None)
+        if callback is not None and not STOP.flag:
+            callback(c)
         status = _do(c)
         callback = getattr(args, "on_result", None)
         if callback is not None:

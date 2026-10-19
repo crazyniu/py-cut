@@ -33,21 +33,6 @@ for line in sys.stdin:
             ], 'nextCursor':'next'} if not cursor else {'data':[{'id':'older-catalog'}], 'nextCursor':None}
             if mode == 'loop': result['nextCursor'] = 'next'
         print(json.dumps({'id':req['id'],'result':result}),flush=True)
-    elif req.get('type') == 'control_request':
-        result = {'models':[
-            {'value':'default','resolvedModel':'actual-model','displayName':'Default'},
-            {'value':'actual-model','resolvedModel':'actual-model','displayName':'Actual'},
-            {'value':'other','displayName':'Other'}
-        ], 'account':{'secret':'never expose'}}
-        response = {'subtype':'success','request_id':req['request_id'],'response':result}
-        if mode == 'error': response = {'subtype':'error','request_id':req['request_id'],'error':'private-token'}
-        print(json.dumps({'type':'control_response','response':response}),flush=True)
-    elif req.get('type') == 'get_available_models':
-        print(json.dumps({'id':req['id'],'type':'response','success':True,'data':{'models':[
-            {'provider':'one','id':'same','name':'One','input':['text','image'],'apiKey':'private-token'},
-            {'provider':'two','id':'same','name':'Two','input':['image']},
-            {'provider':'one','id':'text','input':['text']}
-        ]}}),flush=True)
 '''
 
 
@@ -70,18 +55,10 @@ class AgentCatalogTests(unittest.TestCase):
         def spawn(command, **kwargs):
             if provider == 'codex':
                 self.assertIn('features.shell_tool=false', command)
-            elif provider == 'claude':
-                self.assertIn('--safe-mode', command)
-                self.assertEqual(command[command.index('--tools')+1], '')
-                self.assertIn('--strict-mcp-config', command)
-                self.assertIn('--no-session-persistence', command)
-            else:
-                for flag in ('--no-session', '--no-extensions', '--no-tools', '--no-mcp', '--no-context-files'):
-                    self.assertIn(flag, command)
             child = self.real_popen([sys.executable, str(self.script), mode], **kwargs)
             self.children.append(child)
             return child
-        return patch('pycut.desktop.agent_catalog.subprocess.Popen', side_effect=spawn)
+        return patch('pycut.desktop.local_vision.subprocess.Popen', side_effect=spawn)
 
     def test_codex_pagination_modalities_and_legacy_catalog(self):
         with self.server('ok', 'codex'):
@@ -89,20 +66,8 @@ class AgentCatalogTests(unittest.TestCase):
                 {'id':'real-vision','name':'Vision','is_default':True},
                 {'id':'older-catalog','name':'older-catalog','is_default':False}])
 
-    def test_claude_uses_resolved_models_without_returning_account_data(self):
-        with self.server('ok', 'claude'):
-            self.assertEqual(list_models('claude', 'test-agent'), [
-                {'id':'actual-model','name':'Actual','is_default':True},
-                {'id':'other','name':'Other','is_default':False}])
-
-    def test_pi_disambiguates_providers_and_filters_text_only(self):
-        with self.server('ok', 'pi'):
-            self.assertEqual(list_models('pi', 'test-agent'), [
-                {'id':'one/same','name':'One','is_default':False},
-                {'id':'two/same','name':'Two','is_default':False}])
-
     def test_timeouts_errors_and_invalid_pagination_close_children(self):
-        for provider, mode in [('codex','loop'), ('claude','error'), ('pi','timeout')]:
+        for provider, mode in [('codex','loop'), ('codex','timeout')]:
             with self.subTest(provider=provider), self.server(mode, provider):
                 start = time.monotonic()
                 with self.assertRaises((RuntimeError, TimeoutError)) as error:
@@ -112,11 +77,11 @@ class AgentCatalogTests(unittest.TestCase):
 
     def test_missing_unknown_or_interrupted_agents_never_spawn(self):
         with patch('pycut.desktop.agent_catalog._binary', return_value=''), patch(
-                'pycut.desktop.agent_catalog.subprocess.Popen') as spawn:
-            for provider in ('unknown','pi'):
+                'pycut.desktop.local_vision.subprocess.Popen') as spawn:
+            for provider in ('unknown','claude'):
                 with self.assertRaises(ValueError): list_models(provider)
             STOP.flag = True
-            with self.assertRaises(TimeoutError): list_models('claude', 'test-agent')
+            with self.assertRaises(TimeoutError): list_models('codex', 'test-agent')
             spawn.assert_not_called()
 
 

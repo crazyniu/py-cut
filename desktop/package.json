@@ -16,7 +16,6 @@
     "@tabler/icons-react": "^3.35.0",
     "@tauri-apps/api": "^2.10.0",
     "@tauri-apps/plugin-dialog": "^2.6.0",
-    "@xyflow/react": "^12.10.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

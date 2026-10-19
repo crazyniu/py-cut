@@ -310,7 +310,11 @@ def run(args: argparse.Namespace) -> int:
     for directory, sources in groups.items():
         if STOP.flag:
             break
-        items.extend(process_batch(sources, replace(opts, out_dir=directory), workers=args.workers))
+        callbacks = {key: value for key, value in {
+            "on_start": getattr(args, "on_start", None),
+            "on_result": getattr(args, "on_item_result", None),
+        }.items() if value is not None}
+        items.extend(process_batch(sources, replace(opts, out_dir=directory), workers=args.workers, **callbacks))
 
     ok = sum(1 for i in items if i.get("ok"))
     bad = sum(1 for i in items if not i.get("ok") and not i.get("skipped"))

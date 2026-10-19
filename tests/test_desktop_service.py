@@ -1,7 +1,6 @@
-"""Desktop RPC error boundaries, indexed-only media, and directory-only migration."""
+"""Desktop RPC error boundaries and indexed-only media."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -42,9 +41,9 @@ class DesktopServiceTests(unittest.TestCase):
 
     def test_settings_allow_local_agents_and_never_accept_gateway_credentials(self):
         self.assertEqual(self.service.dispatch("settings.get", {})["vision_provider"], "codex")
-        result = self.service.dispatch("settings.save", {"values": {"vision_provider": "pi", "agent_path": "C:/bin/pi.cmd"}})
-        self.assertEqual(result["vision_provider"], "pi")
-        for values in ({"llm_key": "not-stored"}, {"api_key": "not-stored"}, {"vision_provider": "remote"}):
+        result = self.service.dispatch("settings.save", {"values": {"vision_provider": "codex", "vision_model": "selected-model"}})
+        self.assertEqual(result["vision_model"], "selected-model")
+        for values in ({"llm_key": "not-stored"}, {"api_key": "not-stored"}, {"vision_provider": "remote"}, {"vision_provider": "claude"}):
             with self.assertRaises(ValueError):
                 self.service.dispatch("settings.save", {"values": values})
         self.assertNotIn("llm_key", self.service.dispatch("settings.get", {}))
@@ -62,40 +61,20 @@ class DesktopServiceTests(unittest.TestCase):
             self.assertEqual(result, {"path": str(output)})
             preview.assert_called_once_with(output)
 
-    def test_legacy_import_multiple_relative_dirs_without_credentials_or_file_rewrite(self):
-        legacy = self.base / "old-project"
-        legacy.mkdir()
-        for name in ("话术", "片段一", "片段二", "画中画", "前贴", "贴纸"):
-            (legacy / name).mkdir()
-        content = ("PYCUT_REFERENCE_DIR=话术\n"
-                   + "PYCUT_CLIP_DIR='" + json.dumps(["片段一", "片段二"], ensure_ascii=False) + "'\n"
-                   + 'PYCUT_PIP_DIR="画中画"\nPYCUT_INTRO_DIR=前贴\nPYCUT_STICKER_DIR=贴纸\n'
-                   + "PYCUT_OUTPUT_DIR=成片\nPYCUT_MAIN_KEY=private-legacy-value\n"
-                   + "PYCUT_BACKUP_KEY=private-backup-value\nPYCUT_MAIN_MODEL=legacy-model\n")
-        source = legacy / ".env"
-        source.write_text(content)
-        result = self.service.dispatch("settings.import_legacy", {"path": str(source), "project_id": self.project["id"]})
-        self.assertEqual(result["imported_directories"], 6)
-        libraries = {item["role"]: item for item in self.service.dispatch("libraries.list", {"project_id": self.project["id"]})}
-        self.assertEqual(libraries["background"]["roots"], [str(legacy / "片段一"), str(legacy / "片段二")])
-        self.assertEqual(self.service.store.projects()[0]["output_dir"], str(legacy / "成片"))
-        self.assertEqual(source.read_text(), content)
-        self.assertEqual(self.service.store.settings(), {})
-        exposed = json.dumps([result, libraries, self.service.store.projects(), self.service.dispatch("settings.get", {})])
-        self.assertNotIn("private-legacy-value", exposed)
-        self.assertNotIn("private-backup-value", exposed)
-        self.assertNotIn("legacy-model", exposed)
-        self.service.dispatch("settings.import_legacy", {"path": str(source), "project_id": self.project["id"]})
-        self.assertEqual(len(self.service.dispatch("libraries.list", {"project_id": self.project["id"]})[1]["roots"]), 2)
+    def test_output_thumbnails_require_recorded_output(self):
+        with patch.object(self.service.media, "thumbnail_path", return_value="thumb.jpg") as thumbnail:
+            with self.assertRaises(ValueError):
+                self.service.dispatch("media.output_thumbnail", {"output_id": "outside", "path": "/arbitrary.mp4"})
+            thumbnail.assert_not_called()
+            output = self.base / "published.mp4"
+            output.write_bytes(b"published")
+            self.service.store.record_output("known", self.project["id"], "job", str(output), [])
+            self.assertEqual(self.service.dispatch("media.output_thumbnail", {"output_id": "known"}), {"path": "thumb.jpg"})
+            thumbnail.assert_called_once_with(output)
 
-    def test_invalid_legacy_directory_shape_and_missing_project_raise(self):
-        source = self.base / ".env"
-        source.write_text("PYCUT_CLIP_DIR='[42]'\n")
-        with self.assertRaises(ValueError):
-            self.service.dispatch("settings.import_legacy", {"path": str(source), "project_id": self.project["id"]})
-        source.write_text("PYCUT_CLIP_DIR=素材\n")
-        with self.assertRaises(ValueError):
-            self.service.dispatch("settings.import_legacy", {"path": str(source)})
+    def test_legacy_import_is_no_longer_a_desktop_entry(self):
+        with self.assertRaisesRegex(ValueError, "未知桌面接口"):
+            self.service.dispatch("settings.import_legacy", {})
 
     def test_shutdown_rejects_new_requests(self):
         self.assertEqual(self.service.dispatch("app.shutdown", {}), {"closing": True})

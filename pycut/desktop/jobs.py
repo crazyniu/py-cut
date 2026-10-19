@@ -49,6 +49,10 @@ class JobManager:
                     status TEXT NOT NULL,request_json TEXT NOT NULL,stats_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,finished_at TEXT,error TEXT NOT NULL DEFAULT ''
                 );
+                CREATE TABLE IF NOT EXISTS desktop_items (
+                    job_id TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,path TEXT NOT NULL,
+                    status TEXT NOT NULL,PRIMARY KEY(job_id,id)
+                );
                 CREATE TABLE IF NOT EXISTS desktop_logs (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT,job_id TEXT NOT NULL,line TEXT NOT NULL
                 );
@@ -58,6 +62,8 @@ class JobManager:
         with store.connect() as db:
             db.execute("UPDATE desktop_jobs SET status='interrupted',finished_at=?,error=? "
                        "WHERE status IN ('running','cancelling')", (now(), "程序上次退出时任务未完成"))
+            db.execute("UPDATE desktop_items SET status='interrupted' WHERE status IN ('queued','running') "
+                       "AND job_id IN (SELECT id FROM desktop_jobs WHERE status='interrupted')")
             montage_ids = [row[0] for row in db.execute("SELECT id FROM desktop_jobs WHERE kind='montage'")]
         for job_id in montage_ids:
             self._update(job_id, completed=len(self.detail(job_id)["outputs"]))
@@ -176,6 +182,12 @@ class JobManager:
                 db.execute("INSERT INTO desktop_jobs VALUES (?,?,?,?,?,?,?,?,?)",
                            (frozen["id"], frozen["project_id"], frozen["kind"], "queued",
                             json.dumps(frozen, ensure_ascii=False), json.dumps(stats, ensure_ascii=False), now(), None, ""))
+                items = ([(f"{asset['id']}:{variant}", f"{Path(asset['path']).stem} · 第 {variant} 支", asset["path"])
+                          for asset in frozen["references"] for variant in range(1, frozen["fission"] + 1)]
+                         if frozen["kind"] == "montage" else
+                         [(asset["id"], Path(asset["path"]).name, asset["path"]) for asset in frozen["inputs"]])
+                db.executemany("INSERT INTO desktop_items VALUES (?,?,?,?,?)",
+                               [(frozen["id"], *item, "queued") for item in items])
             job = self.detail(frozen["id"])
             self.sink({"event": "job", "job_id": job["id"], "payload": job})
             self._wake.set()
@@ -189,6 +201,8 @@ class JobManager:
             job = dict(row)
             job.update(json.loads(job.pop("stats_json")))
             job.pop("request_json")
+            job["items"] = [dict(item) for item in db.execute(
+                "SELECT id,name,path,status FROM desktop_items WHERE job_id=? ORDER BY rowid", (job_id,))]
             job["logs"] = [r[0] for r in db.execute("SELECT line FROM desktop_logs WHERE job_id=? ORDER BY seq DESC LIMIT 1000", (job_id,))][::-1]
         job["outputs"] = [{**o, "name": Path(o["path"]).name}
                           for o in self.store.outputs(job["project_id"]) if o["job_id"] == job_id]
@@ -204,6 +218,10 @@ class JobManager:
             row = db.execute("SELECT * FROM desktop_jobs WHERE id=?", (job_id,)).fetchone()
             value = {**json.loads(row["stats_json"]), **stats}
             state = status or row["status"]
+            if state not in ACTIVE:
+                pending = state if state in ("cancelled", "interrupted") else "unprocessed"
+                db.execute("UPDATE desktop_items SET status=? WHERE job_id=? AND status IN ('queued','running')",
+                           (pending, job_id))
             db.execute("UPDATE desktop_jobs SET stats_json=?,status=?,error=?,finished_at=? WHERE id=?",
                        (json.dumps(value, ensure_ascii=False), state, error if error is not None else row["error"],
                         now() if state not in ACTIVE else None, job_id))
@@ -236,7 +254,14 @@ class JobManager:
         if line.startswith("@pycut-desktop "):
             event = json.loads(line[len("@pycut-desktop "):])
             data = event["payload"]
-            if event["event"] == "counts":
+            if event["event"] == "item":
+                if data["status"] not in ("running", "completed", "review", "failed", "skipped", "cancelled"):
+                    raise ValueError("未知视频状态")
+                with self.store.connect() as db:
+                    db.execute("UPDATE desktop_items SET status=? WHERE job_id=? AND id=?",
+                               (data["status"], job_id, data["id"]))
+                self.sink({"event": "job", "job_id": job_id, "payload": self.detail(job_id)})
+            elif event["event"] == "counts":
                 self._update(job_id, **data)
             elif event["event"] == "result":
                 self._update(job_id, **data)

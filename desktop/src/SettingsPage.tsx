@@ -1,11 +1,9 @@
 import { useEffect, useState } from "react";
 import {
   Alert,
-  Badge,
-  Box,
   Button,
-  Divider,
   Group,
+  Loader,
   Paper,
   Select,
   Stack,
@@ -15,15 +13,9 @@ import {
 } from "@mantine/core";
 import { IconFolderOpen, IconRefresh } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
-import {
-  chooseDirectory,
-  chooseFile,
-  message,
-  rpc,
-  type Agent,
-  type Project,
-} from "./api";
+import { chooseDirectory, message, rpc, type Agent, type Project } from "./api";
 import { PageHeading, report } from "./common";
+type Model = { id: string; name: string; is_default?: boolean };
 export default function SettingsPage({
   project,
   onProjectChange,
@@ -34,32 +26,81 @@ export default function SettingsPage({
   const [name, setName] = useState(project.name);
   const [output, setOutput] = useState(project.output_dir || "");
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [values, setValues] = useState<Record<string, string>>({
-    vision_provider: "codex",
-    agent_path: "",
-    vision_model: "",
-  });
+  const [provider, setProvider] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(null);
+  const [models, setModels] = useState<Model[]>([]);
+  const [saved, setSaved] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
+  const [modelError, setModelError] = useState("");
   const [detecting, setDetecting] = useState(false);
+  const [loadingModels, setLoadingModels] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [importing, setImporting] = useState(false);
+  const [revision, setRevision] = useState(0);
   useEffect(() => {
     setName(project.name);
     setOutput(project.output_dir || "");
   }, [project.name, project.output_dir]);
-  function detect() {
-    setDetecting(true);
-    rpc<Agent[]>("agents.detect")
-      .then(setAgents)
-      .catch((error) => setError(message(error)))
-      .finally(() => setDetecting(false));
-  }
   useEffect(() => {
-    detect();
-    rpc<Record<string, string>>("settings.get")
-      .then((result) => setValues((current) => ({ ...current, ...result })))
-      .catch((error) => setError(message(error)));
-  }, []);
+    let disposed = false;
+    setDetecting(true);
+    Promise.all([
+      rpc<Agent[]>("agents.detect"),
+      rpc<Record<string, string>>("settings.get"),
+    ])
+      .then(([items, values]) => {
+        if (disposed) return;
+        const installed = items.filter((item) => item.installed);
+        setAgents(installed);
+        setSaved(values);
+        setProvider(
+          installed.some((item) => item.id === values.vision_provider)
+            ? values.vision_provider
+            : installed[0]?.id || null,
+        );
+        setError("");
+      })
+      .catch((error) => {
+        if (!disposed) setError(message(error));
+      })
+      .finally(() => {
+        if (!disposed) setDetecting(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [revision]);
+  useEffect(() => {
+    let disposed = false;
+    setModels([]);
+    setModel(null);
+    setModelError("");
+    if (!provider) return;
+    setLoadingModels(true);
+    rpc<Model[]>("agents.models", { provider })
+      .then((items) => {
+        if (disposed) return;
+        setModels(items);
+        setModel(
+          provider === saved.vision_provider &&
+            items.some((item) => item.id === saved.vision_model)
+            ? saved.vision_model
+            : null,
+        );
+        if (!items.length)
+          setModelError(
+            "Codex 没有返回可用模型，请检查登录状态后重试。",
+          );
+      })
+      .catch((error) => {
+        if (!disposed) setModelError(message(error));
+      })
+      .finally(() => {
+        if (!disposed) setLoadingModels(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [provider, saved, revision]);
   async function saveProject() {
     setSaving(true);
     try {
@@ -77,90 +118,76 @@ export default function SettingsPage({
     }
   }
   async function saveAgent() {
+    if (!provider || !model) return;
     setSaving(true);
     try {
+      const values = {
+        vision_provider: provider,
+        vision_model: model,
+        agent_path: "",
+      };
       await rpc("settings.save", { values });
-      notifications.show({ message: "识别设置已保存", color: "teal" });
-      detect();
+      setSaved(values);
+      notifications.show({ message: "识别工具和模型已保存", color: "teal" });
     } catch (error) {
       report(error);
     } finally {
       setSaving(false);
     }
   }
-  async function importLegacy() {
-    setImporting(true);
-    try {
-      const path = await chooseFile("选择旧版 .env 配置文件");
-      if (!path) return;
-      const result = await rpc<unknown>("settings.import_legacy", {
-        path,
-        project_id: project.id,
-      });
-      notifications.show({
-        title: "旧配置导入完成",
-        message:
-          typeof result === "object" && result !== null && "message" in result
-            ? String(result.message)
-            : "目录配置已导入，请到素材库检查关联目录。",
-        color: "teal",
-      });
-      onProjectChange();
-    } catch (error) {
-      report(error);
-    } finally {
-      setImporting(false);
-    }
-  }
+  const agent = agents.find((item) => item.id === provider);
   return (
     <>
       <PageHeading
         title="设置"
-        description="管理当前项目和本机识别工具。处理算法与默认参数沿用现有程序。"
+        description="设置项目名称、保存位置和Codex 设置。"
       />
       {error && (
-        <Alert color="red" mb="md" withCloseButton onClose={() => setError("")}>
+        <Alert color="red" mb="md">
           {error}
         </Alert>
       )}
-      <Stack gap="lg" maw={840}>
+      <Stack gap="lg">
         <Paper withBorder p="lg">
-          <Title order={3} size="h5" mb="lg">
-            项目设置
-          </Title>
           <Stack>
-            <TextInput
-              label="产品项目名称"
-              value={name}
-              onChange={(event) => setName(event.currentTarget.value)}
-            />
-            <TextInput
-              label="默认成片输出目录"
-              value={output}
-              onChange={(event) => setOutput(event.currentTarget.value)}
-              rightSection={
-                <Button
-                  variant="subtle"
-                  size="compact-xs"
-                  aria-label="选择默认输出目录"
-                  onClick={async () => {
-                    try {
-                      const path = await chooseDirectory();
-                      if (path) setOutput(path);
-                    } catch (error) {
-                      report(error);
-                    }
-                  }}
-                >
-                  <IconFolderOpen size={16} />
-                </Button>
-              }
-            />
-            <Group justify="flex-end">
+            <Title order={3} size="h5">
+              项目设置
+            </Title>
+            <Group align="flex-end" gap="md">
+              <TextInput
+                w={220}
+                label="项目名称"
+                value={name}
+                onChange={(event) => setName(event.currentTarget.value)}
+              />
+              <TextInput
+                w={380}
+                label="默认成片输出目录"
+                value={output}
+                onChange={(event) => setOutput(event.currentTarget.value)}
+                rightSection={
+                  <Button
+                    variant="subtle"
+                    size="compact-xs"
+                    aria-label="选择默认输出目录"
+                    onClick={async () => {
+                      try {
+                        const path = await chooseDirectory();
+                        if (path) setOutput(path);
+                      } catch (error) {
+                        report(error);
+                      }
+                    }}
+                  >
+                    <IconFolderOpen size={16} />
+                  </Button>
+                }
+              />
+
               <Button
                 onClick={saveProject}
-                loading={saving}
                 disabled={!name.trim()}
+                loading={saving}
               >
                 保存项目设置
               </Button>
@@ -168,118 +195,68 @@ export default function SettingsPage({
           </Stack>
         </Paper>
         <Paper withBorder p="lg">
-          <Group justify="space-between" mb="lg">
-            <Title order={3} size="h5">
-              本地 Agent 识别
-            </Title>
-            <Button
-              size="xs"
-              variant="default"
-              leftSection={<IconRefresh size={14} />}
-              onClick={detect}
-              loading={detecting}
-            >
-              重新检测
-            </Button>
-          </Group>
-          <Text size="sm" c="dimmed" mb="lg">
-            使用本机已安装并登录的 Agent 识别字幕。无需在 pycut 配置 LLM 网关或
-            API Key。
-          </Text>
           <Stack>
-            {agents.map((agent) => (
-              <Box key={agent.id}>
-                <Group justify="space-between">
-                  <Text size="sm" fw={500}>
-                    {agent.name}
-                  </Text>
-                  <Badge
-                    variant="light"
-                    color={
-                      agent.available && agent.supports_vision ? "teal" : "gray"
-                    }
-                  >
-                    {agent.available && agent.supports_vision
-                      ? "可用"
-                      : agent.installed
-                        ? "需检查"
-                        : "未安装"}
-                  </Badge>
-                </Group>
-                <Text size="xs" c="dimmed" mt={5}>
-                  {agent.detail ||
-                    (agent.installed
-                      ? "已安装，登录和视觉能力请以检测结果为准。"
-                      : "未检测到可执行程序。")}
-                </Text>
-                {agent.path && (
-                  <Text
-                    size="xs"
-                    c="dimmed"
-                    mt={3}
-                    style={{ overflowWrap: "anywhere" }}
-                  >
-                    {agent.path}
-                  </Text>
-                )}
-              </Box>
-            ))}
-            {!agents.length && !detecting && (
-              <Text size="sm" c="dimmed">
-                尚未检测到 Agent，请安装并完成登录后重试。
-              </Text>
-            )}
-            <Divider />
-            <Select
-              label="字幕识别工具"
-              value={values.vision_provider}
-              onChange={(value) =>
-                setValues((current) => ({
-                  ...current,
-                  vision_provider: value || "codex",
-                }))
-              }
-              data={[
-                { value: "codex", label: "Codex" },
-                { value: "claude", label: "Claude" },
-                { value: "pi", label: "Pi" },
-              ]}
-            />
-            <TextInput
-              label="自定义可执行文件路径"
-              description="通常留空，使用自动检测路径"
-              value={values.agent_path || ""}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                setValues((current) => ({ ...current, agent_path: value }));
-              }}
-            />
-            <TextInput
-              label="模型名称（可选）"
-              description="留空使用本地 Agent 默认模型"
-              value={values.vision_model || ""}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                setValues((current) => ({ ...current, vision_model: value }));
-              }}
-            />
-            <Group justify="flex-end">
-              <Button onClick={saveAgent} loading={saving}>
-                保存识别设置
+            <Group justify="space-between">
+              <Title order={3} size="h5">
+                Codex 设置
+              </Title>
+              <Button
+                variant="default"
+                size="xs"
+                loading={detecting}
+                leftSection={<IconRefresh size={14} />}
+                onClick={() => setRevision((value) => value + 1)}
+              >
+                重新检测
               </Button>
             </Group>
+            <Text size="sm" c="dimmed">
+              Codex 为本机智能功能提供服务。请选择要使用的模型。
+            </Text>
+            <Group align="flex-end" gap="md">
+              <Select
+                w={180}
+                label="智能工具"
+                placeholder={detecting ? "正在检测…" : "未检测到 Codex"}
+                data={agents.map((item) => ({
+                  value: item.id,
+                  label: item.name,
+                }))}
+                value={provider}
+                onChange={setProvider}
+                allowDeselect={false}
+                disabled={detecting}
+              />
+              <Select
+                w={300}
+                label="使用模型"
+                placeholder={loadingModels ? "正在读取模型…" : "请选择模型"}
+                data={models.map((item) => ({
+                  value: item.id,
+                  label: item.name,
+                }))}
+                value={model}
+                onChange={setModel}
+                allowDeselect={false}
+                searchable
+                disabled={loadingModels || !provider}
+                rightSection={loadingModels ? <Loader size={14} /> : undefined}
+              />
+              <Button
+                onClick={saveAgent}
+                disabled={!model || !agent?.available}
+                loading={saving}
+              >
+                保存 Codex 设置
+              </Button>
+            </Group>
+            {modelError && <Alert color="orange">{modelError}</Alert>}
+            {agent?.supports_vision && !agent.available && (
+              <Text size="sm" c="orange">
+                请先登录 {agent.name}，然后重新检测。
+              </Text>
+            )}
           </Stack>
-        </Paper>
-        <Paper withBorder p="lg">
-          <Title order={3} size="h5" mb="sm">
-            导入已有配置
-          </Title>
-          <Text size="sm" c="dimmed" mb="md">
-            从本机旧版 .env 导入素材目录和适用设置。素材文件保留在原位置。
-          </Text>
-          <Button variant="default" loading={importing} onClick={importLegacy}>
-            导入旧版配置
-          </Button>
         </Paper>
       </Stack>
     </>

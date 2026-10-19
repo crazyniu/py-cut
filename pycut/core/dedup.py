@@ -863,7 +863,7 @@ def _check_only(item: _Report, src: Path, dst: Path, opts: DedupOptions,
 
 
 def process_batch(srcs: list[Path], opts: DedupOptions,
-                  workers: int = 0) -> list[dict]:
+                  workers: int = 0, *, on_start=None, on_result=None) -> list[dict]:
     """Process concurrently, isolate per-file failures, and return rows in input order."""
     srcs = [Path(s) for s in srcs]
     if not srcs:
@@ -893,6 +893,8 @@ def process_batch(srcs: list[Path], opts: DedupOptions,
                     "psnr": 0.0, "dur_src": 0.0, "dur_dst": 0.0, "seconds": 0.0,
                     "gates": {}, "error": "已中断", "at": datetime.now().isoformat(
                         timespec="seconds")}
+        if on_start is not None:
+            on_start(s)
         dst = resolve_output_path(s, opts)
         log(f"  [{idx + 1}/{len(srcs)}] {s.name} -> {dst.name}")
         try:
@@ -914,6 +916,9 @@ def process_batch(srcs: list[Path], opts: DedupOptions,
             error=f"输出路径冲突（多个源文件会写入同一位置）: {dst}",
         ).to_dict()
     remaining = [(i, s) for i, s in enumerate(srcs) if i not in collided]
+    if on_result is not None:
+        for i in collided:
+            on_result(out[i])
     if not remaining:
         return out
     completed = len(collided)
@@ -930,6 +935,8 @@ def process_batch(srcs: list[Path], opts: DedupOptions,
                           "psnr": 0.0, "dur_src": 0.0, "dur_dst": 0.0,
                           "seconds": 0.0, "gates": {},
                           "error": f"{type(e).__name__}: {e}"}
+            if on_result is not None:
+                on_result(out[i])
             completed += 1
             good = sum(bool(item.get("ok")) for item in out if item)
             failed = sum(not item.get("ok") and not item.get("skipped") for item in out if item)

@@ -259,7 +259,7 @@ async fn rpc(
     }?;
     if matches!(
         method.as_str(),
-        "media.thumbnail" | "media.preview" | "media.output_preview"
+        "media.thumbnail" | "media.preview" | "media.output_preview" | "media.output_thumbnail"
     ) {
         if let Some(path) = result.get("path").and_then(Value::as_str) {
             app.asset_protocol_scope()

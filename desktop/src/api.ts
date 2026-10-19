@@ -98,7 +98,15 @@ export interface Use {
   [key: string]: unknown;
 }
 export type JobKind = "montage" | "cover" | "dedup";
+export interface TaskItem {
+  id: string;
+  name: string;
+  path: string;
+  status: string;
+}
 export interface Job {
+  items?: TaskItem[];
+  skipped?: number;
   id: string;
   project_id: string;
   kind: JobKind;
@@ -191,7 +199,8 @@ export function duration(seconds: number | null | undefined): string {
 export const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
-export const dateTime = (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false });
+export const dateTime = (value: string) =>
+  new Date(value).toLocaleString("zh-CN", { hour12: false });
 
 export function useSummary(use: Use): string {
   const parts = [

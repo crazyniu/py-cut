@@ -85,8 +85,12 @@ def check_snapshot(request):
             raise ValueError(f"素材在任务创建后发生变化，请刷新素材库后重新提交：{Path(asset['path']).name}")
 
 
+_emit_lock = threading.Lock()
+
+
 def emit(event, payload):
-    print("@pycut-desktop " + json.dumps({"event": event, "payload": payload}, ensure_ascii=False), flush=True)
+    with _emit_lock:
+        print("@pycut-desktop " + json.dumps({"event": event, "payload": payload}, ensure_ascii=False), flush=True)
 
 
 def _atomic_json(path, value):
@@ -122,6 +126,10 @@ def recover_publications(store, data_dir, job_id=None):
             continue
         store.record_output(record["id"], record["project_id"], record["job_id"],
                             record["path"], record["uses"])
+        if record.get("item_id"):
+            with store.connect() as db:
+                db.execute("UPDATE desktop_items SET status='completed' WHERE job_id=? AND id=?",
+                           (record["job_id"], record["item_id"]))
         path.unlink()
         recovered.append(record)
     return recovered
@@ -167,6 +175,8 @@ def _montage(request, data_dir, store):
             for variant in range(1, count + 1):
                 check_stop()
                 output_id = uuid4().hex
+                item_id = f"{reference['id']}:{variant}"
+                emit("item", {"id": item_id, "status": "running"})
                 def before_publish(final, staged, uses):
                     check_snapshot(request)
                     versions = {item["path"]: item["signature"] for item in request["snapshot"]}
@@ -175,7 +185,7 @@ def _montage(request, data_dir, store):
                         for use in uses]
                     _atomic_json(Path(data_dir) / "publications" / (output_id + ".json"),
                                  {"id": output_id, "job_id": request["id"],
-                                  "project_id": request["project_id"], "path": str(final.resolve()),
+                                  "project_id": request["project_id"], "item_id": item_id, "path": str(final.resolve()),
                                   "identity": publication_identity(staged), "uses": uses})
                 opts = MontageOptions(
                     prepared=prepared, material_files=material_files, before_publish=before_publish,
@@ -202,11 +212,13 @@ def _montage(request, data_dir, store):
                 if result.get("final") and not result.get("error"):
                     recover_publications(store, data_dir, request["id"])
                     completed += 1
+                    emit("item", {"id": item_id, "status": "completed"})
                     emit("output", {"path": result["final"], "id": output_id})
                 elif result.get("cancelled"):
                     check_stop()
                 else:
                     failed += 1
+                    emit("item", {"id": item_id, "status": "failed"})
                     emit("failure", {"message": result.get("error", "成片未生成")})
                 for key in ("background", "pip", "stickers", "temporary_dirs"):
                     if key in prepared:
@@ -245,9 +257,16 @@ def run_job(request, data_dir, store):
     args.input_roots = request["input_roots"]
     completed = failed = review = skipped = 0
     lock = threading.Lock()
+    identifiers = {str(Path(asset["path"])): asset["id"] for asset in request["inputs"]}
+    def started(source):
+        emit("item", {"id": identifiers[str(source)], "status": "running"})
+    args.on_start = started
     def record(source, target, status):
         nonlocal completed, failed, review, skipped
         with lock:
+            if STOP.flag:
+                emit("item", {"id": identifiers[str(source)], "status": "cancelled"})
+                return
             if status == "fail":
                 failed += 1
             elif status == "review":
@@ -258,6 +277,8 @@ def run_job(request, data_dir, store):
                 completed += 1
             if status not in ("fail", "skip", "dryrun") and Path(target).is_file() and not STOP.flag:
                 store.record_output(uuid4().hex, request["project_id"], request["id"], str(target), [])
+            item_status = ("cancelled" if STOP.flag else {"fail": "failed", "review": "review", "skip": "skipped"}.get(status, "completed"))
+            emit("item", {"id": identifiers[str(source)], "status": item_status})
             emit("counts", {"completed": completed, "failed": failed, "review": review, "skipped": skipped})
     if kind == "cover":
         from .local_vision import make_local_vision
@@ -273,13 +294,12 @@ def run_job(request, data_dir, store):
             client.close()
     else:
         from ..commands.dedup_cmd import run
-        def results(items):
-            for item in items:
-                status = ("skip" if item.get("skipped") else "covered" if item.get("ok")
+        def result(item):
+            status = ("skip" if item.get("skipped") else "covered" if item.get("ok")
                           else "review" if not item.get("error") and Path(item.get("dst", "")).is_file()
                           else "fail")
-                record(item["src"], item.get("dst", ""), status)
-        args.on_results = results
+            record(item["src"], item.get("dst", ""), status)
+        args.on_item_result = result
         code = run(args)
     status = ("cancelled" if STOP.flag or code == 130 else
               "partial" if failed and completed else "failed" if failed or (code and not review)

@@ -5,7 +5,6 @@ provide roots; no shell commands, credentials, or arbitrary methods are accepted
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import threading
 
@@ -65,10 +64,12 @@ class Service:
             return {"path": self.media.thumbnail(p["asset_id"])}
         if method == "media.preview":
             return {"path": self.media.preview(p["asset_id"])}
-        if method == "media.output_preview":
+        if method in ("media.output_preview", "media.output_thumbnail"):
+
             with self.store.connect() as db:
                 output = self.store.require(db, "outputs", p["output_id"])
-                return {"path": self.media.preview_path(Path(output["path"]))}
+                render = self.media.thumbnail_path if method == "media.output_thumbnail" else self.media.preview_path
+                return {"path": render(Path(output["path"]))}
         if method == "jobs.options":
             return option_specs(p["kind"])
         if method == "jobs.submit":
@@ -84,6 +85,9 @@ class Service:
         if method == "agents.detect":
             from .local_vision import detect_agents
             return detect_agents()
+        if method == "agents.models":
+            from .agent_catalog import list_models
+            return list_models(p.get("provider", "codex"))
         if method == "settings.get":
             return {"vision_provider": "codex", "agent_path": "", "vision_model": "", **self.store.settings()}
         if method == "workbench.get":
@@ -101,59 +105,13 @@ class Service:
             values = p["values"]
             if set(values) - {"vision_provider", "agent_path", "vision_model"}:
                 raise ValueError("不支持的设置项")
-            if values.get("vision_provider", "codex") not in ("codex", "claude", "pi"):
+            if values.get("vision_provider", "codex") != "codex":
                 raise ValueError("未知本地 Agent")
             return self.store.save_settings(values)
-        if method == "settings.import_legacy":
-            return self._import_legacy(p)
         if method == "app.shutdown":
             self.closing.set()
             return {"closing": True}
         raise ValueError("未知桌面接口")
-
-    def _import_legacy(self, params):
-        """Import directory settings only; local Agent auth replaces gateway setup."""
-        from .. import config, settings
-        source = Path(params.get("path") or config.PROJECT_ROOT / ".env").expanduser()
-        if not source.is_file():
-            raise ValueError("请选择旧程序的 .env 配置文件")
-        values = {}
-        for raw in source.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            value = value.strip()
-            if value.startswith('"'):
-                try:
-                    value = json.loads(value)
-                except ValueError:
-                    value = value.strip('"')
-            else:
-                value = value.strip("'")
-            values[key.strip()] = value
-        project_id = params.get("project_id")
-        if not project_id:
-            raise ValueError("请先选择要导入的项目")
-        mapping = {"reference": "PYCUT_REFERENCE_DIR", "background": "PYCUT_CLIP_DIR",
-                   "pip": "PYCUT_PIP_DIR", "intro": "PYCUT_INTRO_DIR", "sticker": "PYCUT_STICKER_DIR"}
-        imported = 0
-        for library in self.store.libraries(project_id):
-            value = values.get(mapping[library["role"]], "")
-            if value:
-                paths = json.loads(value) if value.startswith("[") else [value]
-                if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
-                    raise ValueError("旧配置中的目录格式无效")
-                roots = settings.directories([str(path if path.is_absolute() else source.parent / path)
-                                              for raw in paths if raw.strip()
-                                              for path in [Path(raw).expanduser()]])
-                self.store.add_roots(library["id"], [str(root) for root in roots])
-                imported += len(roots)
-        output = values.get("PYCUT_OUTPUT_DIR", "")
-        if output:
-            path = Path(output).expanduser()
-            self.store.update_project(project_id, output_dir=str(path if path.is_absolute() else source.parent / path))
-        return {"imported_directories": imported, "message": "已导入目录配置；识别复用本地 Agent 登录，无需导入密钥"}
 
     def close(self):
         self.closing.set()

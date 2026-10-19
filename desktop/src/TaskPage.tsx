@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDebouncedCallback } from "@mantine/hooks";
 import {
   Alert,
-  Badge,
   Box,
   Button,
   Checkbox,
@@ -13,7 +12,6 @@ import {
   MultiSelect,
   NumberInput,
   Paper,
-  Progress,
   Select,
   Stack,
   Text,
@@ -23,11 +21,9 @@ import {
   IconArrowRight,
   IconFolderOpen,
   IconPlayerPlay,
-  IconRefresh,
 } from "@tabler/icons-react";
 import {
   chooseDirectory,
-  chooseFile,
   kinds,
   message,
   rpc,
@@ -38,19 +34,20 @@ import {
   type Library,
   type Project,
 } from "./api";
-import { PageHeading, report, Status } from "./common";
-import AdvancedOptions from "./AdvancedOptions";
-import Workflow from "./Workflow";
+import { PageHeading, report } from "./common";
+import TaskProgress from "./TaskProgress";
 export default function TaskPage({
   project,
   kind,
   revision,
   onJobs,
+  onSettings,
 }: {
   project: Project;
   kind: JobKind;
   revision: number;
   onJobs: () => void;
+  onSettings: () => void;
 }) {
   const [libraries, setLibraries] = useState<Library[]>([]);
   const [source, setSource] = useState<string | null>(null);
@@ -67,14 +64,15 @@ export default function TaskPage({
   const [output, setOutput] = useState(
     kind === "montage" ? project.output_dir || "" : "",
   );
-  const [options, setOptions] = useState<Record<string, unknown>>({});
   const [subtitles, setSubtitles] = useState(true);
   const [audio, setAudio] = useState(true);
-  const [selectedNode, setSelectedNode] = useState("reference");
-  const [reset, setReset] = useState(0);
-  const [positions, setPositions] = useState<
-    Record<string, { x: number; y: number }>
-  >({});
+  const [visionReady, setVisionReady] = useState(kind !== "cover");
+  useEffect(() => {
+    if (kind === "cover")
+      rpc<Record<string, string>>("settings.get")
+        .then((value) => setVisionReady(Boolean(value.vision_model)))
+        .catch(report);
+  }, [kind]);
   const [ready, setReady] = useState(false);
   const skipFirstSave = useRef(true);
   const saveWorkbench = useDebouncedCallback(
@@ -87,7 +85,7 @@ export default function TaskPage({
     },
     { delay: 400, flushOnUnmount: true },
   );
-  const [confirm, setConfirm] = useState(false);
+  const [configure, setConfigure] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [job, setJob] = useState<Job>();
   const [error, setError] = useState("");
@@ -102,9 +100,18 @@ export default function TaskPage({
     ])
       .then(async ([items, saved]) => {
         const selected = Array.isArray(saved.selection)
-          ? saved.selection.filter((value): value is string => typeof value === "string") : [];
-        const restored = await Promise.all(selected.map((asset_id) =>
-          rpc<Asset>("assets.detail", { asset_id, project_id: project.id }).catch(() => null)));
+          ? saved.selection.filter(
+              (value): value is string => typeof value === "string",
+            )
+          : [];
+        const restored = await Promise.all(
+          selected.map((asset_id) =>
+            rpc<Asset>("assets.detail", {
+              asset_id,
+              project_id: project.id,
+            }).catch(() => null),
+          ),
+        );
         if (disposed) return;
         setAssets(restored.filter((item): item is Asset => item !== null));
         setSelection(selected);
@@ -130,18 +137,13 @@ export default function TaskPage({
         setIntro(existing(saved.intro_library_id));
         setSticker(existing(saved.sticker_library_id));
         if (typeof saved.fission === "number") setCount(saved.fission);
-        if (typeof saved.out_dir === "string" && (kind !== "montage" || saved.out_dir.trim()))
+        if (
+          typeof saved.out_dir === "string" &&
+          (kind !== "montage" || saved.out_dir.trim())
+        )
           setOutput(saved.out_dir);
-        if (saved.options && typeof saved.options === "object")
-          setOptions(saved.options as Record<string, unknown>);
         if (typeof saved.subtitles === "boolean") setSubtitles(saved.subtitles);
         if (typeof saved.audio === "boolean") setAudio(saved.audio);
-        if (typeof saved.selected_node === "string")
-          setSelectedNode(saved.selected_node);
-        if (saved.positions && typeof saved.positions === "object")
-          setPositions(
-            saved.positions as Record<string, { x: number; y: number }>,
-          );
         setReady(true);
       })
       .catch((error) => {
@@ -166,11 +168,8 @@ export default function TaskPage({
       sticker_library_id: sticker,
       fission: Number(count) || 1,
       out_dir: output,
-      options,
       subtitles,
       audio,
-      selected_node: selectedNode,
-      positions,
     });
   }, [
     ready,
@@ -182,11 +181,8 @@ export default function TaskPage({
     sticker,
     count,
     output,
-    options,
     subtitles,
     audio,
-    selectedNode,
-    positions,
     saveWorkbench,
   ]);
   useEffect(() => {
@@ -242,33 +238,20 @@ export default function TaskPage({
       .filter((item) => !role || item.role === role)
       .map((item) => ({
         value: item.id,
-        label: `${item.name} · ${item.active_count} 个`,
+        label: item.name,
       }));
   const total = selection.length * Number(count || 0);
   const invalidCount =
     !Number.isInteger(Number(count)) || Number(count) < 1 || Number(count) > 99;
   const canSubmit =
     ready &&
+    visionReady &&
+    Boolean(source) &&
     selection.length > 0 &&
     (kind !== "montage" ||
       Boolean(background && output.trim() && !invalidCount));
   const selectedAssets = assets.filter((item) => selection.includes(item.id));
   const offline = selectedAssets.filter((item) => !item.available);
-  const enabled = useMemo(
-    () => ({ pip: !!pip, intro: !!intro, sticker: !!sticker }),
-    [pip, intro, sticker],
-  );
-  const counts = useMemo(
-    () => ({
-      reference: selection.length,
-      background: libraries.find((item) => item.id === background)
-        ?.active_count,
-      pip: libraries.find((item) => item.id === pip)?.active_count,
-      intro: libraries.find((item) => item.id === intro)?.active_count,
-      sticker: libraries.find((item) => item.id === sticker)?.active_count,
-    }),
-    [selection.length, libraries, background, pip, intro, sticker],
-  );
   async function submit() {
     setSubmitting(true);
     try {
@@ -283,7 +266,6 @@ export default function TaskPage({
         intro_library_id: intro,
         sticker_library_id: sticker,
         options: {
-          ...options,
           ...(output.trim() ? { out_dir: output.trim() } : {}),
           ...(kind === "montage"
             ? {
@@ -298,7 +280,7 @@ export default function TaskPage({
         },
       });
       setJob(result);
-      setConfirm(false);
+      setConfigure(false);
     } catch (error) {
       report(error);
     } finally {
@@ -308,6 +290,7 @@ export default function TaskPage({
   const sourceControl = (
     <>
       <Select
+        w={200}
         label={kind === "montage" ? "话术素材库" : "待处理素材库"}
         placeholder="请选择素材库"
         data={libraryData(kind === "montage" ? "reference" : undefined)}
@@ -323,6 +306,7 @@ export default function TaskPage({
         allowDeselect={false}
       />
       <MultiSelect
+        w={280}
         label={kind === "montage" ? "话术视频" : "处理视频"}
         placeholder="搜索并多选视频"
         data={assets
@@ -357,8 +341,8 @@ export default function TaskPage({
       )}
       {kind === "montage" && (
         <NumberInput
+          w={160}
           label="每个话术生成数量"
-          description="同一数量应用于全部选中话术"
           min={1}
           max={99}
           allowDecimal={false}
@@ -372,6 +356,7 @@ export default function TaskPage({
   const outputControl = (
     <>
       <TextInput
+        w={360}
         label="成片输出目录"
         placeholder={
           kind === "montage" ? "请选择输出目录" : "留空时保存到源目录同级"
@@ -404,31 +389,103 @@ export default function TaskPage({
       )}
     </>
   );
+  const taskForm = (
+    <Stack gap="md">
+      {kind === "cover" && !visionReady && (
+        <Alert color="yellow">
+          先选择字幕识别工具和模型。
+          <Button variant="subtle" size="xs" onClick={onSettings}>
+            前往设置
+          </Button>
+        </Alert>
+      )}
+      <Group align="flex-end" gap="md">
+        {sourceControl}
+      </Group>
+      {kind === "montage" && (
+        <>
+          <Divider />
+          <Group align="flex-end" gap="md">
+            <Select
+              w={170}
+              label="背景素材库"
+              placeholder="请选择背景素材库"
+              data={libraryData("background")}
+              value={background}
+              onChange={setBackground}
+              allowDeselect={false}
+            />
+            <Select
+              w={170}
+              label="画中画素材库"
+              placeholder="不使用画中画"
+              clearable
+              data={libraryData("pip")}
+              value={pip}
+              onChange={setPip}
+            />
+            <Select
+              w={170}
+              label="前贴素材库"
+              placeholder="不添加前贴"
+              clearable
+              data={libraryData("intro")}
+              value={intro}
+              onChange={setIntro}
+            />
+            <Select
+              w={170}
+              label="贴纸素材库"
+              placeholder="不添加贴纸"
+              clearable
+              data={libraryData("sticker")}
+              value={sticker}
+              onChange={setSticker}
+            />
+          </Group>
+          <Group gap="xl">
+            <Checkbox
+              label="添加话术字幕"
+              checked={subtitles}
+              onChange={(event) => setSubtitles(event.currentTarget.checked)}
+            />
+            <Checkbox
+              label="保留话术原声"
+              checked={audio}
+              onChange={(event) => setAudio(event.currentTarget.checked)}
+            />
+          </Group>
+        </>
+      )}
+      <Divider />
+      <Group align="flex-end" gap="lg">
+        {outputControl}
+        <Text size="sm" c="dimmed">
+          {kind === "montage"
+            ? `已选 ${selection.length} 个话术，共生成 ${total} 支成片`
+            : `已选 ${selection.length} 个视频`}
+        </Text>
+        <Button
+          leftSection={<IconPlayerPlay size={16} />}
+          disabled={!canSubmit || offline.length > 0}
+          onClick={submit}
+          loading={submitting}
+        >
+          开始{kinds[kind]}
+        </Button>
+      </Group>
+    </Stack>
+  );
   return (
     <>
       <PageHeading
-        title={kind === "montage" ? "混剪工作台" : kinds[kind]}
+        title={kinds[kind]}
         description={
           kind === "montage"
-            ? "选择话术与素材库，确认数量后生成成片。流程节点可拖动，处理顺序固定。"
+            ? "选择话术和素材，生成属于当前项目的成片。"
             : kind === "cover"
-              ? "使用本地 Agent 检测字幕，按现有毛玻璃覆盖流程处理并复检。"
-              : "复用现有去重处理与质量自检，单独保存结果。"
-        }
-        actions={
-          kind === "montage" ? (
-            <Button
-              size="xs"
-              variant="default"
-              leftSection={<IconRefresh size={14} />}
-              onClick={() => {
-                setPositions({});
-                setReset((value) => value + 1);
-              }}
-            >
-              整理画布
-            </Button>
-          ) : undefined
+              ? "自动查找并遮盖视频字幕，完成后检查效果。"
+              : "调整视频画面，另存处理结果。"
         }
       />
       {error && (
@@ -437,288 +494,53 @@ export default function TaskPage({
         </Alert>
       )}
       {job && (
-        <Paper withBorder p="md" mb="md">
-          <Group justify="space-between" mb="sm">
-            <Group gap="sm">
-              <Text size="sm" fw={600}>
-                {kinds[job.kind]}任务
-              </Text>
-              <Status value={job.status} />
-            </Group>
+        <>
+          <Group justify="flex-end" mb="md">
+            {!terminal(job) && (
+              <Button
+                variant="light"
+                color="red"
+                disabled={job.status === "cancelling"}
+                onClick={async () => {
+                  try {
+                    setJob(await rpc<Job>("jobs.cancel", { job_id: job.id }));
+                  } catch (error) {
+                    report(error);
+                  }
+                }}
+              >
+                停止处理
+              </Button>
+            )}
+            <Button variant="default" onClick={() => setConfigure(true)}>
+              新建{kinds[kind]}
+            </Button>
             <Button
               variant="subtle"
-              size="xs"
               rightSection={<IconArrowRight size={14} />}
               onClick={onJobs}
             >
-              任务详情与成片
+              查看任务与成片
             </Button>
           </Group>
-          <Group justify="space-between" mb={6}>
-            <Text size="sm">
-              已完成 {job.completed} / {job.planned}{" "}
-              {kind === "montage" ? "支成片" : "个视频"}
-              {job.failed > 0 ? ` · 失败 ${job.failed}` : ""}
-              {job.review > 0 ? ` · 待复查 ${job.review}` : ""}
-            </Text>
-            <Text size="xs" c="dimmed">
-              {job.progress?.stage || job.stage || ""}
-            </Text>
-          </Group>
-          <Progress
-            value={job.planned ? (job.completed / job.planned) * 100 : 0}
-            color={job.status === "failed" ? "red" : "cyan"}
-          />
-          {job.error && (
-            <Text size="sm" c="red" mt="sm">
-              {job.error}
-            </Text>
-          )}
-        </Paper>
+          <TaskProgress job={job} />
+        </>
       )}
-      {kind === "montage" ? (
-        <div className={`workbench ${job ? "has-job" : ""}`}>
-          <Box className="workflow-column">
-            <Workflow
-              job={job}
-              selected={selectedNode}
-              onSelect={setSelectedNode}
-              enabled={enabled}
-              counts={counts}
-              reset={reset}
-              positions={positions}
-              onPositions={setPositions}
-            />
-            <Paper withBorder p="md" className="workflow-summary">
-              <Group justify="space-between">
-                <Box>
-                  <Text size="sm" fw={600}>
-                    {selection.length} 个话术 × {Number(count) || 0} 支
-                  </Text>
-                  <Text size="xs" c="dimmed" mt={3}>
-                    本批计划生成 {total} 支成片
-                  </Text>
-                </Box>
-                <Badge variant="light" color="gray">
-                  9:16
-                </Badge>
-              </Group>
-            </Paper>
-          </Box>
-          <Paper withBorder p="md" className="inspector">
-            <Stack gap="md">
-              <Select label="任务参数" aria-label="切换参数区域" value={selectedNode}
-                allowDeselect={false} onChange={(value) => value && setSelectedNode(value)}
-                data={Object.entries({reference: "话术与数量", background: "背景素材", pip: "画中画设置",
-                  compose: "正文合成", intro: "前贴设置", sticker: "贴纸设置", output: "成片输出"})
-                  .map(([value, label]) => ({value, label}))} />
-              <Divider />
-              {selectedNode === "reference" && sourceControl}
-              {selectedNode === "background" && (
-                <>
-                  <Select
-                    label="背景切片素材库"
-                    data={libraryData("background")}
-                    value={background}
-                    onChange={setBackground}
-                    placeholder="请选择背景素材库"
-                  />
-                  <Text size="xs" c="dimmed">
-                    每支成片独立随机选片，使用次数仅作统计。
-                  </Text>
-                </>
-              )}
-              {selectedNode === "pip" && (
-                <>
-                  <Select
-                    label="画中画素材库"
-                    clearable
-                    placeholder="跳过画中画"
-                    data={libraryData("pip")}
-                    value={pip}
-                    onChange={setPip}
-                  />
-                  <Text size="xs" c="dimmed">
-                    仅使用当前库内有效素材，保留画中画自身字幕。
-                  </Text>
-                </>
-              )}
-              {selectedNode === "intro" && (
-                <>
-                  <Select
-                    label="前贴素材库"
-                    clearable
-                    placeholder="跳过前贴"
-                    data={libraryData("intro")}
-                    value={intro}
-                    onChange={setIntro}
-                  />
-                  <Text size="xs" c="dimmed">
-                    随机选取一个完整视频，在正文字幕与原声完成后拼接。
-                  </Text>
-                </>
-              )}
-              {selectedNode === "sticker" && (
-                <Select
-                  label="贴纸素材库"
-                  clearable
-                  placeholder="不叠加贴纸"
-                  data={libraryData("sticker")}
-                  value={sticker}
-                  onChange={setSticker}
-                />
-              )}{" "}
-              {selectedNode === "compose" && (
-                <>
-                  <Checkbox
-                    label="烧录话术字幕"
-                    checked={subtitles}
-                    onChange={(event) =>
-                      setSubtitles(event.currentTarget.checked)
-                    }
-                  />
-                  {subtitles && (
-                    <>
-                      <Select
-                        label="字幕来源"
-                        value={
-                          options.srt && options.srt !== "auto"
-                            ? "custom"
-                            : "auto"
-                        }
-                        data={[
-                          { value: "auto", label: "自动使用关联同名 SRT" },
-                          { value: "custom", label: "指定 SRT 文件" },
-                        ]}
-                        onChange={async (value) => {
-                          if (value === "auto")
-                            setOptions((current) => ({
-                              ...current,
-                              srt: "auto",
-                            }));
-                          else {
-                            try {
-                              const path = await chooseFile(
-                                "选择 SRT 字幕文件",
-                                ["srt"],
-                              );
-                              if (path)
-                                setOptions((current) => ({
-                                  ...current,
-                                  srt: path,
-                                }));
-                            } catch (error) {
-                              report(error);
-                            }
-                          }
-                        }}
-                      />
-                      {options.srt && options.srt !== "auto" ? (
-                        <Text
-                          size="xs"
-                          c="dimmed"
-                          style={{ overflowWrap: "anywhere" }}
-                        >
-                          全部已选话术使用此字幕：{String(options.srt)}
-                        </Text>
-                      ) : null}
-                    </>
-                  )}
-                  <Checkbox
-                    label="保留话术原声"
-                    checked={audio}
-                    onChange={(event) => setAudio(event.currentTarget.checked)}
-                  />
-                  <Text size="xs" c="dimmed">
-                    画中画与字幕可能在同一次编码中完成；进度按实际处理事件显示。
-                  </Text>
-                </>
-              )}
-              {selectedNode === "output" && outputControl}
-              <Divider />
-              <AdvancedOptions
-                kind={kind}
-                values={options}
-                onChange={setOptions}
-              />
-              <Box mt="auto" className="task-submit">
-                <Text size="xs" c="dimmed" mb="sm">
-                  {!source
-                    ? "先添加话术素材库"
-                    : !selection.length
-                      ? "选择话术视频后继续"
-                      : !background
-                        ? "请选择背景素材库"
-                        : !output.trim()
-                          ? "请选择输出目录"
-                          : `将生成 ${total} 支成片`}
-                </Text>
-                <Button
-                  fullWidth
-                  leftSection={<IconPlayerPlay size={16} />}
-                  disabled={!canSubmit || offline.length > 0}
-                  onClick={() => setConfirm(true)}
-                >
-                  确认混剪任务
-                </Button>
-              </Box>
-            </Stack>
-          </Paper>
-        </div>
+      {job ? (
+        <Modal
+          opened={configure}
+          onClose={() => setConfigure(false)}
+          title={`新建${kinds[kind]}`}
+          size="xl"
+          centered
+        >
+          {taskForm}
+        </Modal>
       ) : (
-        <Paper withBorder p="lg" maw={750}>
-          <Stack gap="lg">
-            {sourceControl}
-            {outputControl}
-            <AdvancedOptions
-              kind={kind}
-              values={options}
-              onChange={setOptions}
-            />
-            <Group justify="flex-end">
-              <Button
-                leftSection={<IconPlayerPlay size={16} />}
-                disabled={!canSubmit || offline.length > 0}
-                onClick={() => setConfirm(true)}
-              >
-                确认{kinds[kind]}任务
-              </Button>
-            </Group>
-          </Stack>
+        <Paper withBorder p="lg">
+          {taskForm}
         </Paper>
       )}
-      <Modal
-        opened={confirm}
-        onClose={() => setConfirm(false)}
-        title={`确认${kinds[kind]}任务`}
-        centered
-      >
-        <Stack>
-          <Text size="sm">
-            {kind === "montage"
-              ? `${selection.length} 个话术，每个生成 ${count} 支，共 ${total} 支成片。`
-              : `处理 ${selection.length} 个已选视频。`}
-          </Text>
-          <Text size="sm" c="dimmed">
-            任务使用提交时的素材清单，后续素材库调整仅影响新任务。
-          </Text>
-          {kind === "montage" && (
-            <Text size="sm">
-              背景：{libraries.find((item) => item.id === background)?.name}
-              ；画中画：
-              {libraries.find((item) => item.id === pip)?.name || "跳过"}
-              ；前贴：
-              {libraries.find((item) => item.id === intro)?.name || "跳过"}
-            </Text>
-          )}
-          <Text size="xs" style={{ overflowWrap: "anywhere" }}>
-            输出：{output.trim() || "源目录同级默认目录"}
-          </Text>
-          <Button onClick={submit} loading={submitting}>
-            加入任务队列
-          </Button>
-        </Stack>
-      </Modal>
     </>
   );
 }

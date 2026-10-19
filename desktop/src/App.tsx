@@ -27,7 +27,14 @@ import {
   IconSettings,
   IconTimeline,
 } from "@tabler/icons-react";
-import { connected, message, onEvent, rpc, type Project } from "./api";
+import {
+  connected,
+  message,
+  onEvent,
+  rpc,
+  type Agent,
+  type Project,
+} from "./api";
 import { Empty, PageHeading, report } from "./common";
 const LibraryPage = lazy(() => import("./LibraryPage"));
 const TaskPage = lazy(() => import("./TaskPage"));
@@ -35,7 +42,7 @@ const JobsPage = lazy(() => import("./JobsPage"));
 const SettingsPage = lazy(() => import("./SettingsPage"));
 const pages = [
   { id: "library", label: "素材库", icon: IconCards },
-  { id: "montage", label: "混剪工作台", icon: IconTimeline },
+  { id: "montage", label: "混剪", icon: IconTimeline },
   { id: "cover", label: "字幕擦除", icon: IconScissors },
   { id: "dedup", label: "视频去重", icon: IconLayersSubtract },
   { id: "jobs", label: "任务与成片", icon: IconMovie },
@@ -50,6 +57,24 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
+  const [codex, setCodex] = useState<"loading" | "ready" | "missing">(
+    "loading",
+  );
+  const checkCodex = useCallback(() => {
+    setCodex("loading");
+    rpc<Agent[]>("agents.detect")
+      .then((items) =>
+        setCodex(
+          items.some((item) => item.id === "codex" && item.available)
+            ? "ready"
+            : "missing",
+        ),
+      )
+      .catch(() => setCodex("missing"));
+  }, []);
+  useEffect(() => {
+    if (connected) checkCodex();
+  }, [checkCodex]);
   const [connectionError, setConnectionError] = useState("");
   const refresh = useCallback(() => {
     rpc<Project[]>("projects.list")
@@ -157,7 +182,7 @@ export default function App() {
           <Box mt="auto">
             <Divider my="md" />
             <Text size="xs" c="dimmed">
-              本地视频工作台
+              本地视频工具
             </Text>
             <Text size="xs" c="dimmed" mt={3}>
               素材留在原目录
@@ -179,7 +204,22 @@ export default function App() {
           <ScrollArea className="main-scroll" type="auto">
             <Box p="xl" className="main-content">
               <Suspense fallback={<Loader size="sm" aria-label="页面加载中" />}>
-                {!project ? (
+                {connected && codex !== "ready" ? (
+                  codex === "loading" ? (
+                    <Group>
+                      <Loader size="sm" />
+                      <Text>正在检查本机 Codex…</Text>
+                    </Group>
+                  ) : (
+                    <Empty
+                      title="请先安装并登录 Codex"
+                      description="pycut 使用本机 Codex 提供智能功能。安装并登录后，点击重新检测即可开始。"
+                      action={
+                        <Button onClick={checkCodex}>重新检测 Codex</Button>
+                      }
+                    />
+                  )
+                ) : !project ? (
                   <>
                     <PageHeading
                       title="项目"
@@ -231,7 +271,7 @@ export default function App() {
                         title={
                           connected ? "新建第一个产品项目" : "从桌面应用开始"
                         }
-                        description="每个项目都拥有自己的素材库、混剪工作台、处理任务和成片。"
+                        description="每个项目都拥有自己的素材库、混剪、处理任务和成片。"
                         action={
                           <Button
                             onClick={() => setCreate(true)}
@@ -255,6 +295,7 @@ export default function App() {
                         kind={page as "montage" | "cover" | "dedup"}
                         revision={revision}
                         onJobs={() => setPage("jobs")}
+                        onSettings={() => setPage("settings")}
                       />
                     )}
                     {page === "jobs" && (

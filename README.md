@@ -7,10 +7,11 @@ CLI help, and established output-directory names remain Chinese.
 
 ## Desktop
 
-The native Tauri workbench organizes product projects, material libraries, montage
-nodes, cover/dedup tasks, published videos and material usage history. It reads
-media from the original directories and can import directory settings from the TUI
-.env file. Desktop subtitle recognition reuses a locally logged-in Codex installation.
+The native Tauri workbench organizes product projects, material libraries, processing
+tasks, published videos and material usage history. It reads media from the original
+directories. Simple forms select inputs; read-only animations show each video's
+actual processing state. The desktop requires an installed, logged-in Codex and reads its actual model
+catalog for the shared AI settings.
 The CLI/TUI remains available during desktop compatibility acceptance.
 
 See [Desktop workbench](docs/DESKTOP.md) for development, packaging, data boundaries

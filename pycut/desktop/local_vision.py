@@ -265,31 +265,25 @@ class CodexVision:
             self._directory.cleanup()
 
 
-def make_local_vision(provider: str = "codex", binary: str = "", model: str = ""):
-    if provider == "claude":
-        from .claude_vision import ClaudeVision
-        return ClaudeVision(binary, model)
+def make_local_vision(provider: str = "codex", binary: str = "", model: str = "") -> CodexVision:
     if provider != "codex":
-        raise ValueError("当前支持 Codex 与 Claude Code 本地识别适配器")
+        raise ValueError("当前仅支持 Codex 本地识别适配器")
     return CodexVision(binary, model)
 
 
 def detect_agents() -> list[dict]:
-    result = []
-    for name, title in (("codex", "Codex"), ("claude", "Claude Code"), ("pi", "PI")):
-        path = _binary(name)
-        authenticated = False
-        if path and name in {"codex", "claude"}:
-            client = make_local_vision(name, path)
-            try:
-                authenticated = client.authenticated()
-            except (OSError, RuntimeError, TimeoutError, subprocess.TimeoutExpired):
-                pass
-            finally:
-                client.close()
-        supported = name in {"codex", "claude"}
-        detail = ("已检测登录；请选择支持图片的模型" if authenticated else f"请先安装并登录 {title}") if supported else "已检测安装状态，尚未提供视觉协议适配"
-        result.append({"id": name, "name": title, "path": path, "installed": bool(path),
-                       "authenticated": authenticated, "available": supported and authenticated,
-                       "supports_vision": supported, "detail": detail})
-    return result
+    """The desktop requires the installed Codex runtime and its existing login."""
+    path = _binary("codex")
+    authenticated = False
+    if path:
+        client = CodexVision(path)
+        try:
+            authenticated = client.authenticated()
+        except (OSError, RuntimeError, TimeoutError):
+            pass
+        finally:
+            client.close()
+    return [{"id": "codex", "name": "Codex", "path": path, "installed": bool(path),
+             "authenticated": authenticated, "available": authenticated,
+             "supports_vision": True,
+             "detail": "Codex 已就绪" if authenticated else "请先安装并登录 Codex"}]

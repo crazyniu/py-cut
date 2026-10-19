@@ -186,6 +186,24 @@ class DesktopJobTests(unittest.TestCase):
         finally:
             restarted.shutdown()
 
+    def test_per_video_states_follow_events_and_cancellation_preserves_completed(self):
+        job = self.manager.submit(self.request(options={"fission": 3, "no_pip": True, "no_sticker": True}))
+        self.assertEqual([item["status"] for item in job["items"]], ["queued"] * 3)
+        first, second = [item["id"] for item in job["items"][:2]]
+        def item(identifier, state):
+            self.manager._line(job["id"], '@pycut-desktop ' + json.dumps({
+                "event": "item", "payload": {"id": identifier, "status": state}}))
+        self.manager._update(job["id"], status="running")
+        item(first, "running")
+        item(first, "completed")
+        item(second, "running")
+        self.assertEqual(self.manager.detail(job["id"])["completed"], 0)
+        self.manager._update(job["id"], status="cancelled", completed=1)
+        states = [entry["status"] for entry in self.manager.detail(job["id"])["items"]]
+        self.assertEqual(states, ["completed", "cancelled", "cancelled"])
+        with self.assertRaises(ValueError):
+            item(first, "invented")
+
     def test_real_progress_does_not_increase_final_counts_and_logs_are_sanitized(self):
         job = self.manager.submit(self.request())
         self.manager._line(job["id"], '@pycut-progress {"stage":"背景编码","completed":9,"total":10}')

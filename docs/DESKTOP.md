@@ -2,8 +2,12 @@
 
 The Tauri application provides project-scoped libraries, processing queues and
 outputs over the existing cover, dedup and montage implementations. React and
-Mantine own the forms; React Flow displays the fixed montage graph. Nodes can
-move without changing processing order. Native window controls and dialogs remain
+Mantine own the ordinary-user forms. Users select materials, quantity and output,
+start processing and view results. A read-only animated batch view shows each
+video waiting, processing, completed, review, failed or cancelled from actual worker
+events. Internal stages never increase final-video counts. Library selection uses a top Select; directory
+management and media details open in dialogs. Internal processing graphs, technical
+parameters and routine logs stay out of the interface; failures offer copyable logs. Native window controls and dialogs remain
 system-owned. Videos use a 9:16 preview area with contained pictures.
 
 ## Data and processing
@@ -38,14 +42,14 @@ and cancelled work do not count; interrupted batches retain already published fi
 
 ## Subtitle detection
 
-Desktop cover uses the locally installed and logged-in Codex app-server adapter.
-It creates ephemeral read-only threads with inherited tools, MCP servers, plugins
-and hooks disabled and verifies the empty MCP inventory. Uncertain localization or
-verification remains review. Existing detection deadlines and coverage geometry
-remain core-owned. Claude and PI installation detection does not imply adapter
-support. The desktop stores executable/model choices without gateway credentials.
-Legacy .env import copies directories and the output root, leaving credentials in
-the original file. The legacy CLI/TUI and gateway path remain available.
+The desktop requires an installed, logged-in Codex as its shared AI runtime. Its
+model picker queries Codex's actual paginated model catalog. Cover currently uses
+image inputs; image generation for stickers and covers is future scope. Other
+Agents and legacy .env import are not desktop entry points. Codex recognition uses
+ephemeral read-only threads with inherited tools, MCP, plugins and hooks disabled,
+verifies the empty MCP inventory and retains existing detection deadlines. Model
+discovery does not establish successful inference; uncertain results remain review.
+The legacy CLI/TUI and gateway path remain available.
 
 ## Native development and packaging
 

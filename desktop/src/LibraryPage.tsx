@@ -5,24 +5,20 @@ import {
   Box,
   Button,
   Checkbox,
-  Divider,
   Group,
   Loader,
   Modal,
   Pagination,
   Paper,
-  ScrollArea,
   SegmentedControl,
   Select,
   Stack,
   Table,
   Text,
   TextInput,
-  Title,
   Tooltip,
 } from "@mantine/core";
 import {
-  IconFolderOpen,
   IconLayoutGrid,
   IconList,
   IconPlus,
@@ -36,7 +32,7 @@ import {
   AssetThumb,
   Empty,
   ErrorNotice,
-  MediaPreview,
+  PreviewDetails,
   PageHeading,
   report,
 } from "./common";
@@ -45,10 +41,8 @@ import {
   duration,
   message,
   onEvent,
-  reveal,
   roles,
   rpc,
-  useSummary,
   type Asset,
   type Library,
   type Project,
@@ -74,6 +68,7 @@ export default function LibraryPage({ project }: { project: Project }) {
   const [busy, setBusy] = useState(false);
   const [scanned, setScanned] = useState<number | null>(null);
   const [revision, setRevision] = useState(0);
+  const [directories, setDirectories] = useState(false);
   const [create, setCreate] = useState(false);
   const [name, setName] = useState("");
   const [role, setRole] = useState<string | null>("background");
@@ -100,20 +95,34 @@ export default function LibraryPage({ project }: { project: Project }) {
     let dispose: (() => void) | undefined;
     onEvent((event) => {
       if (event.event !== "library") return;
-      const value = event.payload as { library_id: string; indexed: number; scanning: boolean };
-      if (value.library_id === libraryId) setScanned(value.scanning ? value.indexed : null);
-    }).then((unlisten) => {
-      if (closed) unlisten();
-      else dispose = unlisten;
-    }).catch(report);
-    return () => { closed = true; dispose?.(); };
+      const value = event.payload as {
+        library_id: string;
+        indexed: number;
+        scanning: boolean;
+      };
+      if (value.library_id === libraryId)
+        setScanned(value.scanning ? value.indexed : null);
+    })
+      .then((unlisten) => {
+        if (closed) unlisten();
+        else dispose = unlisten;
+      })
+      .catch(report);
+    return () => {
+      closed = true;
+      dispose?.();
+    };
   }, [libraryId]);
   useEffect(() => {
     setPage(1);
     setSelected([]);
     setDetailId(null);
     setRoot(null);
-    setKind(libraries.find((item) => item.id === libraryId)?.role === "sticker" ? "image" : "video");
+    setKind(
+      libraries.find((item) => item.id === libraryId)?.role === "sticker"
+        ? "image"
+        : "video",
+    );
   }, [libraryId]);
   useEffect(() => {
     setPage(1);
@@ -249,196 +258,102 @@ export default function LibraryPage({ project }: { project: Project }) {
           </Button>
         }
       />
-      <div className={`library-layout ${detailId ? "with-detail" : ""}`}>
-        <Paper withBorder p="sm" className="library-sidebar">
-          <Text size="xs" c="dimmed" mb="sm" px={6}>
-            此项目的素材库
-          </Text>
-          {libraries.map((item) => (
-            <button
-              key={item.id}
-              className={`library-item ${item.id === libraryId ? "active" : ""}`}
-              onClick={() => setLibraryId(item.id)}
-              disabled={busy}
-              aria-pressed={item.id === libraryId}
-            >
-              <span>
-                <Text size="sm" fw={500}>
-                  {item.name}
-                </Text>
-                {item.name !== roles[item.role] && <Text size="xs" c="dimmed">
-                  {roles[item.role]}
-                </Text>}
-              </span>
-              <Badge variant="light" color="gray" size="sm">
-                {item.active_count}
-              </Badge>
-            </button>
-          ))}
-          {!libraries.length && (
-            <Text p="sm" size="sm" c="dimmed">
-              暂无素材库
-            </Text>
-          )}
-          {library && (
-            <>
-              <Divider my="md" />
-              <Group justify="space-between" mb="sm">
-                <Text size="xs" c="dimmed">
-                  关联目录
-                </Text>
-                <ActionIcon
-                  variant="subtle"
-                  onClick={addRoots}
-                  aria-label="添加目录"
-                  disabled={busy}
-                >
-                  <IconPlus size={16} />
-                </ActionIcon>
-              </Group>
-              {library.roots.map((path) => (
-                <Group key={path} gap={3} wrap="nowrap" mb="xs">
-                  <Tooltip
-                    label={
-                      library.root_status?.find((item) => item.path === path)
-                        ?.error || path
-                    }
-                    multiline
-                    w={250}
-                  >
-                    <Text
-                      size="xs"
-                      c="dimmed"
-                      lineClamp={2}
-                      style={{ overflowWrap: "anywhere", flex: 1 }}
-                    >
-                      {path.split(/[\\/]/).filter(Boolean).slice(-2).join(" / ")}
-                      {library.root_status?.find((item) => item.path === path)
-                        ?.scanned_at &&
-                        !library.root_status?.find((item) => item.path === path)
-                          ?.available && (
-                          <Text component="span" size="xs" c="orange">
-                            {" "}
-                            · 离线
-                          </Text>
-                        )}
-                      {library.root_status?.find((item) => item.path === path)
-                        ?.error && (
-                        <Text component="span" size="xs" c="orange">
-                          {" "}
-                          · 读取异常
-                        </Text>
-                      )}
-                    </Text>
-                  </Tooltip>
-                  <ActionIcon
-                    size="sm"
-                    color="gray"
-                    variant="subtle"
-                    aria-label={`移除目录 ${path}`}
-                    onClick={() =>
-                      mutate("libraries.remove_root", {
-                        library_id: library.id,
-                        path,
-                      })
-                    }
-                    disabled={busy}
-                  >
-                    <IconX size={12} />
-                  </ActionIcon>
-                </Group>
-              ))}
-              <Button
-                fullWidth
-                mt="sm"
-                variant="default"
-                size="xs"
-                onClick={addRoots}
-                disabled={busy}
-              >
-                添加目录
-              </Button>
-            </>
-          )}
-        </Paper>
+      <Group mb="md" align="flex-end">
+        <Select
+          aria-label="素材库"
+          placeholder="请选择素材库"
+          w={190}
+          data={libraries.map((item) => ({
+            value: item.id,
+            label: `${item.name} · ${item.active_count} 个`,
+          }))}
+          value={libraryId}
+          onChange={setLibraryId}
+          allowDeselect={false}
+          disabled={busy}
+        />
+        <Button
+          variant="default"
+          onClick={() => setDirectories(true)}
+          disabled={!library}
+        >
+          管理目录
+        </Button>
+        <TextInput
+          placeholder="搜索素材名称"
+          aria-label="搜索素材"
+          leftSection={<IconSearch size={16} />}
+          value={query}
+          onChange={(event) => setQuery(event.currentTarget.value)}
+          w={200}
+        />
+        <Select
+          aria-label="素材类型"
+          w={104}
+          allowDeselect={false}
+          value={kind}
+          onChange={(value) => value !== null && setKind(value)}
+          data={[
+            { value: "", label: "全部类型" },
+            { value: "video", label: "视频" },
+            { value: "image", label: "图片" },
+            { value: "subtitle", label: "字幕" },
+          ]}
+        />
+        <Select
+          aria-label="排序"
+          w={120}
+          data={[
+            { value: "name", label: "按名称" },
+            { value: "usage", label: "按使用次数" },
+            { value: "duration", label: "按时长" },
+            { value: "size", label: "按画面尺寸" },
+          ]}
+          value={sort}
+          onChange={setSort}
+          allowDeselect={false}
+        />
+        <SegmentedControl
+          aria-label="显示方式"
+          value={layout}
+          onChange={setLayout}
+          data={[
+            {
+              value: "grid",
+              label: <IconLayoutGrid size={16} aria-label="缩略图视图" />,
+            },
+            {
+              value: "list",
+              label: <IconList size={16} aria-label="列表视图" />,
+            },
+          ]}
+        />
+        <Button
+          size="xs"
+          variant="default"
+          leftSection={<IconRefresh size={14} />}
+          onClick={() => library && mutate("libraries.scan", { library_id: library.id })}
+          disabled={!library}
+          loading={busy}
+        >
+          刷新目录
+        </Button>
+      </Group>
+      <div>
         <Box className="library-main">
           {library && (
             <>
-              <Group justify="space-between" mb="md">
-                <Group gap="sm">
-                  <Title order={3} size="h5">
-                    {library.name}
-                  </Title>
-                  <Text c="dimmed" size="sm">
-                    {total} 个素材
-                  </Text>
-                </Group>
-                <Button
-                  size="xs"
-                  variant="default"
-                  leftSection={<IconRefresh size={14} />}
-                  onClick={() =>
-                    mutate("libraries.scan", { library_id: library.id })
-                  }
-                  loading={busy}
-                >
-                  刷新目录
-                </Button>
-              </Group>
-              <Group mb="sm" gap="sm">
-                <TextInput
-                  placeholder="搜索素材名称"
-                  aria-label="搜索素材"
-                  leftSection={<IconSearch size={16} />}
-                  value={query}
-                  onChange={(event) => setQuery(event.currentTarget.value)}
-                  style={{ flex: 1, minWidth: 150 }}
-                />
-                <Select
-                  aria-label="素材类型" w={104} allowDeselect={false} value={kind}
-                  onChange={(value) => value !== null && setKind(value)}
-                  data={[{value:"",label:"全部类型"},{value:"video",label:"视频"},
-                    {value:"image",label:"图片"},{value:"subtitle",label:"字幕"}]} />
-                <Select
-                  aria-label="排序"
-                  w={120}
-                  data={[
-                    { value: "name", label: "按名称" },
-                    { value: "usage", label: "按使用次数" },
-                    { value: "duration", label: "按时长" },
-                    { value: "size", label: "按画面尺寸" },
-                  ]}
-                  value={sort}
-                  onChange={setSort}
-                  allowDeselect={false}
-                />
-                <SegmentedControl
-                  aria-label="显示方式"
-                  value={layout}
-                  onChange={setLayout}
-                  data={[
-                    { value: "grid", label: <IconLayoutGrid size={16} aria-label="缩略图视图" /> },
-                    { value: "list", label: <IconList size={16} aria-label="列表视图" /> },
-                  ]}
-                />
-              </Group>
               {busy && (
                 <Group gap="xs" py="sm" role="status" aria-live="polite">
                   <Loader size="xs" />
-                  <Text size="sm" c="dimmed">{scanned === null ? "正在更新素材库…" : `正在扫描，已读取 ${scanned} 个素材…`}</Text>
+                  <Text size="sm" c="dimmed">
+                    {scanned === null
+                      ? "正在更新素材库…"
+                      : `正在扫描，已读取 ${scanned} 个素材…`}
+                  </Text>
                 </Group>
               )}
-              {assets.length > 0 && (
-                <Group justify="space-between" mb="sm">
-                  <Checkbox size="xs" label="选择本页" checked={assets.every((a) => selected.includes(a.id))}
-                    indeterminate={assets.some((a) => selected.includes(a.id)) && !assets.every((a) => selected.includes(a.id))}
-                    onChange={(event) => setSelected(event.currentTarget.checked
-                      ? [...new Set([...selected, ...assets.map((a) => a.id)])]
-                      : selected.filter((id) => !assets.some((a) => a.id === id)))} />
-                  <Text size="xs" c="dimmed">第 {(page - 1) * 24 + 1}–{Math.min(page * 24, total)} 项，共 {total} 项</Text>
-                </Group>
-              )}
-              <Group justify="space-between" mb="md">
+              <Group gap="md" mb="md">
                 <SegmentedControl
                   size="xs"
                   value={removed}
@@ -460,6 +375,37 @@ export default function LibraryPage({ project }: { project: Project }) {
                   value={root}
                   onChange={setRoot}
                 />
+                {assets.length > 0 && (
+                  <Group gap="md">
+                    <Checkbox
+                      size="xs"
+                      label="选择本页"
+                      checked={assets.every((a) => selected.includes(a.id))}
+                      indeterminate={
+                        assets.some((a) => selected.includes(a.id)) &&
+                        !assets.every((a) => selected.includes(a.id))
+                      }
+                      onChange={(event) =>
+                        setSelected(
+                          event.currentTarget.checked
+                            ? [
+                                ...new Set([
+                                  ...selected,
+                                  ...assets.map((a) => a.id),
+                                ]),
+                              ]
+                            : selected.filter(
+                                (id) => !assets.some((a) => a.id === id),
+                              ),
+                        )
+                      }
+                    />
+                    <Text size="xs" c="dimmed">
+                      第 {(page - 1) * 24 + 1}–{Math.min(page * 24, total)}{" "}
+                      项，共 {total} 项
+                    </Text>
+                  </Group>
+                )}
               </Group>
               {selected.length > 0 && (
                 <Paper withBorder p="xs" mb="md">
@@ -554,7 +500,13 @@ export default function LibraryPage({ project }: { project: Project }) {
                           >
                             {asset.name}
                           </Text>
-                          <Text size="xs" c="dimmed" lineClamp={1} title={asset.path} mt={2}>
+                          <Text
+                            size="xs"
+                            c="dimmed"
+                            lineClamp={1}
+                            title={asset.path}
+                            mt={2}
+                          >
                             {asset.path.split(/[\\/]/).slice(-2, -1).join("")}
                           </Text>
                           <Group justify="space-between" gap={4} mt={4}>
@@ -633,93 +585,112 @@ export default function LibraryPage({ project }: { project: Project }) {
           )}
         </Box>
         {detailId && (
-          <Paper withBorder p="md" className="asset-detail">
-            <Group justify="space-between" mb="md">
-              <Text fw={600}>素材详情</Text>
-              <ActionIcon
-                variant="subtle"
-                color="gray"
-                aria-label="关闭详情"
-                onClick={() => setDetailId(null)}
-              >
-                <IconX size={18} />
-              </ActionIcon>
-            </Group>
+          <Modal
+            opened={!!detailId}
+            onClose={() => setDetailId(null)}
+            title={detail?.name || "视频预览"}
+            centered
+            size={720}
+          >
             {detail && (
-              <Stack gap="md">
-                {detail.kind !== "subtitle" && detail.available && (
-                  <MediaPreview
-                    id={detail.id}
-                    image={detail.kind === "image"}
-                  />
-                )}
-                <Text fw={500} style={{ overflowWrap: "anywhere" }}>
-                  {detail.name}
-                </Text>
-                <Group gap="xs">
-                  <Badge variant="light" color="gray">
-                    {duration(detail.duration)}
-                  </Badge>
-                  <Badge variant="light" color="gray">
-                    {detail.width
-                      ? `${detail.width}×${detail.height}`
-                      : detail.kind}
-                  </Badge>
-                  {!detail.available && <Badge color="gray">离线</Badge>}
-                </Group>
-                <Text size="xs" c="dimmed" style={{ overflowWrap: "anywhere" }}>
-                  {detail.path}
-                </Text>
-                <Button
-                  variant="default"
-                  size="xs"
-                  leftSection={<IconFolderOpen size={15} />}
-                  onClick={() => reveal(detail.path).catch(report)}
-                >
-                  在文件夹中显示
-                </Button>
-                {detail.error && (
-                  <Text c="orange" size="xs">
-                    读取异常：{detail.error}
-                  </Text>
-                )}
-                {detail.srt_path && (
-                  <Box>
-                    <Text size="xs" c="dimmed">
-                      关联字幕
-                    </Text>
-                    <Text size="sm" style={{ overflowWrap: "anywhere" }}>
-                      {detail.srt_path}
-                    </Text>
-                  </Box>
-                )}
-                <Divider />
-                <Text size="sm" fw={600}>
-                  成片使用记录 · {detail.usage_count ?? "未统计"}
-                </Text>
-                <ScrollArea mah={240}>
-                  {detail.uses?.length ? (
-                    detail.uses.map((use, index) => (
-                      <Box key={index} mb="sm">
-                        <Text size="sm" lineClamp={2}>
-                          {use.name || use.output_path || use.path || "成片"}
-                        </Text>
-                        <Text size="xs" c="dimmed">
-                          {useSummary(use)} {use.created_at || ""}
-                        </Text>
-                      </Box>
-                    ))
-                  ) : (
-                    <Text size="xs" c="dimmed">
-                      尚无桌面端成片使用记录
-                    </Text>
-                  )}
-                </ScrollArea>
-              </Stack>
+              <PreviewDetails
+                id={detail.id}
+                path={detail.path}
+                seconds={detail.duration}
+                kind={detail.kind}
+                available={detail.available}
+              />
             )}
-          </Paper>
+          </Modal>
         )}
       </div>
+      <Modal
+        opened={directories}
+        onClose={() => setDirectories(false)}
+        title={`管理目录 · ${library?.name || "素材库"}`}
+        centered
+      >
+        {library && (
+          <Stack>
+            {" "}
+            <Group justify="space-between" mb="sm">
+              <Text size="xs" c="dimmed">
+                关联目录
+              </Text>
+              <ActionIcon
+                variant="subtle"
+                onClick={addRoots}
+                aria-label="添加目录"
+                disabled={busy}
+              >
+                <IconPlus size={16} />
+              </ActionIcon>
+            </Group>
+            {library.roots.map((path) => (
+              <Group key={path} gap={3} wrap="nowrap" mb="xs">
+                <Tooltip
+                  label={
+                    library.root_status?.find((item) => item.path === path)
+                      ?.error || path
+                  }
+                  multiline
+                  w={250}
+                >
+                  <Text
+                    size="xs"
+                    c="dimmed"
+                    lineClamp={2}
+                    style={{ overflowWrap: "anywhere", flex: 1 }}
+                  >
+                    {path.split(/[\\/]/).filter(Boolean).slice(-2).join(" / ")}
+                    {library.root_status?.find((item) => item.path === path)
+                      ?.scanned_at &&
+                      !library.root_status?.find((item) => item.path === path)
+                        ?.available && (
+                        <Text component="span" size="xs" c="orange">
+                          {" "}
+                          · 离线
+                        </Text>
+                      )}
+                    {library.root_status?.find((item) => item.path === path)
+                      ?.error && (
+                      <Text component="span" size="xs" c="orange">
+                        {" "}
+                        · 读取异常
+                      </Text>
+                    )}
+                  </Text>
+                </Tooltip>
+                <ActionIcon
+                  size="sm"
+                  color="gray"
+                  variant="subtle"
+                  aria-label={`移除目录 ${path}`}
+                  onClick={() =>
+                    mutate("libraries.remove_root", {
+                      library_id: library.id,
+                      path,
+                    })
+                  }
+                  disabled={busy}
+                >
+                  <IconX size={12} />
+                </ActionIcon>
+              </Group>
+            ))}
+            <Button
+              fullWidth
+              mt="sm"
+              variant="default"
+              size="xs"
+              onClick={addRoots}
+              disabled={busy}
+            >
+              添加目录
+            </Button>
+          </Stack>
+        )}
+      </Modal>
       <Modal
         opened={create}
         onClose={() => setCreate(false)}
