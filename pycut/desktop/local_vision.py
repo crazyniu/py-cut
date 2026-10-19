@@ -137,6 +137,41 @@ class CodexVision:
             self._stop()
             return False
 
+    def list_models(self, timeout: float = 10.0) -> list[dict]:
+        """Read the picker catalog, including every page, without starting a turn."""
+        deadline = time.monotonic() + timeout
+        if not self._lock.acquire(timeout=max(0.0, timeout)):
+            raise TimeoutError("读取本地模型列表超时")
+        try:
+            self._start(deadline)
+            models, cursors = {}, set()
+            params = {"limit": 100, "includeHidden": False}
+            while True:
+                result = self._request("model/list", params, deadline)
+                if not isinstance(result.get("data"), list):
+                    raise RuntimeError("本地 Codex 返回了无效模型列表")
+                for entry in result["data"]:
+                    if not isinstance(entry, dict):
+                        raise RuntimeError("本地 Codex 返回了无效模型列表")
+                    modalities = entry.get("inputModalities", ["text", "image"])
+                    if entry.get("hidden") or not isinstance(modalities, list) or "image" not in modalities:
+                        continue
+                    model_id = entry.get("model") or entry.get("id")
+                    if not isinstance(model_id, str) or not model_id:
+                        raise RuntimeError("本地 Codex 返回了无效模型列表")
+                    name = entry.get("displayName")
+                    models[model_id] = {"id": model_id, "name": name if isinstance(name, str) and name else model_id,
+                                        "is_default": entry.get("isDefault") is True}
+                cursor = result.get("nextCursor")
+                if cursor is None:
+                    return list(models.values())
+                if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                    raise RuntimeError("本地 Codex 返回了无效模型分页")
+                cursors.add(cursor)
+                params["cursor"] = cursor
+        finally:
+            self._lock.release()
+
     def ask_vision(self, frame, prompt: str, *, deadline: float | None = None) -> dict | None:
         if not self.enabled or STOP.flag:
             return None
