@@ -40,23 +40,48 @@ def media_tool(name, directory):
     return Path(found).resolve()
 
 
-def bundle_macos_libraries(binary, library_dir, copied):
+def _rpaths(binary):
+    listing = run(["otool", "-l", binary], capture_output=True, text=True).stdout
+    return re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset", listing)
+
+
+def _dependency_path(dependency, source, executable_source):
+    def expand(value):
+        return Path(value.replace("@loader_path", str(source.parent))
+                    .replace("@executable_path", str(executable_source.parent)))
+    if dependency.startswith("@rpath/"):
+        relative = dependency.removeprefix("@rpath/")
+        candidates = [expand(value) / relative for value in _rpaths(source) + _rpaths(executable_source)]
+        candidates.append(source.parent / relative)
+    else:
+        candidates = [expand(dependency)]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise SystemExit(f"Cannot resolve media dependency {dependency} from {source}")
+
+
+def bundle_macos_libraries(binary, library_dir, copied, *, source=None, executable_source=None):
     """Relocate non-system Mach-O dependencies recursively before ad-hoc signing."""
+    source = source or binary
+    executable_source = executable_source or source
     listing = run(["otool", "-L", binary], capture_output=True, text=True).stdout
     for line in listing.splitlines()[1:]:
         dependency = line.strip().split(" (", 1)[0]
-        if not dependency.startswith("/") or dependency.startswith(("/System/", "/usr/lib/")):
+        if dependency.startswith(("/System/", "/usr/lib/")):
             continue
-        source = Path(dependency).resolve()
-        target = library_dir / source.name
-        if source not in copied:
-            copied.add(source)
-            shutil.copy2(source, target)
+        if binary.parent == library_dir and dependency == "@rpath/" + binary.name:
+            continue
+        origin = _dependency_path(dependency, source, executable_source)
+        target = library_dir / origin.name
+        if origin not in copied:
+            copied.add(origin)
+            shutil.copy2(origin, target)
             target.chmod(0o755)
-            run(["install_name_tool", "-id", "@rpath/" + target.name, target])
-            bundle_macos_libraries(target, library_dir, copied)
+            run(["install_name_tool", "-id", "@rpath/" + target.name, target], capture_output=True)
+            bundle_macos_libraries(target, library_dir, copied, source=origin, executable_source=executable_source)
         relative = ("@loader_path/" if binary.parent == library_dir else "@executable_path/lib/") + target.name
-        run(["install_name_tool", "-change", dependency, relative, binary])
+        run(["install_name_tool", "-change", dependency, relative, binary], capture_output=True)
     run(["codesign", "--force", "--sign", "-", binary], capture_output=True)
 
 
@@ -95,7 +120,8 @@ def prepare(args):
         library_dir.mkdir()
         copied = set()
         for name in ("ffmpeg", "ffprobe"):
-            bundle_macos_libraries(media / name, library_dir, copied)
+            origin = ffmpeg if name == "ffmpeg" else ffprobe
+            bundle_macos_libraries(media / name, library_dir, copied, source=origin, executable_source=origin)
     fonts = RESOURCES / "fonts"
     fonts.mkdir(exist_ok=True)
     for filename in ("NotoSansSC[wght].ttf", "OFL.txt"):
@@ -114,8 +140,8 @@ def prepare(args):
         "license_note": "FFmpeg build configuration determines LGPL/GPL obligations. Preserve dependency licenses and provide corresponding source for released binaries."
     }, indent=2), encoding="utf-8")
     env = dict(os.environ, PYCUT_FFMPEG=str(media / ffmpeg.name), PYCUT_FFPROBE=str(media / ffprobe.name))
-    run([media / ffmpeg.name, "-version"], env=env, stdout=subprocess.DEVNULL)
-    run([media / ffprobe.name, "-version"], env=env, stdout=subprocess.DEVNULL)
+    run([media / ffmpeg.name, "-version"], env=env, stdout=subprocess.DEVNULL, timeout=60)
+    run([media / ffprobe.name, "-version"], env=env, stdout=subprocess.DEVNULL, timeout=60)
     print(f"Prepared {platform.machine()} runtime: {RESOURCES}")
 
 

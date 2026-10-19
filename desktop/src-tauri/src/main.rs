@@ -106,8 +106,18 @@ fn launch(app: &tauri::AppHandle) -> Result<Arc<Bridge>, String> {
             )
             .env("PYCUT_FONT_DIR", resources.join("fonts"));
     }
-    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let cache = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    let data = if cfg!(debug_assertions) {
+        std::env::var_os("PYCUT_DATA_DIR").map(PathBuf::from)
+    } else {
+        None
+    }
+    .unwrap_or(app.path().app_data_dir().map_err(|e| e.to_string())?);
+    let cache = if cfg!(debug_assertions) {
+        std::env::var_os("PYCUT_CACHE_DIR").map(PathBuf::from)
+    } else {
+        None
+    }
+    .unwrap_or(app.path().app_cache_dir().map_err(|e| e.to_string())?);
     std::fs::create_dir_all(&data).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
     command
