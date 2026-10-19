@@ -202,14 +202,14 @@ cp .env.example .env
 
 ## 扩展能力与需求文档
 
-长期产品需求见 [docs/ROADMAP.md](docs/ROADMAP.md)：段间转场、去重增强、AI 级字幕修复及 ASR 语义选片；任务、Bug、测试、负责人和验收统一使用 [Linear 项目](https://linear.app/gengyun/project/py-cut-development-963524cf0d78)，不在 Markdown 跟踪 Todo、负责人或进度。工程技术限制与复现记录见 [docs/ENGINEERING.md](docs/ENGINEERING.md)。
+长期产品需求见 [docs/ROADMAP.md](docs/ROADMAP.md)：段间转场、去重增强、AI 级字幕修复及 ASR 语义选片；开发范围以当前用户需求为准，验证与交付证据记录在 PR，不在 Markdown 跟踪 Todo、负责人或进度。工程技术限制与复现记录见 [docs/ENGINEERING.md](docs/ENGINEERING.md)。
 三个处理功能（字幕擦除 / 去重 / 混剪）详见各文档：
 去重需求与实测标定见 [docs/DEDUP.md](docs/DEDUP.md)，
 混剪五步流程见 [docs/MONTAGE.md](docs/MONTAGE.md)。
 
 ## 给协作者
 
-任务从 [Linear 项目](https://linear.app/gengyun/project/py-cut-development-963524cf0d78) 查找和领取，先读 [AGENTS.md](AGENTS.md)。GitHub 只管理代码、PR、Review、CI 和合并；历史 Issues 不再用于领取，不启用 Issues Sync。Markdown 仅记录长期知识。
+开发前先读 [AGENTS.md](AGENTS.md)，明确当前需求与验收标准。本项目不使用 Linear，GitHub 管理代码、PR、Review、CI 和合并；历史 Issues 仅供溯源。Markdown 仅记录长期知识。
 
 普通 PR 使用必要轻量 CI；完整合成媒体回归手动运行 Actions 的 `TUI regression`（`workflow_dispatch` 即完整合成媒体模式）。发布、重要接口/架构或安全变更，以及明确要求全量测试时，执行对应完整验证；不得绕过必需检查。
 

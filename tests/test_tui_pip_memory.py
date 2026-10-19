@@ -222,6 +222,38 @@ def test_real_source_shortfall_is_not_filled_with_cloned_tail(tmp_path):
 
 
 @pytest.mark.skipif(not HAS_FFMPEG, reason='real FFmpeg required')
+def test_mixed_background_color_tags_do_not_reset_pip_timeline(tmp_path):
+    """Real libraries mix BT.709/601 tags even after size/FPS normalization."""
+    import cv2
+    from pycut.core import montage_clips
+
+    shots = []
+    for i, colorspace in enumerate(('bt709', 'smpte170m', 'bt709')):
+        source = tmp_path / f'background-{i}.mp4'
+        result = subprocess.run([
+            config.FFMPEG, '-y', '-v', 'error', '-f', 'lavfi',
+            '-i', 'color=c=gray:s=160x284:r=30', '-frames:v', '30',
+            '-c:v', 'libx264', '-threads', '1', '-colorspace', colorspace,
+            '-color_primaries', colorspace, '-color_trc', colorspace, str(source)],
+            capture_output=True, timeout=30)
+        assert result.returncode == 0, result.stderr.decode(errors='replace')
+        shots.append(dict(item=montage_clips._probe_one(source), take=1, offset=0))
+    base = tmp_path / 'body.mp4'
+    assert montage_clips.concat_clips(shots, base, canvas=(160, 284), fps=30)['ok']
+    clip = tmp_path / 'pip.mp4'
+    make_video(clip, 'testsrc2=s=96x170:r=30', 120)
+    output = tmp_path / 'out.mp4'
+    pip.build_pip_cmd(base, entries(clip, frames=120), output, seed=2026)
+    frames = decoded_frames(output)
+    assert len(frames) == 90
+    # PiP continues moving through the metadata switches and into the tail.
+    for index in (29, 30, 59, 60, 88, 89):
+        assert float(frames[index][30:90, 108:138].std()) > 10
+    assert cv2.norm(frames[-1][30:90, 108:138],
+                    frames[-2][30:90, 108:138]) > 0
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason='real FFmpeg required')
 def test_real_mixed_frame_rates_and_one_frame_tail_keep_all_21_shots(tmp_path):
     base = tmp_path / 'base.mp4'
     make_video(base, 'color=c=gray:s=160x284:r=30', 181)
