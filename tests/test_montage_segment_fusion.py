@@ -47,3 +47,11 @@ def test_normalized_concat_is_video_copy(tmp_path):
     assert '-vf' not in cmd and '-r' not in cmd
     assert cmd[cmd.index('-map') + 1] == '0:v:0'
     assert cmd[-1] != str(tmp_path / 'out.mp4')  # 仍先写原子发布临时文件。
+
+
+def test_fractional_remainder_does_not_add_a_zero_budget_shot(tmp_path):
+    items = [clips.ClipItem(tmp_path / f'{i}.mp4', 3, 160, 284, False)
+             for i in range(3)]
+    rows = clips.pick_clips(items, [(0, 1), (1, 61 / 30)], seed=47)
+    assert len(rows) == 2
+    assert round(sum(row['take'] for row in rows) * 30) == 61

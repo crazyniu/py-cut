@@ -69,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
             keys.append('PYCUT_REFERENCE_DIR')
         if args.clip_dir is None and (probe or args.step != 'a'):
             keys.append('PYCUT_CLIP_DIR')
-        if not probe and args.step != 'a':
+        if not probe and args.step in ('all', 'c'):
             if not args.no_pip and args.dedup_dir is None:
                 keys.append('PYCUT_PIP_DIR')
             if args.intro_dir is None:

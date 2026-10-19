@@ -530,7 +530,9 @@ def pick_clips(items: list[ClipItem], slots: list[tuple[float, float]],
     # 没有缺口的正常路径完全不改变随机数序列或选片结果。
     for idx in order:
         need = target - taken
-        if need <= EPS:
+        # A sub-frame rounding remainder needs no new shot. Encoding such a
+        # shot forces at least one frame and would exceed the body's budget.
+        if round(taken * config.MONTAGE_FPS) >= round(target * config.MONTAGE_FPS):
             break
         if used[idx] or items[idx].duration < lo - EPS:
             continue
