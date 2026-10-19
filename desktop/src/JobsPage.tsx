@@ -1,18 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Button,
   Group,
   Modal,
-  Paper,
+  Pagination,
   Select,
-  Stack,
   Text,
+  TextInput,
 } from "@mantine/core";
 import {
   IconArrowLeft,
   IconFolderOpen,
   IconRefresh,
+  IconSearch,
 } from "@tabler/icons-react";
 import {
   kinds,
@@ -20,18 +21,17 @@ import {
   message,
   openPath,
   rpc,
-  terminal,
   type Job,
   type Output,
   type Project,
 } from "./api";
-import TaskProgress from "./TaskProgress";
 import {
   Empty,
+  LoadingPage,
   PreviewDetails,
   PageHeading,
   report,
-  Status,
+  MediaCard,
   VideoThumbnail,
 } from "./common";
 
@@ -43,208 +43,216 @@ export default function JobsPage({
   revision: number;
 }) {
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [detail, setDetail] = useState<Job>();
+  const [loaded, setLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
   const [preview, setPreview] = useState<Output>();
-  const [directory, setDirectory] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [directory, setDirectory] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const request = useRef(0);
   const load = useCallback(() => {
+    const sequence = ++request.current;
     rpc<Job[]>("jobs.list", { project_id: project.id })
       .then((items) => {
-        setJobs(items);
-        setError("");
+        if (sequence === request.current) {
+          setJobs(items);
+          setError("");
+        }
       })
-      .catch((error) => setError(message(error)));
+      .catch((reason) => {
+        if (sequence === request.current) setError(message(reason));
+      })
+      .finally(() => {
+        if (sequence === request.current) setLoaded(true);
+      });
   }, [project.id]);
   useEffect(load, [load, revision]);
+  useEffect(
+    () => () => {
+      request.current++;
+    },
+    [],
+  );
   useEffect(() => {
-    if (!selectedId) return;
-    let disposed = false;
-    rpc<Job>("jobs.detail", { job_id: selectedId })
-      .then((result) => {
-        if (!disposed) setDetail(result);
-      })
-      .catch(report);
-    return () => {
-      disposed = true;
-    };
-  }, [selectedId, revision]);
-  const outputs = detail?.outputs || [];
+    setPage(1);
+    setDirectory(null);
+  }, [selectedId, search, filter]);
+  const detail = jobs.find((job) => job.id === selectedId);
+  const query = search.trim().toLocaleLowerCase();
+  const batches = jobs.filter(
+    (job) =>
+      job.outputs?.length &&
+      (filter === "all" || job.kind === filter) &&
+      (!query ||
+        job.outputs.some((output) =>
+          output.name.toLocaleLowerCase().includes(query),
+        )),
+  );
+  const outputs = (detail?.outputs || []).filter(
+    (output) => !query || output.name.toLocaleLowerCase().includes(query),
+  );
   const directories = [
     ...new Set(
-      outputs.map((output) => output.path.replace(/[\\/][^\\/]+$/, "")),
+      (detail?.outputs || []).map((output) =>
+        output.path.replace(/[\\/][^\\/]+$/, ""),
+      ),
     ),
   ];
-  const targetDirectory =
+  const target =
     directory && directories.includes(directory) ? directory : directories[0];
-  function openJob(job: Job) {
-    setDetail(job);
+  const count = selectedId ? outputs.length : batches.length;
+  const pages = Math.max(1, Math.ceil(count / 24));
+  const shownPage = Math.min(page, pages);
+  function openBatch(job: Job) {
     setSelectedId(job.id);
-    setDirectory(null);
+    setSearch("");
   }
   return (
     <>
       <PageHeading
-        title={
-          selectedId && detail
-            ? `${kinds[detail.kind]} · ${dateTime(detail.created_at)}`
-            : "任务与成片"
-        }
+        title="成片库"
         description={
-          selectedId
-            ? "本次任务生成的视频"
-            : "每次任务独立保存，点击缩略图查看本批全部视频。"
-        }
-        actions={
-          <Group>
-            {selectedId && (
-              <Button
-                variant="default"
-                leftSection={<IconArrowLeft size={14} />}
-                onClick={() => setSelectedId(undefined)}
-              >
-                所有任务
-              </Button>
-            )}
-            <Button
-              variant="default"
-              size="xs"
-              leftSection={<IconRefresh size={14} />}
-              onClick={load}
-            >
-              刷新
-            </Button>
-          </Group>
+          detail
+            ? `${kinds[detail.kind]} · ${dateTime(detail.created_at)}`
+            : "按处理批次查看已生成的视频。"
         }
       />
+      <Group gap="xs" mb="md" className="page-toolbar">
+        {selectedId ? (
+          <Button
+            variant="default"
+            leftSection={<IconArrowLeft size={16} />}
+            onClick={() => {
+              setSelectedId(undefined);
+              setSearch("");
+            }}
+          >
+            返回成片库
+          </Button>
+        ) : (
+          <Select
+            allowDeselect={false}
+            w={150}
+            aria-label="筛选成片类型"
+            value={filter}
+            onChange={(value) => value && setFilter(value)}
+            data={[
+              { value: "all", label: "全部类型" },
+              ...Object.entries(kinds).map(([value, label]) => ({
+                value,
+                label,
+              })),
+            ]}
+          />
+        )}
+        <TextInput
+          aria-label="搜索成片"
+          placeholder="搜索成片名称"
+          w={180}
+          value={search}
+          onChange={(event) => setSearch(event.currentTarget.value)}
+          leftSection={<IconSearch size={16} />}
+        />
+        {directories.length > 1 && (
+          <Select
+            aria-label="成片所在目录"
+            w={220}
+            value={target}
+            allowDeselect={false}
+            onChange={setDirectory}
+            data={directories.map((value) => ({
+              value,
+              label: value.split(/[\\/]/).pop() || value,
+            }))}
+          />
+        )}
+        {target && (
+          <Button
+            variant="default"
+            leftSection={<IconFolderOpen size={16} />}
+            onClick={() => openPath(target).catch(report)}
+          >
+            打开本批目录
+          </Button>
+        )}
+        <Button
+          variant="default"
+          leftSection={<IconRefresh size={16} />}
+          onClick={load}
+        >
+          刷新
+        </Button>
+        <Text size="sm" c="dimmed">
+          {selectedId ? `${count} 支成片` : `${count} 个批次`}
+        </Text>
+      </Group>
       {error && (
         <Alert color="red" mb="md">
           {error}
         </Alert>
       )}
-      {selectedId && detail ? (
-        <>
-          <TaskProgress job={detail} />
-          <Group mb="md" align="flex-end" justify="space-between">
-            <Text fw={600}>本批成片 · {outputs.length} 支</Text>
-            <Group>
-              {directories.length > 1 && (
-                <Select
-                  aria-label="成片目录"
-                  w={260}
-                  data={directories.map((path) => ({
-                    value: path,
-                    label: path.split(/[\\/]/).pop() || path,
-                  }))}
-                  value={targetDirectory}
-                  onChange={setDirectory}
-                  allowDeselect={false}
-                />
-              )}
-              {targetDirectory && (
-                <Button
-                  variant="default"
-                  leftSection={<IconFolderOpen size={15} />}
-                  onClick={() => openPath(targetDirectory).catch(report)}
-                >
-                  打开本批成片目录
-                </Button>
-              )}
-              {!terminal(detail) && (
-                <Button
-                  color="red"
-                  variant="light"
-                  disabled={detail.status === "cancelling"}
-                  onClick={async () => {
-                    try {
-                      setDetail(
-                        await rpc<Job>("jobs.cancel", { job_id: detail.id }),
-                      );
-                      load();
-                    } catch (error) {
-                      report(error);
-                    }
-                  }}
-                >
-                  停止处理
-                </Button>
-              )}
-            </Group>
-          </Group>
-          {!outputs.length ? (
-            <Empty
-              title={
-                terminal(detail)
-                  ? "本次任务没有生成成片"
-                  : "成片将在处理完成后显示"
-              }
-            />
-          ) : (
-            <div className="asset-grid">
-              {outputs.map((output) => (
-                <Paper key={output.id} withBorder className="asset-card">
-                  <button
-                    className="asset-open"
-                    onClick={() => setPreview(output)}
-                    aria-label={`预览 ${output.name}`}
-                    disabled={output.available === false}
-                  >
-                    <VideoThumbnail
-                      id={output.id}
-                      output
-                      available={output.available !== false}
-                    />
-                    <Text p="xs" size="sm" lineClamp={1}>
-                      {output.name}
-                    </Text>
-                  </button>
-                </Paper>
-              ))}
-            </div>
-          )}
-        </>
-      ) : !jobs.length ? (
+      {!loaded ? (
+        <LoadingPage />
+      ) : !count ? (
         <Empty
-          title="暂无任务"
-          description="从混剪、字幕擦除或去重页面开始处理。"
+          title={query ? "未找到成片" : "暂无成片"}
+          description={
+            query ? "换个名称搜索。" : "视频处理生成的结果会自动出现在这里。"
+          }
         />
+      ) : selectedId ? (
+        <div className="asset-grid">
+          {outputs.slice((shownPage - 1) * 24, shownPage * 24).map((output) => (
+            <MediaCard
+              key={output.id}
+              title={output.name}
+              label={`预览${output.name}`}
+              onOpen={() => setPreview(output)}
+              thumbnail={
+                <VideoThumbnail
+                  id={output.id}
+                  output
+                  available={output.available !== false}
+                />
+              }
+            >
+              <Text size="xs">{dateTime(output.created_at)}</Text>
+              {output.available === false && <Text size="xs">文件已移走</Text>}
+            </MediaCard>
+          ))}
+        </div>
       ) : (
         <div className="task-grid">
-          {jobs.map((job) => {
-            const output = job.outputs?.find(
-              (item) => item.available !== false,
-            );
-            const input = job.items?.[0];
+          {batches.slice((shownPage - 1) * 24, shownPage * 24).map((job) => {
+            const output =
+              job.outputs?.find((item) => item.available !== false) ||
+              job.outputs?.[0];
             return (
-              <Paper key={job.id} withBorder className="asset-card">
-                <button
-                  className="asset-open"
-                  onClick={() => openJob(job)}
-                  aria-label={`查看${kinds[job.kind]}任务 ${dateTime(job.created_at)}`}
-                >
+              <MediaCard
+                key={job.id}
+                title={`${kinds[job.kind]} · ${job.outputs?.length} 支成片`}
+                label={`查看${kinds[job.kind]}成片 ${dateTime(job.created_at)}`}
+                onOpen={() => openBatch(job)}
+                thumbnail={
                   <VideoThumbnail
-                    id={output?.id || input?.id.split(":")[0]}
-                    output={!!output}
+                    id={output?.id}
+                    output
+                    available={output?.available !== false}
                   />
-                  <Stack p="sm" gap="xs">
-                    <Group justify="space-between">
-                      <Text fw={600} size="sm">
-                        {kinds[job.kind]}
-                      </Text>
-                      <Status value={job.status} />
-                    </Group>
-                    <Text size="xs" c="dimmed">
-                      {dateTime(job.created_at)}
-                    </Text>
-                    <Text size="sm">
-                      已生成 {job.outputs?.length || 0} / {job.planned} 支视频
-                    </Text>
-                  </Stack>
-                </button>
-              </Paper>
+                }
+              >
+                <Text size="xs">{dateTime(job.created_at)}</Text>
+              </MediaCard>
             );
           })}
         </div>
+      )}
+      {pages > 1 && (
+        <Group justify="center" mt="md">
+          <Pagination value={shownPage} onChange={setPage} total={pages} />
+        </Group>
       )}
       <Modal
         opened={!!preview}

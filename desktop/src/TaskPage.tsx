@@ -2,80 +2,58 @@ import { useEffect, useRef, useState } from "react";
 import { useDebouncedCallback } from "@mantine/hooks";
 import {
   Alert,
-  Box,
   Button,
-  Checkbox,
-  Divider,
   Group,
   Loader,
-  Modal,
   MultiSelect,
   NumberInput,
-  Paper,
-  Select,
+  TextInput,
   Stack,
   Text,
-  TextInput,
 } from "@mantine/core";
+import { IconFolderOpen, IconPlayerPlay } from "@tabler/icons-react";
 import {
-  IconArrowRight,
-  IconFolderOpen,
-  IconPlayerPlay,
-} from "@tabler/icons-react";
-import {
+  chooseDirectories,
   chooseDirectory,
   kinds,
   message,
   rpc,
-  terminal,
   type Asset,
   type Job,
   type JobKind,
   type Library,
   type Project,
 } from "./api";
-import { PageHeading, report } from "./common";
-import TaskProgress from "./TaskProgress";
+import { report } from "./common";
+
 export default function TaskPage({
   project,
   kind,
-  revision,
-  onJobs,
   onSettings,
+  onLibrary,
+  onSubmitted,
 }: {
   project: Project;
   kind: JobKind;
-  revision: number;
-  onJobs: () => void;
   onSettings: () => void;
+  onLibrary: () => void;
+  onSubmitted: (job: Job) => void;
 }) {
   const [libraries, setLibraries] = useState<Library[]>([]);
-  const [source, setSource] = useState<string | null>(null);
-  const [background, setBackground] = useState<string | null>(null);
-  const [pip, setPip] = useState<string | null>(null);
-  const [intro, setIntro] = useState<string | null>(null);
-  const [sticker, setSticker] = useState<string | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [selection, setSelection] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
-  const [assetTotal, setAssetTotal] = useState(0);
+  const [totalAssets, setTotalAssets] = useState(0);
   const [count, setCount] = useState<number | string>(1);
-  const [output, setOutput] = useState(
-    kind === "montage" ? project.output_dir || "" : "",
-  );
-  const [subtitles, setSubtitles] = useState(true);
-  const [audio, setAudio] = useState(true);
-  const [visionReady, setVisionReady] = useState(kind !== "cover");
-  useEffect(() => {
-    if (kind === "cover")
-      rpc<Record<string, string>>("settings.get")
-        .then((value) => setVisionReady(Boolean(value.vision_model)))
-        .catch(report);
-  }, [kind]);
+  const [output, setOutput] = useState("");
+  const [folders, setFolders] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
+  const [visionReady, setVisionReady] = useState(kind !== "cover");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
   const skipFirstSave = useRef(true);
-  const saveWorkbench = useDebouncedCallback(
+  const save = useDebouncedCallback(
     (values: Record<string, unknown>) => {
       void rpc("workbench.save", {
         project_id: project.id,
@@ -85,10 +63,6 @@ export default function TaskPage({
     },
     { delay: 400, flushOnUnmount: true },
   );
-  const [configure, setConfigure] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [job, setJob] = useState<Job>();
-  const [error, setError] = useState("");
   useEffect(() => {
     let disposed = false;
     Promise.all([
@@ -97,8 +71,11 @@ export default function TaskPage({
         project_id: project.id,
         kind,
       }),
+      kind === "cover"
+        ? rpc<Record<string, string>>("settings.get")
+        : Promise.resolve(null),
     ])
-      .then(async ([items, saved]) => {
+      .then(async ([items, saved, settings]) => {
         const selected = Array.isArray(saved.selection)
           ? saved.selection.filter(
               (value): value is string => typeof value === "string",
@@ -113,41 +90,29 @@ export default function TaskPage({
           ),
         );
         if (disposed) return;
+        setLibraries(items);
+        setFolders(
+          Array.isArray(saved.input_dirs)
+            ? saved.input_dirs.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : [
+                ...new Set(
+                  items
+                    .filter((item) => item.role === "background")
+                    .flatMap((item) => item.roots),
+                ),
+              ],
+        );
         setAssets(restored.filter((item): item is Asset => item !== null));
         setSelection(selected);
-        const existing = (value: unknown) =>
-          typeof value === "string" && items.some((item) => item.id === value)
-            ? value
-            : null;
-        setLibraries(items);
-        setSource(
-          existing(saved.library_id) ||
-            items.find(
-              (item) =>
-                item.role === (kind === "montage" ? "reference" : "background"),
-            )?.id ||
-            null,
-        );
-        setBackground(
-          existing(saved.background_library_id) ||
-            items.find((item) => item.role === "background")?.id ||
-            null,
-        );
-        setPip(existing(saved.pip_library_id));
-        setIntro(existing(saved.intro_library_id));
-        setSticker(existing(saved.sticker_library_id));
         if (typeof saved.fission === "number") setCount(saved.fission);
-        if (
-          typeof saved.out_dir === "string" &&
-          (kind !== "montage" || saved.out_dir.trim())
-        )
-          setOutput(saved.out_dir);
-        if (typeof saved.subtitles === "boolean") setSubtitles(saved.subtitles);
-        if (typeof saved.audio === "boolean") setAudio(saved.audio);
+        if (typeof saved.out_dir === "string") setOutput(saved.out_dir);
+        if (settings) setVisionReady(Boolean(settings.vision_model));
         setReady(true);
       })
-      .catch((error) => {
-        if (!disposed) setError(message(error));
+      .catch((reason) => {
+        if (!disposed) setError(message(reason));
       });
     return () => {
       disposed = true;
@@ -159,61 +124,58 @@ export default function TaskPage({
       skipFirstSave.current = false;
       return;
     }
-    saveWorkbench({
-      library_id: source,
+    save({
       selection,
-      background_library_id: background,
-      pip_library_id: pip,
-      intro_library_id: intro,
-      sticker_library_id: sticker,
       fission: Number(count) || 1,
       out_dir: output,
-      subtitles,
-      audio,
+      input_dirs: folders,
     });
-  }, [
-    ready,
-    source,
-    selection,
-    background,
-    pip,
-    intro,
-    sticker,
-    count,
-    output,
-    subtitles,
-    audio,
-    saveWorkbench,
-  ]);
+  }, [ready, selection, count, output, folders, save]);
   useEffect(() => {
-    if (!source) return;
+    if (!ready || kind !== "montage") return;
     let disposed = false;
     const timeout = window.setTimeout(() => {
       setLoading(true);
-      rpc<{ items: Asset[]; total: number }>("assets.list", {
-        library_id: source,
-        query: search,
-        removed: false,
-        sort: "name",
-        offset: 0,
-        limit: 100,
-        kind: "video",
-      })
-        .then((result) => {
-          if (!disposed) {
-            setAssets((previous) => [
-              ...previous.filter(
-                (item) =>
-                  selection.includes(item.id) &&
-                  !result.items.some((next) => next.id === item.id),
-              ),
-              ...result.items,
-            ]);
-            setAssetTotal(result.total);
-          }
+      const sources = libraries.filter(
+        (item) =>
+          item.role === (kind === "montage" ? "reference" : "background"),
+      );
+      Promise.all(
+        sources.map((library) =>
+          rpc<{ items: Asset[]; total: number }>("assets.list", {
+            library_id: library.id,
+            query: search,
+            removed: false,
+            sort: "name",
+            offset: 0,
+            limit: 100,
+            kind: "video",
+          }),
+        ),
+      )
+        .then((results) => {
+          if (disposed) return;
+          const found = [
+            ...new Map(
+              results
+                .flatMap((result) => result.items)
+                .map((asset) => [asset.id, asset]),
+            ).values(),
+          ];
+          setAssets((previous) => [
+            ...previous.filter(
+              (asset) =>
+                selection.includes(asset.id) &&
+                !found.some((next) => next.id === asset.id),
+            ),
+            ...found,
+          ]);
+          setTotalAssets(
+            results.reduce((total, result) => total + result.total, 0),
+          );
         })
-        .catch((error) => {
-          if (!disposed) setError(message(error));
+        .catch((reason) => {
+          if (!disposed) setError(message(reason));
         })
         .finally(() => {
           if (!disposed) setLoading(false);
@@ -223,143 +185,149 @@ export default function TaskPage({
       disposed = true;
       window.clearTimeout(timeout);
     };
-  }, [source, search]);
-  useEffect(() => {
-    if (job && !terminal(job))
-      rpc<Job>("jobs.detail", { job_id: job.id }).then(setJob).catch(report);
-  }, [revision]);
-  useEffect(() => {
-    rpc<Job[]>("jobs.list", { project_id: project.id })
-      .then((items) => setJob(items.find((item) => item.kind === kind)))
-      .catch(report);
-  }, [project.id, kind]);
-  const libraryData = (role?: string) =>
-    libraries
-      .filter((item) => !role || item.role === role)
-      .map((item) => ({
-        value: item.id,
-        label: item.name,
-      }));
+  }, [ready, libraries, kind, search]);
   const total = selection.length * Number(count || 0);
-  const invalidCount =
-    !Number.isInteger(Number(count)) || Number(count) < 1 || Number(count) > 99;
+  const offline =
+    kind === "montage" &&
+    assets.some((asset) => selection.includes(asset.id) && !asset.available);
+  const backgroundReady = libraries.some(
+    (library) => library.role === "background" && library.active_count > 0,
+  );
+  const configured = visionReady && (kind !== "montage" || backgroundReady);
   const canSubmit =
     ready &&
-    visionReady &&
-    Boolean(source) &&
-    selection.length > 0 &&
-    (kind !== "montage" ||
-      Boolean(background && output.trim() && !invalidCount));
-  const selectedAssets = assets.filter((item) => selection.includes(item.id));
-  const offline = selectedAssets.filter((item) => !item.available);
+    configured &&
+    !submitting &&
+    !offline &&
+    (kind === "montage"
+      ? Boolean(output.trim()) &&
+        selection.length > 0 &&
+        Number.isInteger(Number(count)) &&
+        Number(count) >= 1 &&
+        Number(count) <= 99
+      : folders.length > 0);
   async function submit() {
     setSubmitting(true);
     try {
-      const result = await rpc<Job>("jobs.submit", {
+      const job = await rpc<Job>("jobs.submit", {
         project_id: project.id,
         kind,
-        library_id: source,
-        asset_ids: kind !== "montage" ? selection : undefined,
-        reference_ids: kind === "montage" ? selection : undefined,
-        background_library_id: background,
-        pip_library_id: pip,
-        intro_library_id: intro,
-        sticker_library_id: sticker,
-        options: {
-          ...(output.trim() ? { out_dir: output.trim() } : {}),
-          ...(kind === "montage"
-            ? {
-                fission: Number(count),
-                no_pip: !pip,
-                no_sub: !subtitles,
-                no_audio: !audio,
-                no_sticker: !sticker,
-                intro_enabled: !!intro,
-              }
-            : {}),
-        },
+        ...(kind === "montage"
+          ? {
+              reference_ids: selection,
+              options: { fission: Number(count), out_dir: output.trim() },
+            }
+          : {
+              input_dirs: folders,
+              options: output.trim() ? { out_dir: output.trim() } : {},
+            }),
       });
-      setJob(result);
-      setConfigure(false);
-    } catch (error) {
-      report(error);
+      onSubmitted(job);
+    } catch (reason) {
+      setError(message(reason));
     } finally {
       setSubmitting(false);
     }
   }
-  const sourceControl = (
-    <>
-      <Select
-        w={200}
-        label={kind === "montage" ? "话术素材库" : "待处理素材库"}
-        placeholder="请选择素材库"
-        data={libraryData(kind === "montage" ? "reference" : undefined)}
-        value={source}
-        onChange={(value) => {
-          setSource(value);
-          setSelection([]);
-          setAssets([]);
-          setSearch("");
-          setAssetTotal(0);
-        }}
-        searchable
-        allowDeselect={false}
-      />
-      <MultiSelect
-        w={280}
-        label={kind === "montage" ? "话术视频" : "处理视频"}
-        placeholder="搜索并多选视频"
-        data={assets
-          .filter(
-            (item) =>
-              item.kind === "video" &&
-              (kind === "montage" || /\.mp4$/i.test(item.path)),
-          )
-          .map((item) => ({
-            value: item.id,
-            label: `${item.path.split(/[\\/]/).slice(-2).join(" / ")}${!item.available ? " · 离线" : ""}`,
-            disabled: !item.available,
-          }))}
-        value={selection}
-        onChange={setSelection}
-        searchable
-        searchValue={search}
-        onSearchChange={setSearch}
-        hidePickedOptions
-        rightSection={loading ? <Loader size={14} /> : undefined}
-        maxDropdownHeight={240}
-      />
-      {assetTotal > 100 && (
-        <Text size="xs" c="dimmed">
-          共 {assetTotal} 个素材，输入名称搜索；每次显示前 100 个。
-        </Text>
+  return (
+    <Stack gap="md">
+      {error && <Alert color="red">{error}</Alert>}
+      {ready && !configured && (
+        <Alert color="yellow">
+          {!visionReady
+            ? "先在设置中选择 Codex 模型。"
+            : "先在素材库配置背景切片目录。"}
+          <Button
+            variant="subtle"
+            size="xs"
+            onClick={!visionReady ? onSettings : onLibrary}
+          >
+            {!visionReady ? "前往设置" : "管理素材库"}
+          </Button>
+        </Alert>
       )}
-      {offline.length > 0 && (
-        <Text c="red" size="xs">
-          所选素材已离线，请取消选择并刷新。
-        </Text>
+      {kind === "montage" ? (
+        <>
+          <MultiSelect
+            label="混剪视频"
+            placeholder="搜索并多选话术视频"
+            data={assets
+              .filter((asset) => asset.kind === "video")
+              .map((asset) => ({
+                value: asset.id,
+                label: asset.path.split(/[\\/]/).slice(-2).join(" / "),
+                disabled: !asset.available,
+              }))}
+            value={selection}
+            onChange={setSelection}
+            searchable
+            searchValue={search}
+            onSearchChange={setSearch}
+            hidePickedOptions
+            maxDropdownHeight={220}
+            rightSection={loading ? <Loader size={14} /> : undefined}
+          />
+          <NumberInput
+            label="每个视频生成数量"
+            min={1}
+            max={99}
+            allowDecimal={false}
+            clampBehavior="strict"
+            value={count}
+            onChange={setCount}
+          />
+          {totalAssets > 100 && (
+            <Text size="xs" c="dimmed">
+              输入名称查找更多视频。
+            </Text>
+          )}
+        </>
+      ) : (
+        <>
+          <MultiSelect
+            label="处理文件夹"
+            placeholder="选择已有目录或点击选择文件夹"
+            data={[
+              ...new Set([
+                ...libraries
+                  .filter((library) => library.role === "background")
+                  .flatMap((library) => library.roots),
+                ...folders,
+              ]),
+            ]}
+            value={folders}
+            onChange={setFolders}
+            searchable
+          />
+          <Group className="task-form-options">
+            <Button
+              variant="default"
+              leftSection={<IconFolderOpen size={16} />}
+              onClick={async () => {
+                try {
+                  const chosen = await chooseDirectories();
+                  if (chosen.length)
+                    setFolders((previous) => [
+                      ...new Set([...previous, ...chosen]),
+                    ]);
+                } catch (reason) {
+                  setError(message(reason));
+                }
+              }}
+            >
+              选择文件夹
+            </Button>
+          </Group>
+          <Text size="xs" c="dimmed">
+            递归处理所选文件夹中的全部 MP4。结果保存到各输入目录同级的“
+            {kind === "cover" ? "字幕查重" : "去重"}”目录，保留源视频。
+          </Text>
+        </>
       )}
-      {kind === "montage" && (
-        <NumberInput
-          w={160}
-          label="每个话术生成数量"
-          min={1}
-          max={99}
-          allowDecimal={false}
-          value={count}
-          onChange={setCount}
-          clampBehavior="strict"
-        />
-      )}
-    </>
-  );
-  const outputControl = (
-    <>
       <TextInput
-        w={360}
         label="成片输出目录"
         placeholder={
-          kind === "montage" ? "请选择输出目录" : "留空时保存到源目录同级"
+          kind === "montage" ? "选择成片保存位置" : "留空时保存到源目录同级"
         }
         value={output}
         onChange={(event) => setOutput(event.currentTarget.value)}
@@ -367,13 +335,13 @@ export default function TaskPage({
           <Button
             variant="subtle"
             size="compact-xs"
-            aria-label="选择输出目录"
+            aria-label="选择成片输出目录"
             onClick={async () => {
               try {
                 const path = await chooseDirectory();
                 if (path) setOutput(path);
-              } catch (error) {
-                report(error);
+              } catch (reason) {
+                setError(message(reason));
               }
             }}
           >
@@ -381,93 +349,20 @@ export default function TaskPage({
           </Button>
         }
       />
-      {kind !== "montage" && (
-        <Text size="xs" c="dimmed">
-          默认另存到各输入目录同级的“{kind === "cover" ? "字幕查重" : "去重"}
-          ”，保留源文件。
+      {offline && (
+        <Text c="red" size="sm">
+          所选视频已离线，请重新选择。
         </Text>
       )}
-    </>
-  );
-  const taskForm = (
-    <Stack gap="md">
-      {kind === "cover" && !visionReady && (
-        <Alert color="yellow">
-          先选择字幕识别工具和模型。
-          <Button variant="subtle" size="xs" onClick={onSettings}>
-            前往设置
-          </Button>
-        </Alert>
-      )}
-      <Group align="flex-end" gap="md">
-        {sourceControl}
-      </Group>
-      {kind === "montage" && (
-        <>
-          <Divider />
-          <Group align="flex-end" gap="md">
-            <Select
-              w={170}
-              label="背景素材库"
-              placeholder="请选择背景素材库"
-              data={libraryData("background")}
-              value={background}
-              onChange={setBackground}
-              allowDeselect={false}
-            />
-            <Select
-              w={170}
-              label="画中画素材库"
-              placeholder="不使用画中画"
-              clearable
-              data={libraryData("pip")}
-              value={pip}
-              onChange={setPip}
-            />
-            <Select
-              w={170}
-              label="前贴素材库"
-              placeholder="不添加前贴"
-              clearable
-              data={libraryData("intro")}
-              value={intro}
-              onChange={setIntro}
-            />
-            <Select
-              w={170}
-              label="贴纸素材库"
-              placeholder="不添加贴纸"
-              clearable
-              data={libraryData("sticker")}
-              value={sticker}
-              onChange={setSticker}
-            />
-          </Group>
-          <Group gap="xl">
-            <Checkbox
-              label="添加话术字幕"
-              checked={subtitles}
-              onChange={(event) => setSubtitles(event.currentTarget.checked)}
-            />
-            <Checkbox
-              label="保留话术原声"
-              checked={audio}
-              onChange={(event) => setAudio(event.currentTarget.checked)}
-            />
-          </Group>
-        </>
-      )}
-      <Divider />
-      <Group align="flex-end" gap="lg">
-        {outputControl}
+      <Group justify="space-between" gap="sm" mt="sm">
         <Text size="sm" c="dimmed">
           {kind === "montage"
-            ? `已选 ${selection.length} 个话术，共生成 ${total} 支成片`
-            : `已选 ${selection.length} 个视频`}
+            ? `已选 ${selection.length} 个视频 · 共生成 ${total} 支`
+            : `已选 ${folders.length} 个文件夹`}
         </Text>
         <Button
           leftSection={<IconPlayerPlay size={16} />}
-          disabled={!canSubmit || offline.length > 0}
+          disabled={!canSubmit}
           onClick={submit}
           loading={submitting}
         >
@@ -475,72 +370,5 @@ export default function TaskPage({
         </Button>
       </Group>
     </Stack>
-  );
-  return (
-    <>
-      <PageHeading
-        title={kinds[kind]}
-        description={
-          kind === "montage"
-            ? "选择话术和素材，生成属于当前项目的成片。"
-            : kind === "cover"
-              ? "自动查找并遮盖视频字幕，完成后检查效果。"
-              : "调整视频画面，另存处理结果。"
-        }
-      />
-      {error && (
-        <Alert color="red" mb="md" withCloseButton onClose={() => setError("")}>
-          {error}
-        </Alert>
-      )}
-      {job && (
-        <>
-          <Group justify="flex-end" mb="md">
-            {!terminal(job) && (
-              <Button
-                variant="light"
-                color="red"
-                disabled={job.status === "cancelling"}
-                onClick={async () => {
-                  try {
-                    setJob(await rpc<Job>("jobs.cancel", { job_id: job.id }));
-                  } catch (error) {
-                    report(error);
-                  }
-                }}
-              >
-                停止处理
-              </Button>
-            )}
-            <Button variant="default" onClick={() => setConfigure(true)}>
-              新建{kinds[kind]}
-            </Button>
-            <Button
-              variant="subtle"
-              rightSection={<IconArrowRight size={14} />}
-              onClick={onJobs}
-            >
-              查看任务与成片
-            </Button>
-          </Group>
-          <TaskProgress job={job} />
-        </>
-      )}
-      {job ? (
-        <Modal
-          opened={configure}
-          onClose={() => setConfigure(false)}
-          title={`新建${kinds[kind]}`}
-          size="xl"
-          centered
-        >
-          {taskForm}
-        </Modal>
-      ) : (
-        <Paper withBorder p="lg">
-          {taskForm}
-        </Paper>
-      )}
-    </>
   );
 }

@@ -6,6 +6,7 @@ import {
   Center,
   Group,
   Loader,
+  Paper,
   Stack,
   Text,
   Title,
@@ -89,7 +90,7 @@ export function PageHeading({
   actions?: ReactNode;
 }) {
   return (
-    <Group justify="space-between" align="flex-start" wrap="wrap" mb="lg">
+    <Stack gap="md" mb="lg">
       <Box>
         <Title order={2} size="h3">
           {title}
@@ -100,15 +101,97 @@ export function PageHeading({
           </Text>
         )}
       </Box>
-      {actions}
-    </Group>
+      {actions && (
+        <Group gap="xs" align="flex-end">
+          {actions}
+        </Group>
+      )}
+    </Stack>
   );
 }
 export function Status({ value }: { value: string }) {
   return (
-    <Badge color={statusColor(value)} variant="light" size="sm">
+    <Badge
+      color={statusColor(value)}
+      variant="filled"
+      size="sm"
+      radius={4}
+      className="status-tag"
+      styles={{
+        root: {
+          background:
+            (
+              {
+                running: "#6bdcff",
+                completed: "#8aebc5",
+                queued: "#cab9ff",
+                review: "#ffd586",
+                partial: "#ffd586",
+                failed: "#ffacaa",
+                cancelled: "#bdcadc",
+                interrupted: "#ffd586",
+                cancelling: "#ffd586",
+                skipped: "#bdcadc",
+                unprocessed: "#bdcadc",
+              } as Record<string, string>
+            )[value] || "#bdcadc",
+          color: "#132233",
+        },
+      }}
+    >
       {statusNames[value] || value}
     </Badge>
+  );
+}
+export function MediaCard({
+  thumbnail,
+  title,
+  label,
+  children,
+  status,
+  overlay,
+  selection,
+  active,
+  disabled,
+  onOpen,
+}: {
+  thumbnail: ReactNode;
+  title: string;
+  label: string;
+  children?: ReactNode;
+  status?: string;
+  overlay?: ReactNode;
+  selection?: ReactNode;
+  active?: boolean;
+  disabled?: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <Paper withBorder className={`asset-card ${active ? "active" : ""}`}>
+      <button
+        className="asset-open"
+        onClick={onOpen}
+        disabled={disabled}
+        aria-label={label}
+      >
+        <Box className="media-card-image">
+          {thumbnail}
+          {status && (
+            <Box className="thumbnail-status">
+              <Status value={status} />
+            </Box>
+          )}
+          {overlay}
+          <Box className="media-card-caption">
+            <Text size="sm" fw={600} lineClamp={1} title={title}>
+              {title}
+            </Text>
+            {children}
+          </Box>
+        </Box>
+      </button>
+      {selection && <Box className="thumb-select">{selection}</Box>}
+    </Paper>
   );
 }
 export function AssetThumb({ asset }: { asset: Asset }) {
@@ -133,9 +216,9 @@ export function AssetThumb({ asset }: { asset: Asset }) {
         <IconVideo size={26} color="var(--mantine-color-dimmed)" />
       )}
       {!asset.available && (
-        <Badge color="gray" className="thumb-badge">
-          离线
-        </Badge>
+        <Box className="thumb-badge">
+          <Status value="offline" />
+        </Box>
       )}
     </Box>
   );
@@ -199,6 +282,22 @@ export function MediaPreview({
   );
 }
 
+type MediaDetails = {
+  duration?: number;
+  width?: number;
+  height?: number;
+  video_codec?: string;
+  fps?: number | null;
+  size?: number;
+  audio?: { codec?: string; sample_rate?: string; channels?: number }[];
+};
+const strategies: Record<string, string> = {
+  reference: "使用完整话术时长、原声与字幕节奏作为混剪基准。",
+  background: "每支成片独立随机选择背景片段，使用次数只作统计。",
+  pip: "独立随机选片，保留画中画自身字幕。",
+  intro: "随机选择一个完整前贴视频，放在正文之前，保留其字幕。",
+  sticker: "从所选贴纸库中随机叠加贴纸。",
+};
 export function PreviewDetails({
   id,
   path,
@@ -206,6 +305,8 @@ export function PreviewDetails({
   output = false,
   kind = "video",
   available = true,
+  asset,
+  role,
 }: {
   id: string;
   path: string;
@@ -213,11 +314,75 @@ export function PreviewDetails({
   output?: boolean;
   kind?: string;
   available?: boolean;
+  asset?: Asset;
+  role?: string;
 }) {
   const [length, setLength] = useState(seconds);
+  const [info, setInfo] = useState<MediaDetails>({});
   useEffect(() => {
     setLength(seconds);
-  }, [id, seconds]);
+    setInfo({});
+    let disposed = false;
+    if (available && kind !== "subtitle")
+      rpc<MediaDetails>(
+        "media.details",
+        output ? { output_id: id } : { asset_id: id },
+      )
+        .then((value) => {
+          if (!disposed) {
+            setInfo(value);
+            if (value.duration) setLength(value.duration);
+          }
+        })
+        .catch(() => {});
+    return () => {
+      disposed = true;
+    };
+  }, [id, seconds, output, available, kind]);
+  const rows = [
+    ["时长", length != null ? `${length.toFixed(1)} 秒` : "未知"],
+    [
+      "画面",
+      info.width || asset?.width
+        ? `${info.width || asset?.width}×${info.height || asset?.height}`
+        : "未知",
+    ],
+    ["视频编码", info.video_codec?.toUpperCase() || "未知"],
+    ["帧率", info.fps ? `${Number(info.fps.toFixed(2))} fps` : "未知"],
+    [
+      "文件大小",
+      info.size != null ? `${(info.size / 1024 / 1024).toFixed(1)} MB` : "未知",
+    ],
+    [
+      "音轨",
+      info.audio
+        ? info.audio.length
+          ? info.audio
+              .map((audio) =>
+                [
+                  audio.codec?.toUpperCase(),
+                  audio.sample_rate
+                    ? `${Number(audio.sample_rate) / 1000} kHz`
+                    : "",
+                  audio.channels ? `${audio.channels} 声道` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · "),
+              )
+              .join("；")
+          : "无音轨"
+        : "未知",
+    ],
+    ...(asset
+      ? [
+          [
+            "使用次数",
+            asset.usage_count == null ? "未知" : `${asset.usage_count} 次`,
+          ],
+          ["关联字幕", asset.srt_path?.split(/[\\/]/).pop() || "无"],
+        ]
+      : []),
+  ];
   return (
     <div className="preview-layout">
       {kind !== "subtitle" && available && (
@@ -229,22 +394,28 @@ export function PreviewDetails({
           onDuration={setLength}
         />
       )}
-      <Stack gap="lg" justify="center">
-        {kind === "video" && (
+      <Stack gap="md">
+        <dl className="media-details">
+          {rows.map(([label, value]) => (
+            <div key={label} style={{ display: "contents" }}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+        {role && strategies[role] && (
           <Box>
-            <Text size="sm" c="dimmed">
-              视频时长
+            <Text size="xs" c="dimmed" mb={4}>
+              使用策略
             </Text>
-            <Text mt={4}>
-              {length != null ? `${length.toFixed(1)} 秒` : "—"}
-            </Text>
+            <Text size="sm">{strategies[role]}</Text>
           </Box>
         )}
         <Box>
-          <Text size="sm" c="dimmed">
+          <Text size="xs" c="dimmed" mb={4}>
             文件路径
           </Text>
-          <Text mt={4} size="sm" className="preview-path">
+          <Text size="xs" className="preview-path">
             {path}
           </Text>
         </Box>
@@ -290,10 +461,23 @@ export function VideoThumbnail({
         <IconVideo size={32} color="var(--mantine-color-dimmed)" />
       )}
       {!available && (
-        <Badge color="gray" className="thumb-badge">
-          离线
-        </Badge>
+        <Box className="thumb-badge">
+          <Status value="offline" />
+        </Box>
       )}
     </Box>
+  );
+}
+
+export function LoadingPage({ label = "正在加载…" }: { label?: string }) {
+  return (
+    <Center className="page-loading">
+      <Stack align="center" gap="md">
+        <Loader size="md" />
+        <Text size="sm" c="dimmed">
+          {label}
+        </Text>
+      </Stack>
+    </Center>
   );
 }

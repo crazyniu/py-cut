@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { createTheme, MantineProvider } from "@mantine/core";
+import { createTheme, MantineProvider, Modal } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
@@ -10,6 +10,11 @@ const theme = createTheme({
   primaryColor: "cyan",
   primaryShade: 6,
   defaultRadius: "sm",
+  components: {
+    Modal: Modal.extend({
+      defaultProps: { overlayProps: { backgroundOpacity: 0.5, blur: 5 } },
+    }),
+  },
   fontFamily:
     '-apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif',
   headings: { fontFamily: "inherit" },

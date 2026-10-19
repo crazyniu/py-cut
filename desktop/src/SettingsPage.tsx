@@ -11,20 +11,12 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import { IconFolderOpen, IconRefresh } from "@tabler/icons-react";
+import { IconRefresh } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
-import { chooseDirectory, message, rpc, type Agent, type Project } from "./api";
+import { message, rpc, type Agent } from "./api";
 import { PageHeading, report } from "./common";
 type Model = { id: string; name: string; is_default?: boolean };
-export default function SettingsPage({
-  project,
-  onProjectChange,
-}: {
-  project: Project;
-  onProjectChange: () => void;
-}) {
-  const [name, setName] = useState(project.name);
-  const [output, setOutput] = useState(project.output_dir || "");
+export default function SettingsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [provider, setProvider] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
@@ -36,10 +28,6 @@ export default function SettingsPage({
   const [loadingModels, setLoadingModels] = useState(false);
   const [saving, setSaving] = useState(false);
   const [revision, setRevision] = useState(0);
-  useEffect(() => {
-    setName(project.name);
-    setOutput(project.output_dir || "");
-  }, [project.name, project.output_dir]);
   useEffect(() => {
     let disposed = false;
     setDetecting(true);
@@ -87,9 +75,7 @@ export default function SettingsPage({
             : null,
         );
         if (!items.length)
-          setModelError(
-            "Codex 没有返回可用模型，请检查登录状态后重试。",
-          );
+          setModelError("Codex 没有返回可用模型，请检查登录状态后重试。");
       })
       .catch((error) => {
         if (!disposed) setModelError(message(error));
@@ -101,22 +87,6 @@ export default function SettingsPage({
       disposed = true;
     };
   }, [provider, saved, revision]);
-  async function saveProject() {
-    setSaving(true);
-    try {
-      await rpc("projects.update", {
-        project_id: project.id,
-        name: name.trim(),
-        output_dir: output.trim(),
-      });
-      onProjectChange();
-      notifications.show({ message: "项目设置已保存", color: "teal" });
-    } catch (error) {
-      report(error);
-    } finally {
-      setSaving(false);
-    }
-  }
   async function saveAgent() {
     if (!provider || !model) return;
     setSaving(true);
@@ -128,7 +98,7 @@ export default function SettingsPage({
       };
       await rpc("settings.save", { values });
       setSaved(values);
-      notifications.show({ message: "识别工具和模型已保存", color: "teal" });
+      notifications.show({ message: "全局 Codex 设置已保存", color: "teal" });
     } catch (error) {
       report(error);
     } finally {
@@ -138,10 +108,7 @@ export default function SettingsPage({
   const agent = agents.find((item) => item.id === provider);
   return (
     <>
-      <PageHeading
-        title="设置"
-        description="设置项目名称、保存位置和Codex 设置。"
-      />
+      <PageHeading title="设置" description="Codex 设置对所有项目生效。" />
       {error && (
         <Alert color="red" mb="md">
           {error}
@@ -150,53 +117,7 @@ export default function SettingsPage({
       <Stack gap="lg">
         <Paper withBorder p="lg">
           <Stack>
-            <Title order={3} size="h5">
-              项目设置
-            </Title>
-            <Group align="flex-end" gap="md">
-              <TextInput
-                w={220}
-                label="项目名称"
-                value={name}
-                onChange={(event) => setName(event.currentTarget.value)}
-              />
-              <TextInput
-                w={380}
-                label="默认成片输出目录"
-                value={output}
-                onChange={(event) => setOutput(event.currentTarget.value)}
-                rightSection={
-                  <Button
-                    variant="subtle"
-                    size="compact-xs"
-                    aria-label="选择默认输出目录"
-                    onClick={async () => {
-                      try {
-                        const path = await chooseDirectory();
-                        if (path) setOutput(path);
-                      } catch (error) {
-                        report(error);
-                      }
-                    }}
-                  >
-                    <IconFolderOpen size={16} />
-                  </Button>
-                }
-              />
-
-              <Button
-                onClick={saveProject}
-                disabled={!name.trim()}
-                loading={saving}
-              >
-                保存项目设置
-              </Button>
-            </Group>
-          </Stack>
-        </Paper>
-        <Paper withBorder p="lg">
-          <Stack>
-            <Group justify="space-between">
+            <Group gap="md">
               <Title order={3} size="h5">
                 Codex 设置
               </Title>
@@ -213,22 +134,21 @@ export default function SettingsPage({
             <Text size="sm" c="dimmed">
               Codex 为本机智能功能提供服务。请选择要使用的模型。
             </Text>
-            <Group align="flex-end" gap="md">
-              <Select
-                w={180}
+            <Group align="flex-end" gap="md" className="settings-form-row">
+              <TextInput
+                w={220}
                 label="智能工具"
-                placeholder={detecting ? "正在检测…" : "未检测到 Codex"}
-                data={agents.map((item) => ({
-                  value: item.id,
-                  label: item.name,
-                }))}
-                value={provider}
-                onChange={setProvider}
-                allowDeselect={false}
-                disabled={detecting}
+                value={
+                  detecting
+                    ? "正在检测…"
+                    : agent?.available
+                      ? "Codex · 已就绪"
+                      : "Codex · 未就绪"
+                }
+                readOnly
               />
               <Select
-                w={300}
+                w={380}
                 label="使用模型"
                 placeholder={loadingModels ? "正在读取模型…" : "请选择模型"}
                 data={models.map((item) => ({

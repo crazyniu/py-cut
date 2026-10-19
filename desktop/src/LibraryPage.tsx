@@ -10,8 +10,8 @@ import {
   Modal,
   Pagination,
   Paper,
-  SegmentedControl,
   Select,
+  SegmentedControl,
   Stack,
   Table,
   Text,
@@ -34,6 +34,8 @@ import {
   ErrorNotice,
   PreviewDetails,
   PageHeading,
+  MediaCard,
+  Status,
   report,
 } from "./common";
 import {
@@ -248,21 +250,12 @@ export default function LibraryPage({ project }: { project: Project }) {
       <PageHeading
         title="素材库"
         description="关联本地目录，统一查找和管理素材。移除素材仅影响当前素材库。"
-        actions={
-          <Button
-            variant="light"
-            leftSection={<IconPlus size={17} />}
-            onClick={() => setCreate(true)}
-          >
-            新建素材库
-          </Button>
-        }
       />
-      <Group mb="md" align="flex-end">
+      <Group mb="md" align="flex-end" gap="xs" className="page-toolbar">
         <Select
           aria-label="素材库"
           placeholder="请选择素材库"
-          w={190}
+          w={170}
           data={libraries.map((item) => ({
             value: item.id,
             label: `${item.name} · ${item.active_count} 个`,
@@ -285,58 +278,81 @@ export default function LibraryPage({ project }: { project: Project }) {
           leftSection={<IconSearch size={16} />}
           value={query}
           onChange={(event) => setQuery(event.currentTarget.value)}
-          w={200}
+          w={160}
         />
         <Select
-          aria-label="素材类型"
-          w={104}
           allowDeselect={false}
+          w={104}
+          aria-label="素材类型"
           value={kind}
           onChange={(value) => value !== null && setKind(value)}
           data={[
-            { value: "", label: "全部类型" },
+            { value: "", label: "全部" },
             { value: "video", label: "视频" },
             { value: "image", label: "图片" },
             { value: "subtitle", label: "字幕" },
           ]}
         />
         <Select
-          aria-label="排序"
-          w={120}
-          data={[
-            { value: "name", label: "按名称" },
-            { value: "usage", label: "按使用次数" },
-            { value: "duration", label: "按时长" },
-            { value: "size", label: "按画面尺寸" },
-          ]}
-          value={sort}
-          onChange={setSort}
           allowDeselect={false}
-        />
-        <SegmentedControl
-          aria-label="显示方式"
-          value={layout}
-          onChange={setLayout}
+          w={120}
+          aria-label="排序"
           data={[
-            {
-              value: "grid",
-              label: <IconLayoutGrid size={16} aria-label="缩略图视图" />,
-            },
-            {
-              value: "list",
-              label: <IconList size={16} aria-label="列表视图" />,
-            },
+            { value: "name", label: "名称" },
+            { value: "usage", label: "使用次数" },
+            { value: "duration", label: "时长" },
+            { value: "size", label: "尺寸" },
           ]}
+          value={sort || "name"}
+          onChange={(value) => setSort(String(value))}
         />
+        <Group gap={6} aria-label="显示方式">
+          <Button
+            variant={layout === "grid" ? "light" : "default"}
+            w={36}
+            p={0}
+            aria-label="缩略图视图"
+            aria-pressed={layout === "grid"}
+            onClick={() => setLayout("grid")}
+            styles={{
+              root: { border: "1px solid var(--mantine-color-dark-4)" },
+            }}
+          >
+            <IconLayoutGrid size={17} />
+          </Button>
+          <Button
+            variant={layout === "list" ? "light" : "default"}
+            w={36}
+            p={0}
+            aria-label="列表视图"
+            aria-pressed={layout === "list"}
+            onClick={() => setLayout("list")}
+            styles={{
+              root: { border: "1px solid var(--mantine-color-dark-4)" },
+            }}
+          >
+            <IconList size={17} />
+          </Button>
+        </Group>
         <Button
           size="xs"
           variant="default"
           leftSection={<IconRefresh size={14} />}
-          onClick={() => library && mutate("libraries.scan", { library_id: library.id })}
+          onClick={() =>
+            library && mutate("libraries.scan", { library_id: library.id })
+          }
           disabled={!library}
           loading={busy}
         >
           刷新目录
+        </Button>
+        <Button
+          ml="auto"
+          variant="light"
+          leftSection={<IconPlus size={17} />}
+          onClick={() => setCreate(true)}
+        >
+          新建素材库
         </Button>
       </Group>
       <div>
@@ -355,9 +371,10 @@ export default function LibraryPage({ project }: { project: Project }) {
               )}
               <Group gap="md" mb="md">
                 <SegmentedControl
-                  size="xs"
+                  className="choice-group"
+                  aria-label="素材状态"
                   value={removed}
-                  onChange={setRemoved}
+                  onChange={(value) => value && setRemoved(value)}
                   data={[
                     { value: "active", label: "全部素材" },
                     { value: "removed", label: "已移除" },
@@ -473,55 +490,35 @@ export default function LibraryPage({ project }: { project: Project }) {
               ) : layout === "grid" ? (
                 <div className="asset-grid">
                   {assets.map((asset) => (
-                    <Paper
-                      withBorder
+                    <MediaCard
                       key={asset.id}
-                      className={`asset-card ${detailId === asset.id ? "active" : ""}`}
-                    >
-                      <Box className="thumb-select">
+                      active={detailId === asset.id}
+                      title={asset.name}
+                      label={`查看 ${asset.name}`}
+                      onOpen={() => setDetailId(asset.id)}
+                      thumbnail={<AssetThumb asset={asset} />}
+                      selection={
                         <Checkbox
                           aria-label={`选择 ${asset.name}`}
                           checked={selected.includes(asset.id)}
                           onChange={() => toggle(asset.id)}
                         />
-                      </Box>
-                      <button
-                        className="asset-open"
-                        onClick={() => setDetailId(asset.id)}
-                        aria-label={`查看 ${asset.name}`}
-                      >
-                        <AssetThumb asset={asset} />
-                        <Box p="xs">
-                          <Text
-                            size="sm"
-                            lineClamp={1}
-                            fw={500}
-                            title={asset.name}
-                          >
-                            {asset.name}
-                          </Text>
-                          <Text
-                            size="xs"
-                            c="dimmed"
-                            lineClamp={1}
-                            title={asset.path}
-                            mt={2}
-                          >
-                            {asset.path.split(/[\\/]/).slice(-2, -1).join("")}
-                          </Text>
-                          <Group justify="space-between" gap={4} mt={4}>
-                            <Text size="xs" c="dimmed">
-                              {duration(asset.duration)}
-                            </Text>
-                            <Text size="xs" c="dimmed">
-                              {asset.usage_count == null
-                                ? "未统计"
-                                : `使用 ${asset.usage_count} 次`}
-                            </Text>
-                          </Group>
-                        </Box>
-                      </button>
-                    </Paper>
+                      }
+                    >
+                      <Text size="xs">
+                        {asset.width && asset.height
+                          ? `${asset.width}×${asset.height}`
+                          : "媒体信息未知"}
+                      </Text>
+                      <Group justify="space-between" gap={4}>
+                        <Text size="xs">{duration(asset.duration)}</Text>
+                        <Text size="xs">
+                          {asset.usage_count == null
+                            ? "未统计"
+                            : `使用 ${asset.usage_count} 次`}
+                        </Text>
+                      </Group>
+                    </MediaCard>
                   ))}
                 </div>
               ) : (
@@ -553,11 +550,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                             >
                               {asset.name}
                             </button>
-                            {!asset.available && (
-                              <Badge ml={6} color="gray" size="xs">
-                                离线
-                              </Badge>
-                            )}
+                            {!asset.available && <Status value="offline" />}
                           </Table.Td>
                           <Table.Td>{duration(asset.duration)}</Table.Td>
                           <Table.Td>
@@ -599,6 +592,8 @@ export default function LibraryPage({ project }: { project: Project }) {
                 seconds={detail.duration}
                 kind={detail.kind}
                 available={detail.available}
+                asset={detail}
+                role={library?.role}
               />
             )}
           </Modal>
@@ -714,13 +709,15 @@ export default function LibraryPage({ project }: { project: Project }) {
             onChange={setRole}
             allowDeselect={false}
           />
-          <Button
-            disabled={!name.trim()}
-            loading={busy}
-            onClick={createLibrary}
-          >
-            创建素材库
-          </Button>
+          <Group justify="flex-end">
+            <Button
+              disabled={!name.trim()}
+              loading={busy}
+              onClick={createLibrary}
+            >
+              创建素材库
+            </Button>
+          </Group>
         </Stack>
       </Modal>
     </>

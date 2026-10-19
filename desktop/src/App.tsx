@@ -6,7 +6,6 @@ import {
   Button,
   Divider,
   Group,
-  Loader,
   Modal,
   NavLink,
   ScrollArea,
@@ -21,9 +20,7 @@ import {
   IconArrowLeft,
   IconCards,
   IconFolderPlus,
-  IconLayersSubtract,
   IconMovie,
-  IconScissors,
   IconSettings,
   IconTimeline,
 } from "@tabler/icons-react";
@@ -35,18 +32,15 @@ import {
   type Agent,
   type Project,
 } from "./api";
-import { Empty, PageHeading, report } from "./common";
+import { Empty, PageHeading, report, LoadingPage } from "./common";
 const LibraryPage = lazy(() => import("./LibraryPage"));
-const TaskPage = lazy(() => import("./TaskPage"));
+const ProcessingPage = lazy(() => import("./ProcessingPage"));
 const JobsPage = lazy(() => import("./JobsPage"));
 const SettingsPage = lazy(() => import("./SettingsPage"));
 const pages = [
   { id: "library", label: "素材库", icon: IconCards },
-  { id: "montage", label: "混剪", icon: IconTimeline },
-  { id: "cover", label: "字幕擦除", icon: IconScissors },
-  { id: "dedup", label: "视频去重", icon: IconLayersSubtract },
-  { id: "jobs", label: "任务与成片", icon: IconMovie },
-  { id: "settings", label: "设置", icon: IconSettings },
+  { id: "processing", label: "视频处理", icon: IconTimeline },
+  { id: "jobs", label: "成片库", icon: IconMovie },
 ];
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -143,7 +137,10 @@ export default function App() {
                 size="xs"
                 leftSection={<IconArrowLeft size={14} />}
                 justify="flex-start"
-                onClick={() => setProjectId(null)}
+                onClick={() => {
+                  setProjectId(null);
+                  setPage("projects");
+                }}
                 mb="sm"
               >
                 所有项目
@@ -180,6 +177,12 @@ export default function App() {
             />
           )}
           <Box mt="auto">
+            <NavLink
+              label="设置"
+              leftSection={<IconSettings size={18} stroke={1.6} />}
+              active={page === "settings"}
+              onClick={() => setPage("settings")}
+            />
             <Divider my="md" />
             <Text size="xs" c="dimmed">
               本地视频工具
@@ -203,13 +206,10 @@ export default function App() {
           )}
           <ScrollArea className="main-scroll" type="auto">
             <Box p="xl" className="main-content">
-              <Suspense fallback={<Loader size="sm" aria-label="页面加载中" />}>
+              <Suspense fallback={<LoadingPage label="页面加载中" />}>
                 {connected && codex !== "ready" ? (
                   codex === "loading" ? (
-                    <Group>
-                      <Loader size="sm" />
-                      <Text>正在检查本机 Codex…</Text>
-                    </Group>
+                    <LoadingPage label="正在检查本机 Codex…" />
                   ) : (
                     <Empty
                       title="请先安装并登录 Codex"
@@ -219,6 +219,8 @@ export default function App() {
                       }
                     />
                   )
+                ) : page === "settings" ? (
+                  <SettingsPage />
                 ) : !project ? (
                   <>
                     <PageHeading
@@ -226,6 +228,7 @@ export default function App() {
                       description="一个产品，一个独立项目。素材、处理任务与成片按项目管理。"
                       actions={
                         <Button
+                          ml="auto"
                           leftSection={<IconFolderPlus size={17} />}
                           onClick={() => setCreate(true)}
                           disabled={!connected}
@@ -257,9 +260,6 @@ export default function App() {
                             <Text fw={600} mt="md">
                               {item.name}
                             </Text>
-                            <Text size="xs" c="dimmed" mt="xs" lineClamp={2}>
-                              {item.output_dir || "尚未设置输出目录"}
-                            </Text>
                             <Text size="sm" c="cyan" mt="lg">
                               进入项目
                             </Text>
@@ -288,14 +288,13 @@ export default function App() {
                     {page === "library" && (
                       <LibraryPage key={project.id} project={project} />
                     )}
-                    {["montage", "cover", "dedup"].includes(page) && (
-                      <TaskPage
-                        key={`${project.id}-${page}`}
+                    {page === "processing" && (
+                      <ProcessingPage
+                        key={project.id}
                         project={project}
-                        kind={page as "montage" | "cover" | "dedup"}
                         revision={revision}
-                        onJobs={() => setPage("jobs")}
                         onSettings={() => setPage("settings")}
+                        onLibrary={() => setPage("library")}
                       />
                     )}
                     {page === "jobs" && (
@@ -303,13 +302,6 @@ export default function App() {
                         key={project.id}
                         project={project}
                         revision={revision}
-                      />
-                    )}
-                    {page === "settings" && (
-                      <SettingsPage
-                        key={project.id}
-                        project={project}
-                        onProjectChange={refresh}
                       />
                     )}
                   </>
@@ -337,15 +329,17 @@ export default function App() {
             }}
           />
           <Text size="sm" c="dimmed">
-            创建后可添加素材目录，在设置中选择成片保存位置。
+            创建后添加素材目录，在新建视频处理任务时选择成片保存位置。
           </Text>
-          <Button
-            onClick={createProject}
-            disabled={!name.trim()}
-            loading={busy}
-          >
-            创建项目
-          </Button>
+          <Group justify="flex-end">
+            <Button
+              onClick={createProject}
+              disabled={!name.trim()}
+              loading={busy}
+            >
+              创建项目
+            </Button>
+          </Group>
         </Stack>
       </Modal>
     </>

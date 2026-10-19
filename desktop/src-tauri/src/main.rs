@@ -23,6 +23,7 @@ struct Bridge {
     pending: Mutex<HashMap<u64, oneshot::Sender<Reply>>>,
     sequence: AtomicU64,
     active: AtomicBool,
+    active_job: Mutex<Option<String>>,
     closing: AtomicBool,
     #[cfg(windows)]
     job: isize,
@@ -172,6 +173,7 @@ fn launch(app: &tauri::AppHandle) -> Result<Arc<Bridge>, String> {
         pending: Mutex::new(HashMap::new()),
         sequence: AtomicU64::new(1),
         active: AtomicBool::new(false),
+        active_job: Mutex::new(None),
         closing: AtomicBool::new(false),
         #[cfg(windows)]
         job,
@@ -200,9 +202,15 @@ fn launch(app: &tauri::AppHandle) -> Result<Arc<Bridge>, String> {
                 if message.get("event").and_then(Value::as_str) == Some("job") {
                     if let Some(status) = message.pointer("/payload/status").and_then(Value::as_str)
                     {
-                        reader
-                            .active
-                            .store(matches!(status, "running" | "cancelling"), Ordering::SeqCst);
+                        let id = message.get("job_id").and_then(Value::as_str).unwrap_or("");
+                        let mut current = reader.active_job.lock().unwrap();
+                        if matches!(status, "running" | "cancelling") {
+                            *current = Some(id.to_owned());
+                            reader.active.store(true, Ordering::SeqCst);
+                        } else if current.as_deref() == Some(id) {
+                            *current = None;
+                            reader.active.store(false, Ordering::SeqCst);
+                        }
                     }
                 }
                 let _ = app.emit("pycut-event", message);

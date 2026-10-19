@@ -3,17 +3,34 @@
 The Tauri application provides project-scoped libraries, processing queues and
 outputs over the existing cover, dedup and montage implementations. React and
 Mantine own the ordinary-user forms. Users select materials, quantity and output,
-start processing and view results. A read-only animated batch view shows each
-video waiting, processing, completed, review, failed or cancelled from actual worker
-events. Internal stages never increase final-video counts. Library selection uses a top Select; directory
+start processing and view results. The video-processing entry lists montage, cover and dedup jobs together, with type
+and activity filters. New jobs select their type and restore that type's saved form. Montage asks only
+for reference videos, a shared per-video quantity and an output directory;
+material pools merge the project's configured libraries by role. Configured
+optional pools are used automatically; absent pools are skipped. Cover and dedup select folders and recursively process their
+MP4 files without per-video selection or changing library membership.
+Each job opens its own read-only animated
+batch view, using a single thumbnail state card for each stable input/variant identifier.
+Cards follow actual worker events and link published outputs by exact output ID;
+encoding percentages use measured FFmpeg media time or frame counts, and unknown
+work remains indeterminate. Waiting, completed, review, failure and cancellation
+remain distinct. Internal stages never increase final-video counts. The finished-video
+library groups published outputs by batch and shows thumbnail previews without
+processing progress. Folder actions target the actual batch directories.
+Library selection uses a top Select; directory
 management and media details open in dialogs. Internal processing graphs, technical
 parameters and routine logs stay out of the interface; failures offer copyable logs. Native window controls and dialogs remain
-system-owned. Videos use a 9:16 preview area with contained pictures.
+system-owned. Libraries, task batches and outputs share one 9:16 thumbnail card
+with contained pictures, a top status tag and readable captions over the image.
+Creation actions align to the right edge of their toolbar. Choice sets with at most two options
+use bordered button groups; larger sets use Select inputs.
+All application modals share a dimmed, blurred backdrop; system pickers stay native.
 
 ## Data and processing
 
 Each product is a project with its own libraries, roots, workbench settings,
-tasks, output root and usage history. The SQLite catalog lives in the platform's
+tasks and usage history. Output directories are selected when creating tasks.
+Codex model settings are global and apply to every project. The SQLite catalog lives in the platform's
 application data directory. Source media stays in place. Recursive indexing merges
 canonical files, ignores directory symlinks and retains metadata for offline files.
 Removing an asset changes only its library membership; restoring or rescanning
@@ -32,6 +49,8 @@ roots must be readable; disabled pools are not read. Changed inputs reject the j
 instead of silently substituting files. Processing retains the CLI algorithms,
 calibrated defaults, verification, audio and output contracts. Multiple references
 share a variant count from 1 through 99 and one flat montage batch directory.
+Explicit folder jobs reuse CLI traversal and output-tree exclusions; their frozen
+files enter the metadata catalog for thumbnails without becoming library members.
 
 Only atomic publication creates a montage output and counts material usage. A
 prepared journal identifies the exact staged file, enabling idempotent recovery

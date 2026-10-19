@@ -99,6 +99,8 @@ export interface Use {
 }
 export type JobKind = "montage" | "cover" | "dedup";
 export interface TaskItem {
+  output_id?: string;
+  progress?: { stage?: string; completed?: number; total?: number };
   id: string;
   name: string;
   path: string;
@@ -165,9 +167,10 @@ export const roles: Record<Role, string> = {
 export const kinds: Record<JobKind, string> = {
   montage: "混剪",
   cover: "字幕擦除",
-  dedup: "去重",
+  dedup: "视频去重",
 };
 export const statusNames: Record<string, string> = {
+  offline: "离线",
   queued: "排队中",
   cancelling: "正在停止",
   running: "运行中",
@@ -177,6 +180,8 @@ export const statusNames: Record<string, string> = {
   failed: "失败",
   cancelled: "已取消",
   interrupted: "已中断",
+  skipped: "已跳过",
+  unprocessed: "未处理",
 };
 export const terminal = (job: Job) =>
   !["queued", "running", "cancelling"].includes(job.status);
