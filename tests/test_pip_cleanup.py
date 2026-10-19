@@ -1,4 +1,4 @@
-"""PiP 空时间轴复制失败时不得保留临时片、不得覆盖旧成片。"""
+"""Empty-timeline copy failure cleans temporary PIP files and preserves previous output."""
 from __future__ import annotations
 
 from pathlib import Path

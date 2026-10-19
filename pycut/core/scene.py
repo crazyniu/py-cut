@@ -1,9 +1,7 @@
-"""场景检测与分段。
+"""Scene detection and bounded segment planning.
 
-必须用 ffmpeg 内置 scene 分数（select='gt(scene,TH)'）：阈值 0.30 是在本机标定的
-（0.25→26 / 0.30→16 / 0.40→16 切点）。换成自算直方图差异会量纲不同、标定全废，
-且 Python 逐帧解码比 ffmpeg 慢约 5 倍。不要加 -threads N（实测反而慢一倍）。
-"""
+Use the calibrated FFmpeg scene score, not a differently scaled Python histogram.
+Keep default scene-detection threading; explicit thread counts regressed this path."""
 from __future__ import annotations
 
 import re
@@ -16,10 +14,7 @@ PTS_RE = re.compile(r"\bpts_time:\s*([0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)")
 
 
 def detect_scenes(path, scene_th: float) -> list[float]:
-    """返回切点（秒），不含 0.0。
-
-    用 ffmpeg 内置 scene 分数：阈值 0.30 标定（见模块说明）。
-    """
+    """Return scene-cut timestamps in seconds, excluding zero; propagate FFmpeg failure."""
     args = [
         config.FFMPEG, "-hide_banner", "-nostats",
         "-i", str(path),
@@ -28,8 +23,7 @@ def detect_scenes(path, scene_th: float) -> list[float]:
     ]
     rc, _out, err = run_cmd(args, timeout=1800)
     if rc != 0:
-        # ffmpeg 失败与合法的“没有场景切换”不能等同，否则会把整支
-        # 视频当作一个完整片段继续编码，可能掩盖坏文件和解码故障。
+        # Decoder failure is not a valid no-scene-change result; propagate it.
         tail = err.strip().splitlines()
         reason = tail[-1] if tail else "没有错误输出"
         raise RuntimeError(f"场景检测失败 rc={rc}: {reason}")
@@ -45,21 +39,21 @@ def detect_scenes(path, scene_th: float) -> list[float]:
             t = float(m.group(1))
         except ValueError:
             continue
-        if t == t and t > 0:      # 排除 NaN
+        if t == t and t > 0:
             cuts.append(t)
     return cuts
 
 
 def build_segments(cuts: list[float], duration: float,
                    min_seg: float, max_seg: float) -> list[tuple[float, float]]:
-    """切点 -> 段落。去重 / 合并过短段 / 切分超长段。"""
+    """Deduplicate cuts, split long intervals, and merge short intervals without losing content."""
     if not (math.isfinite(duration) and duration > 0
             and math.isfinite(min_seg) and math.isfinite(max_seg)
             and 0 < min_seg <= max_seg and max_seg >= 2 * min_seg):
         raise ValueError("时长须为正数，分段范围须满足 0 < min_seg 且 max_seg >= 2 * min_seg")
     if duration < min_seg:
         return []
-    # 1) 去重：间距 < DEDUP 的切点合并
+
     deduped: list[float] = []
     for c in sorted(cuts):
         if c <= 0.05 or c >= duration - 0.05:
@@ -68,7 +62,6 @@ def build_segments(cuts: list[float], duration: float,
             continue
         deduped.append(c)
 
-    # 2) 切分超长段
     expanded: list[float] = []
     prev = 0.0
     for c in deduped + [duration]:
@@ -83,8 +76,7 @@ def build_segments(cuts: list[float], duration: float,
     if expanded and expanded[-1] >= duration - 1e-6:
         expanded.pop()
 
-    # 3) 合并过短段（并入相邻段，不删除内容）
-    #    首段若过短也不能保留为碎片段 —— 让 start 持续累积，直到跨度 >= min_seg 才切出。
+    # Accumulate a short first interval until it can join a valid neighbour.
     segs: list[tuple[float, float]] = []
     start = 0.0
     for c in expanded:
@@ -94,15 +86,13 @@ def build_segments(cuts: list[float], duration: float,
         start = c
     segs.append((start, duration))
 
-    # 尾部过短 -> 并入上一段
     if len(segs) >= 2 and segs[-1][1] - segs[-1][0] < min_seg:
-        # 末段并入上一段时，右边界必须使用最后一个片段的 end。
-        # 原实现把最后片段的 start 当作 end，会丢失整段结尾画面。
+        # Keep the last interval end when merging a short tail; using its start drops footage.
         _tail_start, tail_end = segs.pop()
         prev_start, _prev_end = segs.pop()
         segs.append((prev_start, tail_end))
 
-    # 合并短尾段可能再次超过上限（例如 15s + 1s），最后均分修正。
+    # Merging a short tail can exceed max_seg, so rebalance again.
     bounded = []
     for start, end in segs:
         count = max(1, math.ceil((end - start) / max_seg))

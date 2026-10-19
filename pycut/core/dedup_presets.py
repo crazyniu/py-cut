@@ -1,20 +1,8 @@
-"""去重档位定义 + 按 seed 随机化参数（docs/DEDUP.md 第 4/5 节）。
+"""Deterministic deduplication parameters derived from a preset and seed.
 
-本模块只做一件事：给定「档位 + seed + 调用方开关」，产出一份**确定性**的参数 dict。
-它不跑 ffmpeg、不碰文件，方便单测与复盘（同一 seed 永远得到同一份参数）。
-
-分层与其它模块的分工：
-    M1 容器层 container → crf / gop / abitrate / fps / encoder_tag
-    M2 几何层 geo      → crop_px / zoom / rotate_deg / perspective_px / mirror
-    M3 像素层 pixel    → brightness / contrast / saturation / hue_deg /
-                         channel_gains / noise / sharpen
-    M4 时间层 time     → speed
-    M5 结构层 struct   → border / badge / logo（另加时间层的变速）
-    M6 音频层 audio    → pitch
-    M7 水印层          → delogo（调用方给的 "x,y,w,h"，本模块只透传）
-
-所有取值区间一律从 config.DEDUP_* 读，本模块不写死标定数值。
-"""
+No media I/O or FFmpeg execution. Read calibrated ranges from config; callers
+control optional geometry, structure, temporal, audio, and visible-logo operations.
+Keep the existing parameter keys and RNG draw order stable for reproducibility."""
 from __future__ import annotations
 
 import hashlib
@@ -23,15 +11,8 @@ import random
 from .. import config
 
 
-# ---------------------------------------------------------------------------
-# 档位定义
-# ---------------------------------------------------------------------------
-#   geo / pixel / audio : 0~1 的强度系数，用来在 config 给出的 [min,max] 里取子区间，
-#                         系数越小 → 参数越轻（light 明显小于 aggressive）。
-#   time / struct / container : 模块开关（bool）。
-#   encode : M1 编码参数的强度系数（crf / gop / abitrate），让轻档码率更保守、画质更稳。
-#   mirror : 调用方传 --mirror 时，实际启用镜像的概率（轻档不给镜像，见 docs/DEDUP.md 第 2 节）。
-#   label  : 档位中文名，只用于日志/报告。
+# geo/pixel/audio/encode are range-strength factors; time/struct/container are switches.
+# Preset mirror probability applies only when the caller enables mirroring.
 PRESETS: dict[str, dict] = {
     "light": {
         "geo": 0.4, "pixel": 0.4, "time": False, "struct": False,
@@ -50,27 +31,18 @@ PRESETS: dict[str, dict] = {
     },
 }
 
-# 画中画位置候选（对应 overlay 的 x/y 表达式由 dedup.py 负责）
+
 LOGO_POSITIONS = ("tr", "bl", "br", "tl")
 
-# 帧率抖动：命中概率固定，与档位无关（DEDUP_FPS_JITTER 里 60fps 帧率翻倍，
-# 故意降权，避免批量处理时把片子的帧率整体抬高）
+# Downweight the 60-FPS choice to avoid doubling frame rates throughout a batch.
 _FPS_CHANCE = 0.6
-_FPS_WEIGHTS = (3, 3, 3, 1)      # 对应 DEDUP_FPS_JITTER 的前三项与 "60"
+_FPS_WEIGHTS = (3, 3, 3, 1)
 
 
-# ---------------------------------------------------------------------------
-# 基础工具
-# ---------------------------------------------------------------------------
 def derive_seed(*parts) -> int:
-    """由任意可转字符串的成分稳定推导 32 位 seed。
+    """Derive a stable 32-bit seed from stringifiable components using blake2b.
 
-    刻意**不用**内置 hash()（str 的 hash 每进程加盐，跨进程不稳定），改用
-    blake2b：同一组成分在任何机器、任何时间都得到同一个 seed。
-
-    >>> derive_seed("a.mp4", 3, "acc-1") == derive_seed("a.mp4", 3, "acc-1")
-    True
-    """
+    Do not use hash(): Python salts string hashes between processes."""
     raw = "\x1f".join("" if p is None else str(p) for p in parts)
     digest = hashlib.blake2b(raw.encode("utf-8"), digest_size=4).digest()
     return int.from_bytes(digest, "big")
@@ -82,10 +54,7 @@ def _clamp01(x: float) -> float:
 
 def _span(rng: random.Random, lo: float, hi: float, strength: float,
           signed: bool = False) -> float:
-    """在 [lo,hi] 里按强度取子区间 [lo, lo+(hi-lo)*strength] 再随机取值。
-
-    signed=True 时随机取正负（用于亮度/色相/旋转这类双向偏移）。
-    """
+    """Sample [lo, lo + (hi-lo)*strength]; signed=True randomly chooses the sign."""
     top = lo + (hi - lo) * _clamp01(strength)
     v = rng.uniform(lo, top)
     if signed and rng.random() < 0.5:
@@ -98,26 +67,20 @@ def _int_span(rng: random.Random, lo: int, hi: int, strength: float) -> int:
 
 
 def _resolve(preset: str) -> tuple[str, dict]:
-    """未知档位回落到 config.DEDUP_DEFAULT_PRESET。"""
+    """Resolve a preset, falling back to DEDUP_DEFAULT_PRESET."""
     name = preset if preset in PRESETS else config.DEDUP_DEFAULT_PRESET
     return name, PRESETS[name]
 
 
-# ---------------------------------------------------------------------------
-# M1 可选码率目标：隔离随机流，不改变现有 28 项 preset 的采样顺序
-# ---------------------------------------------------------------------------
-# 以既有 VideoInfo.bitrate (config.BITRATE_LOW/HIGH) 为基线。
-# 仅显式 --vary-bitrate 时启用；变化严格限制为基线的 ±6%，
-# 属于保守的初始产品范围，实际编码结果须在授权素材上测量。
+# Use a separate RNG so optional bitrate variation preserves the existing parameter sequence.
+# Enable only explicitly; keep the target within 6% of the existing bitrate baseline.
 _VIDEO_BITRATE_SHIFT_PCTS = (-6, -4, -2, 2, 4, 6)
 
 
 def video_bitrate_for_seed(seed: int, baseline: str) -> tuple[str, int]:
-    """返回 (libx264 ABR 目标码率, 偏移百分比)，同 seed 跨进程可复现。
+    """Return (libx264 ABR target, percent offset) from a separate deterministic RNG.
 
-    独立派生随机流，保证开启码率选项不会影响既有 build_params 的
-    CRF/GOP、滤镜和音轨随机化序列。baseline 取既有 VideoInfo.bitrate。
-    """
+    Use the existing VideoInfo bitrate baseline; do not perturb build_params draw order."""
     value = str(baseline).strip().lower()
     try:
         if value.endswith("m"):
@@ -136,18 +99,14 @@ def video_bitrate_for_seed(seed: int, baseline: str) -> tuple[str, int]:
     return f"{kbps}k", change
 
 
-# ---------------------------------------------------------------------------
-# M2 可选 Ken Burns：独立 seed 流，不触碰默认 28 键 preset 采样
-# ---------------------------------------------------------------------------
+# Use a separate RNG for optional pan/zoom; preserve default preset draws.
 _KEN_BURNS_DIRECTIONS = ("lr", "rl", "tb", "bt")
 
 
 def ken_burns_for_seed(seed: int, duration: float) -> dict:
-    """按 seed 生成缓慢缩放/平移参数，不加载媒体也不改变既有随机流。
+    """Derive slow pan/zoom parameters from a separate deterministic RNG.
 
-    方向和幅度由单独派生的 RNG 决定；周期最长为视频实际时长，
-    极短视频使用最少 0.05 秒周期，保证滤镜表达式无除零风险。
-    """
+    Limit the cycle to actual duration with a 0.05-second floor to avoid division by zero."""
     length = float(duration)
     if not (0 < length < float("inf")):
         raise ValueError(f"Ken Burns 视频时长无效: {duration!r}")
@@ -161,22 +120,15 @@ def ken_burns_for_seed(seed: int, duration: float) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# 参数生成
-# ---------------------------------------------------------------------------
 def build_params(preset: str, seed: int, *, has_audio: bool = True,
                  width: int = 0, height: int = 0,
                  mirror: bool = False, speed: bool = False,
                  border: bool = False, badge: bool = False,
                  logo: str = "", delogo: str = "") -> dict:
-    """按档位 + seed 生成确定性的去重参数（同样的输入 → 完全一样的 dict）。
+    """Return reproducible parameters for the preset, seed, and caller switches.
 
-    单项开关（mirror / speed / border / badge / logo / delogo）受调用方控制：
-    调用方没开的一律不做；调用方开了但档位不允许（如 light 的结构层、镜像），
-    则按档位概率或直接否决，并在 summary 里说明。
-
-    width / height 用于把裁剪像素夹在安全范围内（不超过短边的 5%），0 表示未知则不夹。
-    """
+    Preset rules still control explicitly enabled effects. Known width/height limit
+    cropping to 5% of the shorter side; zero dimensions leave that bound unknown."""
     name, cfg = _resolve(preset)
     rng = random.Random(seed)
 
@@ -186,10 +138,9 @@ def build_params(preset: str, seed: int, *, has_audio: bool = True,
     encode = float(cfg["encode"])
     notes: list[str] = []
 
-    # ---- M2 几何层 -------------------------------------------------------
     crop_px = _int_span(rng, config.DEDUP_CROP_RANGE[0],
                         config.DEDUP_CROP_RANGE[1], geo)
-    if width > 0 and height > 0:                    # 别把画面裁狠了
+    if width > 0 and height > 0:
         cap = max(2, int(min(width, height) * 0.05))
         crop_px = min(crop_px, cap)
     crop_px = min(int(config.DEDUP_CROP_RANGE[1]), crop_px + crop_px % 2)
@@ -198,17 +149,11 @@ def build_params(preset: str, seed: int, *, has_audio: bool = True,
     rotate_deg = round(_span(rng, config.DEDUP_ROTATE_DEG[0],
                              config.DEDUP_ROTATE_DEG[1], geo, signed=True), 3)
 
-    # 梯形微变形：**已停用**，恒为 0。键保留是为了 28 键契约完整、读旧报告不报错。
-    # 停用原因（2026-10-09 实测）：ffmpeg 9 的 perspective 不带 s= 时输出尺寸
-    # 与输入不一致，四角坐标会把画面径向拉花成细长条（已抽帧确认为真实损坏，
-    # 不是度量失真）；而去重收益仅 0.42~0.75 pHash，收益极小、破坏性极大。
-    # dedup.py 侧同步不再生成该滤镜，故此处也必须为 0，
-    # 否则 summary 会宣称做了实际没做的扰动，破坏 docs 第 5 节的复盘契约。
+    # Keep perspective_px=0 for the stable parameter schema; the disabled filter distorted frames.
     perspective_px = 0
 
     use_mirror = bool(mirror) and rng.random() < float(cfg["mirror"])
 
-    # ---- M3 像素层 -------------------------------------------------------
     brightness = round(_span(rng, 0.0, config.DEDUP_BRIGHTNESS, pixel,
                              signed=True), 4)
     contrast = round(_span(rng, config.DEDUP_CONTRAST_RANGE[0],
@@ -219,7 +164,7 @@ def build_params(preset: str, seed: int, *, has_audio: bool = True,
 
     drift = round(_span(rng, 0.0, config.DEDUP_RGB_DRIFT, pixel), 4)
     gains = tuple(round(1.0 + rng.uniform(-drift, drift), 4) for _ in range(3))
-    if all(abs(g - 1.0) < 1e-9 for g in gains):      # 兜底：至少一个通道要动
+    if all(abs(g - 1.0) < 1e-9 for g in gains):      # Ensure at least one colour channel changes.
         gains = (round(1.0 + drift, 4), 1.0, 1.0)
     rgb_drift = drift
 
@@ -228,19 +173,18 @@ def build_params(preset: str, seed: int, *, has_audio: bool = True,
     sharpen = round(_span(rng, config.DEDUP_SHARPEN_RANGE[0],
                           config.DEDUP_SHARPEN_RANGE[1], pixel), 3)
 
-    # ---- M4 时间层：变速要档位与调用方都同意 ------------------------------
+    # Speed requires both preset permission and an explicit caller switch.
     speed_val = 1.0
     if cfg["time"] and speed:
         speed_val = round(_span(rng, config.DEDUP_SPEED_RANGE[0],
                                 config.DEDUP_SPEED_RANGE[1], 1.0), 4)
 
-    # ---- M6 音频层：变调保留时长；无音轨就 1.0 --------------------------
+    # Pitch preserves duration; silent inputs retain ratio 1.0.
     pitch = 1.0
     if has_audio and audio > 0:
         pitch = round(_span(rng, config.DEDUP_PITCH_RANGE[0],
                             config.DEDUP_PITCH_RANGE[1], audio), 5)
 
-    # ---- M1 容器层 -------------------------------------------------------
     if cfg["container"]:
         crf = _int_span(rng, config.DEDUP_CRF_RANGE[0],
                         config.DEDUP_CRF_RANGE[1], encode)
@@ -248,7 +192,7 @@ def build_params(preset: str, seed: int, *, has_audio: bool = True,
                         config.DEDUP_GOP_RANGE[1], encode)
         ab_kbps = _int_span(rng, config.DEDUP_ABITRATE_RANGE[0],
                             config.DEDUP_ABITRATE_RANGE[1], audio)
-    else:                                           # 理论不可达，留个兜底
+    else:
         crf = int(config.DEDUP_CRF_RANGE[0])
         gop = int(config.DEDUP_GOP_RANGE[0])
         ab_kbps = int(config.DEDUP_ABITRATE_RANGE[0])
@@ -263,7 +207,7 @@ def build_params(preset: str, seed: int, *, has_audio: bool = True,
     tag_hex = "".join(rng.choice("0123456789abcdef") for _ in range(6))
     encoder_tag = f"pycut-{tag_hex}"
 
-    # ---- M5 结构层：默认只有 aggressive 可能开，调用方显式传 True 则尊重 ---
+    # Respect explicit structure switches; otherwise only aggressive may enable them.
     use_border = bool(border) or (bool(cfg["struct"]) and rng.random() < 0.5)
     use_badge = bool(badge) or (bool(cfg["struct"]) and rng.random() < 0.6)
     if (use_border and not border) or (use_badge and not badge):
@@ -272,7 +216,6 @@ def build_params(preset: str, seed: int, *, has_audio: bool = True,
     if logo and not cfg["struct"]:
         notes.append("画中画已按调用方要求保留")
 
-    # ---- 摘要 ------------------------------------------------------------
     bits = [f"档位={name}"]
     if cfg["container"]:
         bits.append(f"重编码 CRF={crf} GOP={gop} 音频={abitrate}")
@@ -320,13 +263,12 @@ def build_params(preset: str, seed: int, *, has_audio: bool = True,
     summary = "；".join(bits)
 
     return {
-        # M2 几何
         "crop_px": crop_px,
         "zoom": zoom,
         "rotate_deg": rotate_deg,
         "perspective_px": perspective_px,
         "mirror": use_mirror,
-        # M3 像素
+
         "brightness": brightness,
         "contrast": contrast,
         "saturation": saturation,
@@ -335,23 +277,23 @@ def build_params(preset: str, seed: int, *, has_audio: bool = True,
         "channel_gains": gains,
         "noise": noise,
         "sharpen": sharpen,
-        # M4 时间
+
         "speed": speed_val,
-        # M6 音频
+
         "pitch": pitch,
-        # M1 容器
+
         "fps": fps,
         "crf": crf,
         "gop": gop,
         "abitrate": abitrate,
         "encoder_tag": encoder_tag,
-        # M5 结构 / M7 水印
+
         "border": use_border,
         "badge": use_badge,
         "logo": logo,
         "logo_pos": logo_pos,
         "delogo": delogo,
-        # 回填
+
         "preset": name,
         "seed": seed,
         "summary": summary,

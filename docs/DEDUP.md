@@ -1,340 +1,165 @@
-# dedup —— 视频去重需求与技术方案
+# Deduplication requirements and architecture
 
-> 本文仅记录长期需求、架构与已知技术边界，开发范围以当前用户需求为准，验证与交付证据记录在 PR，不在此记录开发状态。
-> 定位：一个**独立子命令**，对已有视频/切片做技术层扰动，降低被抖音、视频号等平台
-> 判为「重复内容」而被限流/降权的概率。
-> 本文是所有去重相关技术方案的**唯一汇总处**，开发时按本文落地。
+The `dedup` command applies technical variations to supplied videos/clips and measures
+visual change. This document separates durable contracts from candidate capabilities;
+source/help and PR acceptance evidence determine support. It is not a progress tracker.
 
----
+## 1. Scope and limits
 
-## 1. 目标与边界
+Input is explicit MP4 files or recursively merged clip roots. Output is separate
+processed video by default, optional explicit in-place replacement, and optional JSON
+reports describing parameters/measurements. Preserve spoken meaning; technical effects
+do not rewrite narration. Use only owned/authorized material. For the Jiuyuanxian
+project, do not introduce efficacy/medical claims, including sticker/badge text.
 
-| 项 | 说明 |
-|---|---|
-| 输入 | 单个视频 / 一个切片 / 整个切片桶目录（`切片/有人脸`、`切片/无人脸`） |
-| 输出 | 去重后的视频（原地或新目录）+ **处理报告 JSON**（每条用了哪些参数、自检结果） |
-| 不改 | 文案语义（去重只做画面/音频/容器技术层，不重写口播内容） |
-| 不承诺 | **任何方案都不能保证 100% 过审**。平台模型持续升级，本文方案是「降低相似度」，不是「绕过」 |
-| 合规 | 仅用于**自有或已授权素材**。九源仙项目红线：禁止任何功效/医疗宣称，去重不得引入违规文字贴纸 |
+No combination guarantees platform acceptance or copyright clearance. File hashes,
+metadata, visual hashes/semantic features, audio, and OCR/ASR text can differ in what
+they measure. A local score establishes only its defined metric. Operational behavior,
+uploading, account login, titles/covers/topics, and platform policy are outside this
+local processor. Do not retain unsourced platform percentages, approval thresholds,
+or algorithm/version claims as implementation requirements.
 
----
+## 2. Capability map
 
-## 2. 对手模型：平台到底在比什么
+These eight families organize design options; each row distinguishes current scope
+from candidates. Do not assume every listed FFmpeg filter is implemented or available
+on a host. Preserve defaults and existing gates when adding effects.
 
-理解检测维度，才知道该改哪里。平台普遍是**多层指纹 + 行为信号**叠加打分：
-
-| # | 层级 | 比对内容 | 抗干扰性 | 对应我们的模块 |
-|---|---|---|---|---|
-| 1 | 文件哈希 | MD5 / SHA、分块哈希 | 极弱（重编码即破） | M1 容器层 |
-| 2 | 元数据/容器特征 | 时长、分辨率、帧率、编码器串、码率、创建时间、设备/GPS | 弱 | M1 容器层 |
-| 3 | 视觉指纹 | 关键帧抽取 → pHash/DCT（32×32 灰度低频）→ 汉明距离；2025 后叠加 CNN 语义特征、光流运动轨迹、颜色直方图 | **强** | M2/M3/M4/M5 |
-| 4 | 音频指纹 | 频谱/MFCC 特征（Shazam 式），人声波形是重点 | 中强 | M6 音频层 |
-| 5 | 文本指纹 | OCR 画面文字 + ASR 语音转写 + NLP 语义相似度 | 中 | M8 文本层 |
-| 6 | 行为信号 | 同 IP / 同设备 / 固定发布时间 / 账号矩阵 | — | 运营侧规避，不在本工具范围 |
-
-**关键认知（决定方案取舍）**：
-
-- 只改 MD5、只加滤镜、只调亮度、只加片头片尾 —— **已基本无效**。
-- 镜像、倒放、单纯画中画 —— **2025 后已大面积失效**：像素间的空间关联逻辑不变，
-  AI 语义层照样认；且镜像后文字/Logo/人脸朝向异常，**人工复审反而更容易判搬运**。
-- 真正有效的是**结构性改动**：镜头顺序、构图、时长节奏、音频轨道被替换或重制。
-- 行业经验阈值（非官方）：画面结构性改动覆盖全片 **60% 以上时长** + 音频至少一条轨道被重制
-  + 标题/封面/话题重写，过审概率才明显上升。
-- 参考指标：公开的短视频版权检测 mAP 已达 **0.907** 级，别指望单点突破。
-
----
-
-## 3. 功能地图（模块清单）
-
-> 优先级：P0 = 首期必做，P1 = 二期，P2 = 三期/可选。
-> 本机 ffmpeg 9.0.2（homebrew full build）已核实支持本文用到的全部滤镜：
-> `crop scale pad rotate perspective hflip vflip transpose zoompan setpts fps minterpolate select
-> reverse xfade overlay drawbox drawtext split vstack hstack eq hue curves colorchannelmixer
-> chromashift colorlevels noise unsharp gblur boxblur smartblur delogo removelogo blend maskfun geq
-> amix atempo asetrate loudnorm`；编码器可用 `libx264`(支持 CRF) / `libx265` /
-> `h264_videotoolbox`(**仅码率模式，无 CRF**) / `aac`。
-
-### M1 容器与元数据层（P0）
-
-| 手段 | 实现 | 注意 |
+| Family | Existing contract | Candidate extensions and constraints |
 |---|---|---|
-| 重编码改文件哈希 | `-c:v libx264 -crf {22~26 随机}` 或 videotoolbox 码率随机 | 这是**必要但不充分**的一步 |
-| 清空元数据 | `-map_metadata -1` | 顺带抹掉设备/时间/GPS/编码器串 |
-| 写自定义 tag | `-metadata:s:v encoder="..."` `-metadata title=...` | 别所有视频写同一个值，按 seed 随机 |
-| 非标分辨率 | 1080×1920 → 1076×1912 一类偶数尺寸 | 破坏「同分辨率批量上传」特征 |
-| 帧率微调 | 30 → 29.97 / 30.03 | 需同步音频，别造成音画不同步 |
-| GOP 随机 | `-g {48~60}` | 改变关键帧位置，影响抽帧比对 |
-| 码率/编码参数扰动 | 码率 ±10%、preset 随机 | 与画质门禁冲突时需让步 |
+| M1 Container/encoding | libx264 CRF/GOP/audio-bitrate/frame-rate/metadata variation; optional --vary-bitrate | Further encoding/resolution choices need output-quality validation; do not enable ABR and CRF together |
+| M2 Geometry | Bounded crop/zoom/rotation, caller-controlled mirror, optional --ken-burns | Translation/composition changes must retain valid dimensions and no unintended black edges; perspective remains disabled |
+| M3 Pixels/colour | Brightness/contrast/saturation/hue/channel/noise/sharpen-or-blur | Curves/chroma-shift/blend/mask effects require actual picture checks; noise is not watermark-removal evidence |
+| M4 Time/frame sequence | Explicit speed with synchronized audio and frame-rate variation | Frame dropping/interpolation, reverse, keyframe/reorder, or edge trimming require timestamp/duration/audio contracts; no generic current switches implied |
+| M5 Structure/content | Optional border/badge/logo/sticker; montage changes shot composition | Split screen, animated overlays, xfade, custom intro/outro need duration, source, and rollback rules; existing montage fades do not overlap shots |
+| M6 Audio | Pitch with duration compensation, synchronized speed; optional owned audio mix | Other normalization/TTS/remade tracks require authorization, listening, source/stream rules, and separate dependency evaluation |
+| M7 Watermarks | Explicit visible rectangle --delogo with safe bounds | No general external-mask/inpainting module; blind-watermark tests require reproducible embedding/extraction per scheme and cannot guarantee removal |
+| M8 Text | Existing cover plus SRT/ASS paths are reusable building blocks | OCR/ASR rewrite requires provenance, human review, and claim checks; no generic content_review/transcription command exists |
 
-### M2 几何与构图层（P0）
+### Effect constraints
 
-| 手段 | 实现 | 副作用 |
+- Re-encoding changes bytes but does not establish semantic originality. Use libx264
+  for CRF; VideoToolbox bitrate mode is not an equivalent CRF implementation.
+- Geometric filters restore the original canvas. Match FFmpeg truncation for
+  intermediate sizes. Crop after rotation to remove black edges. Structural layouts
+  already resize, so skip redundant zoom/resampling there.
+- Mirror is explicit and preset-controlled; text/logos/directional faces may become
+  visibly wrong. Never treat mirror or a small overlay as acceptance proof.
+- perspective_px remains zero in the stable parameter schema. The old filter distorted
+  decoded pictures; do not restore without actual-version/filter/visual checks.
+- Ken Burns uses animated scale(eval=frame)+crop, retaining PTS/FPS and valid crop
+  margins rather than zoompan defaults that can change frame counts/rate.
+- Pixel sharpening and slight blur are alternatives, not stacked cancellation.
+- Pitch uses asetrate -> aresample -> inverse atempo to compensate duration. Playback
+  speed adds a synchronized atempo step. Silent inputs do not claim pitch changes.
+- Optional logo/sticker composition still needs filter_complex even without borders.
+  Image order must match graph labels. Use single frames repeated by overlay, never
+  unbounded image input loops. Average feather axes, retain bounded opacity.
+- delogo requires an interior one-pixel margin. Invalid rectangles skip the filter
+  rather than passing out-of-frame coordinates to FFmpeg.
+
+## 3. Presets and reproducibility
+
+`light`, `standard` (default), and `aggressive` select calibrated strength ranges and
+probabilities from config/dedup_presets. Caller switches control mirror, speed,
+border, badge, logo, sticker, and delogo; do not activate options merely because a
+candidate table lists them. Preset permission/probability still applies. Keep the
+stable parameter schema, including inert perspective_px, for existing consumers.
+
+Derive seeds with stable blake2b components, never Python's process-salted hash().
+Fixed path/seed/preset/switches reproduce parameter choices; binary output depends on
+encoder/environment. A zero/unspecified seed retains existing source-path derivation.
+Optional bitrate and Ken Burns choices use independent RNG streams so enabling them
+does not shift the existing preset draws.
+
+--vary-bitrate uses the existing VideoInfo/config bitrate baseline and bounds its
+seeded target to +/-6%. Keep CRF defaults unchanged when disabled. Reports only add
+optional ABR/animation fields when used. Montage reuses geometry/pixel variation only;
+its summaries must not claim audio/CRF/GOP/frame-rate effects it did not execute.
+
+Local account preference precedence/safety is defined in [DEDUP_PROFILES.md](DEDUP_PROFILES.md).
+Audio mixing is defined in [DEDUP_AUDIO.md](DEDUP_AUDIO.md). Neither adds platform login
+or uploads. Optional VMAF lives in core/quality_vmaf.py, requires explicit --check
+options and alignment, and does not imply automatic quality fallback.
+
+## 4. Verification metrics
+
+| Check | Method | Current configured boundary |
 |---|---|---|
-| 边缘微裁 | `crop=iw-6:ih-6:3:3` 再 `scale` 回原尺寸 | 画面损失极小，破坏空间定位与 pHash |
-| 微缩放 | `scale=iw*1.02:ih*1.02` + `crop` 回原尺寸 | 略微裁掉边缘内容 |
-| 微旋转 | `rotate=0.005~0.014`（约 0.3°~0.8°）+ 裁黑边 | 旋转后四角需 crop，别留黑边 |
-| 微位移 | `zoompan` / `crop` 偏移 2~5px | 与背景色填充配合 |
-| 透视微变形 | `perspective` 四角偏移 1~3px | 强改动，激进档才用 |
-| 水平镜像 | `hflip` | **慎用**：有文字/Logo/人脸朝向的片段不要用，人工复审高风险 |
-| 缓慢推拉（Ken Burns） | `zoompan=z='min(zoom+0.0005,1.05)'` | 改变运动轨迹特征，较自然 |
+| Visual change | Sample 12 frames, 32x32 DCT pHash, mean Hamming distance | light >=1.0, standard >=1.4, aggressive >=1.6 |
+| Advisory change range | Compare distance to preset expected range | Upper values 8/10/40 respectively; excess warns, does not fail |
+| Gross picture damage | Mean grayscale PSNR | Base floor 12 dB; structural cases use existing gate rules |
+| Duration | Compare source/output video-stream durations | Configured base 0.35 s, expected speed change, and implementation margin |
+| Optional VMAF | Explicit aligned source/output assessment | Optional --vmaf-min; no implicit rollback |
+| Embedded watermark | Scheme-specific independent oracle | No general default removal/acceptance gate |
 
-### M3 像素与色彩层（P0）
+The duration helper retains fixed tolerance plus `d * (1 - 1/speed)` and the existing
+margin; do not divide fixed tolerance by speed. Probe video-stream duration on both
+sides. Container duration follows the longest stream and can hide shortened video
+behind unchanged audio. Missing fields (including N/A with rc=0) use the existing
+frame-count/rate, stream, then container fallback. Unknown duration is a probe failure,
+not a measured zero.
 
-| 手段 | 实现 | 建议范围 |
-|---|---|---|
-| 亮度/对比度/饱和度 | `eq=brightness=±0.01:contrast=1.01~1.03:saturation=1.02~1.05` | 肉眼几乎不可察 |
-| 色相偏移 | `hue=h=±1~3` | 同左 |
-| RGB 通道微偏 | `colorchannelmixer` 对角 0.99~1.01 | 破颜色直方图 |
-| 色度偏移 | `chromashift` 1~2px | 轻微彩边，别过头 |
-| 曲线微调 | `curves` 轻 S 曲线 | 优于单纯亮度 |
-| 加微噪 | `noise=alls=3~6:allf=t` | 改变高频像素，暗水印效果须独立验证 |
-| 微锐化 / 极轻模糊 | `unsharp` 或 `gblur=sigma=0.3`（二选一，别叠加） | 改变高频特征 |
-| 全局像素微扰 | `blend` / `geq` / `maskfun` 做 ±1~2 的数值偏移 | 低成本，配合其它项 |
+Fingerprint sampling decodes sequentially and retrieves selected indices. Random
+keyframe seek can select another shot. Resampling and speed changes limit temporal
+comparability; frame-paired scores are not perfect alignment. pHash emphasizes low
+frequencies; high-frequency noise may barely change it. PSNR loses alignment after
+geometry changes, so treat it as a damage floor, not perceptual quality. Neither
+score proves platform acceptance or embedded-watermark removal.
 
-### M4 时间 / 帧序列层（P1）
+Calibrated floors account for variation across footage and seeds, particularly the
+large difference between triggered/untriggered structural effects. Do not retune from
+one typical clip. Historical per-clip/batch numbers without retained reproducible inputs
+are not current benchmark evidence. Perspective remains disabled regardless of a
+possible hash-distance increase.
 
-| 手段 | 实现 | 注意 |
-|---|---|---|
-| 微变速 | `setpts=PTS/1.02~1.08` + `atempo=1.02~1.08` | **必须音视频同步改**，否则口型/字幕错位；>1.15 人声失真 |
-| 帧率波动 | `fps=29.97` 或 `minterpolate=fps=60:mi_mode=mci` | minterpolate 很慢，仅激进档/短片 |
-| 抽帧 | `select='not(mod(n,k))'` | 改变帧序列，但会造成轻微卡顿，谨慎 |
-| 关键帧重排 | `-force_key_frames` 自定义时间点 | 直接影响平台抽帧命中 |
-| 片段级倒放 | `reverse` + `areverse` | 只适合小片段点缀，整片倒放观感差 |
-| 首尾微裁 | 头尾各去 1~2 帧 | 破坏片头片尾抽帧比对 |
+## 5. Processing, publication, and reports
 
-### M5 结构与内容层（P1，**最有效**）
+Flow: probe -> derive parameters -> construct filters -> encode isolated temporary
+video -> optional audio mix -> fingerprint/duration verification -> atomic publication
+-> report. Preserve per-file failure isolation and input-order summaries under bounded
+concurrency. Match asynchronous results by explicit index. Preflight all destination
+collisions before encoding, including duplicate stems across roots/case-insensitive
+filesystems. Use process/thread-isolated temporary names.
 
-| 手段 | 实现 | 说明 |
-|---|---|---|
-| 镜头顺序重排 | 由 `montage` 混剪天然产生 | 结构性改动，抗查重权重最高 |
-| 转场 | `xfade=transition={fade,slideleft,wipeleft...}` | 破坏接缝处的连续指纹 |
-| 画中画 PiP | `scale` + `overlay` 叠加小窗 | **底层画面必须同时改动**（几何/色彩），否则抽帧照样命中底层 |
-| 干扰画面 / 动态贴纸 | `overlay` + `enable='between(t,a,b)'` 分段出现 | 贴纸素材目录可配置 |
-| 分屏 / 拼屏 | `hstack` / `vstack` 与另一素材拼接 | 构图剧变，观感变化大 |
-| 边框 + 模糊背景 | `split` → 放大 `gblur` 做背景 → `overlay` 原画居中 | 常见于竖屏转横屏，改构图 |
-| 片头片尾差异化 | 加 1~2s 自有片头/片尾 | 单独用无效，需配合其它项 |
-| 品牌条 / 角标 | `drawbox` / `drawtext` / `overlay` | 同时可遮住原平台水印位置 |
+Normal output may retain an encoded below-threshold result and mark ok=False for
+review. In-place replacement requires explicit --in-place --force and passed checks
+before touching the source. Cancellation/failure cannot publish incomplete output or
+overwrite prior media. Existing-output skips are separate from successes/failures.
 
-### M6 音频层（P0）
+Default outputs are input-root siblings `去重/`, preserving groups/numbers. Explicit
+--out-dir wins. JSON reports use UTF-8 BOM and retain source/output, seed, preset,
+executed parameters, measurements, gates, errors, and timing. --no-report disables.
+Keep reported PSNR finite. Optional fields appear only for enabled operations;
+account reports use aliases and whitelisted preferences, never credentials.
 
-| 手段 | 实现 | 说明 |
-|---|---|---|
-| 变调（保留时长） | `asetrate=44100*1.005~1.01,aresample=44100` | 破音频指纹，人声不失真 |
-| 变速 | `atempo=1.02~1.08` | >1.15 人声失真、完播率下降 |
-| 替换 BGM | `-stream_loop` + `amix` 混入新曲 | 只换 BGM 不够，人声波形才是比对重点 |
-| 叠环境音/底噪 | 低音量 `amix` | 辅助干扰 |
-| 重新配音 | TTS / 录音 | **最彻底**，成本最高 |
-| 响度归一化 | `loudnorm` | 顺带改变波形，副作用是统一观感 |
-| 音频重编码参数随机 | aac 码率 / 采样率微调 | 容器层配合 |
-
-### M7 水印层（P1/P2）
-
-**可见水印**（平台 Logo、原作者水印、角标）：
-
-| 手段 | 实现 | 适用 |
-|---|---|---|
-| `delogo` | `delogo=x=X:y=Y:w=W:h=H` | 快速，官方插值；水印 >10% 画面时模糊区明显 |
-| `removelogo` | 先用多关键帧梯度聚合生成 `mask.png`，再 `removelogo=mask.png` | 静态水印、全片复用同一 mask，质量更好 |
-| 复用现有能力 | `core/subtitle.py` 的**逐帧文字掩膜 + TELEA 修复** | 对细笔画小字/半透明水印效果优于 delogo |
-| AI 修复 | ProPainter / LaMa | 可选 `--quality high`，速度慢约百倍 |
-
-> 注：mask 生成法（ffprobe 取关键帧 → 抽帧 → 多帧梯度时域聚合 → 阈值+高斯 → 二值 mask）
-> 与本项目已有的字幕掩膜思路一致，可复用 `core/subtitle.py` 的掩膜构造代码。
-
-**暗水印 / 盲水印**（频域或时域嵌入，肉眼不可见）：
-
-| 方向 | 方案 | 说明 |
-|---|---|---|
-| 检测/提取（自检用） | `blind-video-watermark`（DTCWT 双树复小波）、`invisible_video_watermark`（RivaGAN / 频域） | 用于**检查素材里是否被嵌了暗水印**、验证破坏效果；GUI/模型依赖需评估 |
-| 破坏（无显式提取） | `crop` + `scale` + `noise` + 重编码 `crf 26~28` + `eq` 微扰 **组合** | 通过破坏频域系数降低可提取性；**不保证**完全去除 |
-| 平台自有暗水印 | 同上 | 平台在上传链路嵌的水印，重编码+频域扰动只能降低可提取性 |
-
-### M8 文本层（P2）
-
-| 手段 | 说明 |
-|---|---|
-| OCR 画面文字 → 改写 | 复用字幕擦除后**重新烧录**不同文案/字体/位置/颜色 |
-| ASR → 改标题/话题 | 运营侧动作；标题、封面、话题**不要复用**原标题 |
-| 合规词表 | 九源仙项目：禁止功效/医疗宣称，重写字幕必须过词表校验 |
-
----
-
-## 4. 预设档位（profile）
-
-| 档位 | 开启模块 | 典型参数 | 画质影响 | 耗时倍数（估） |
-|---|---|---|---|---|
-| `light` 轻度 | M1 + M3（轻） + M6 变调 | 裁 3px、亮度 ±0.005、noise 3、变调 1.005 | 几乎无感 | ~1.2× |
-| `standard` 标准（默认） | M1 + M2 + M3 + M6 | 裁 4~6px、微缩 1.02、色相 ±2、noise 4、变调 1.008、GOP 随机 | 轻微 | ~1.5× |
-| `aggressive` 激进 | 上述 + M4 + M5（转场/贴纸/画中画/边框） | 变速 1.05、抽插帧、xfade 转场、PiP | 可见改动 | ~2.5×+ |
-
-每个档位都应允许**单项开关**（镜像/变速/边框/角标/画中画/贴纸/delogo，见第 7 节命令表），
-因为不同素材适配不同（有人脸朝向的不能镜像）。
-
----
-
-## 5. 随机化与可复现
-
-- 每条视频生成一份**参数组合**，由 seed 决定：
-  `seed = hash(源路径 + 序号 + 可选账号 ID + --seed)`
-- 同一素材 → 不同账号/不同次导出 → **参数组合不同**（避免批量上传参数雷同被聚类）。
-- 同一 seed → 参数可复现，便于复盘「哪条被判重、当时用了什么参数」。
-- 参数与自检结果写入 `去重报告_*.json`，字段建议：
-  源路径、输出路径、seed、各模块参数、pHash 距离、PSNR、耗时、档位。
-
----
-
-## 6. 自检闭环（本功能的差异化价值）
-
-**不能只管改、不管改了多少。** 处理完必须量化验证：
-
-| 自检项 | 做法 | 阈值（实测标定） |
-|---|---|---|
-| 视觉相似度下降 | 处理前后各抽 12 帧算 pHash（DCT 32×32）→ 平均汉明距离 | **分档**：light ≥1.0 / standard ≥1.4 / aggressive ≥1.6 |
-| 改动是否过头 | 同上距离比对期望区间 | light ≤8 / standard ≤10 / aggressive ≤40，超出只提示不判失败 |
-| 画面是否真损坏 | PSNR（**仅作灾难下限**，非画质指标） | ≥12dB |
-| 时长校验 | 输出 vs 输入（两侧都取**视频流**时长，不用 `format=duration`） | 无变速 ≤0.35s；变速 ≤ `0.35 + d×(1−1/speed) + 0.15` |
-| 疑似暗水印 | 可选：DTCWT 提取尝试 | 仅报告，不阻断 |
-
-**为什么 PSNR 只当下限**：一旦做几何改动（裁剪/缩放/旋转），逐像素对齐必然崩，
-PSNR 掉到 13~25dB 属正常，画面观感没问题（已抽帧人工确认）。所以它只用来兜底
-「真的糊了/错位了」这种灾难情况。
-
-批量实测（桌面全部 47 条切片，standard 档）：PSNR **最小 13.4 / 最大 24.1 / 中位 16.1**，
-低于 12.0 的 0 条。原定 14.0 时有 **3 条误报**（13.4~14.0，抽帧确认画面完好），
-故下调到 12.0 —— 它不承担画质评分职责，只兜灾难。
-
-### 实测标定表（本机 720×1280，12 帧抽样）
-
-**批量实测**（桌面切片 14 条、跨 3 个源视频、换 4 个 seed，取实测下沿）：
-
-| 档位 | pHash 实测区间 | 门槛 | 余量 | PSNR |
-|---|---|---|---|---|
-| light | 1.33 ~ 3.0 | 1.0 | +0.33 | ≈ 17 ~ 25dB |
-| standard | 1.83 ~ 3.7 | 1.4 | +0.43 | ≈ 17 ~ 24dB |
-| aggressive | 2.33 ~ 26.7 | 1.6 | +0.73 | ≈ 13 ~ 22dB |
-
-单素材对照（含结构层）：
-
-| 场景 | pHash | PSNR |
-|---|---|---|
-| 短切片 5.3s（standard） | ≈ 3.7 ~ 4.7 | ≈ 24dB |
-| 长切片 39.8s（standard） | ≈ 2.8 | ≈ 17dB |
-| + 模糊边框 | ≈ 18.5 ~ 26.7 | ≈ 13 ~ 17dB |
-| + 镜像 | ≈ 21 ~ 34 | ≈ 16 ~ 17dB |
-
-> ⚠️ **aggressive 档跨度可达 10 倍**（2.3 ~ 26.7），因为结构层（模糊边框/角标）是
-> **概率触发**：命中时 pHash 冲到 18~27，没命中时只有几何+像素层的 2~8。
-> 这就是门槛必须按「跨 seed 的实测最小值」而非「典型值」取的原因——
-> 否则换个 seed 就会大批误判（实测旧门槛 5.0 时，某 seed 下 14/14 全不达标）。
-
-> ⚠️ pHash 距离**强依赖素材内容与时长**：长切片运动量大、单帧改动被摊薄，
-> 同一档的数值可比短切片低 40%（已实测：standard 档 4.7 → 2.8）。
-> 所以门槛按「实测下沿」取，只做「有没有真的动手」的兜底判断，
-> 不能当成「过了平台查重」的证明。
-
-> ⚠️ **noise 对 pHash 几乎无贡献**（实测单独加噪只带来 0.4~0.6 距离），
-> 因为 pHash 只看 DCT 低频 8×8 的 64 bit，感知哈希对高频像素噪声不敏感。
-> 加噪保留为像素扰动，但未验证任何具体暗水印提取失败；不要把它当作移除证明。
-
-### ⚠️ 已停用：梯形微变形（perspective）
-
-`perspective` 滤镜在 ffmpeg 9 下**不带 `s=` 时输出尺寸与输入不一致**，四角坐标会把
-画面径向拉花成细长条（已抽帧确认为**真实损坏**，不是度量失真）。而它的去重收益
-实测仅 **0.42~0.75 pHash**——收益极小、破坏性极大，故**从实现中移除**。
-
-替代方案（结构层已覆盖同类需求）：模糊边框填充、镜像、分屏、转场、画中画。
-
-校验风格复用 `tools/verify.py`（独立质检、非 0 退出）。
-
----
-
-## 7. 命令与交互设计
+## 6. Entry points and modules
 
 ```bash
-# 对单个切片去重（标准档）
-./run.sh dedup --file "切片/有人脸/xxx_1.mp4" --preset standard
-
-# 对整个桶去重 + 出报告
-./run.sh dedup --all --preset aggressive
-./run.sh dedup --file "切片.mp4" --sticker "某贴纸.png"   # 单条带贴纸
-./run.sh dedup --check --all
-
-# 只自检不改文件：看当前相似度/画质基线
-./run.sh dedup --check --all
-
-# 指定 seed（可复现）
-./run.sh dedup --all --seed 20261010
+./run.sh dedup --file /media/clip.mp4 --preset standard
+./run.sh dedup --src-dir /media/clips-a --src-dir /media/clips-b
+./run.sh dedup --all --preset aggressive --seed 20261010
+./run.sh dedup --file /media/clip.mp4 --sticker /media/sticker.png
+./run.sh dedup --all --check
+./run.sh dedup --help
 ```
 
-TUI 中（引导式向导）：选目录 → 报视频数 → 确认执行；处理范围、档位、
-出报告、只自检等选项通过向导确认页的开关切换。
-- 与现有命令的关系：`slice` 出切片 →（`montage` 混剪，结构性改动）→
-  `dedup` 技术层扰动 → 发布。`dedup` 直接消费切片桶，不重新切片。
+TUI reads Web/.env roots, previews count/output, and requires Enter to confirm.
+Advanced preset/seed/threshold/audio/profile options remain explicit CLI inputs.
+Users supply clips; internal legacy slicing is not a public workflow prerequisite.
 
----
+| Module | Responsibility |
+|---|---|
+| commands/dedup_cmd.py | argparse, profile precedence, validation, summary |
+| core/dedup.py | Filter graphs, encoding, gates, atomic publication, reports |
+| core/dedup_presets.py | Preset ranges, stable seed/RNG choices, parameter summaries |
+| core/fingerprint.py | Independent pHash/PSNR sampling and measurements |
+| core/dedup_audio.py | Optional authorized audio probe/mix/validation |
+| core/dedup_profiles.py | Strict local JSON whitelist and value provenance |
+| core/quality_vmaf.py | Explicit optional aligned VMAF check |
+| config.py | Calibrated defaults and ranges |
 
-## 8. 模块架构与扩展接口
-
-```
-pycut/
-├── core/
-│   ├── dedup.py            # 编排：读档位 → 生成参数 → 构造滤镜链 → 编码 → 报告
-│   ├── dedup_presets.py    # 档位定义 + 按 seed 随机化参数
-│   ├── fingerprint.py      # pHash / PSNR 自检（与 dedup 解耦，也可独立用）
-│   └── dedup_audio.py      # 可选授权音轨编辑
-├── commands/dedup_cmd.py   # 命令实现（register/run）
-└── config.py               # 新增 DEDUP_* 常量（档位阈值、门禁阈值、并发）
-```
-
-遵循 `AGENTS.md`：新增功能 = 新命令模块 + `cli.py` 注册表登记 + 复用 `core/` 能力，
-不把逻辑塞进已有文件。
-
----
-
-## 9. 能力设计边界和需求引用
-
-第 3 节的八大模块是产品目标，不代表已实现或已验收。命令行为必须以代码为准；
-具体需求与剩余限制在当前对话确认，测试与交付证据记录在 PR。
-
-### 技术契约
-
-- **M1 容器**：新增码率变化必须保留原有 CRF 默认；按 seed 可复现，不应降低成片完整性。参数入口 `--vary-bitrate`。
-- **M2 几何**：动态 Ken Burns 应保持正确画幅，透视变形仍禁用；参数入口 `--ken-burns`。
-- **M4 时间**：抽帧、重排、倒放需处理时间戳、时长、音轨同步；属于设计范围，不据此假定当前命令已有重排/倒放开关。
-- **M5 结构**：xfade/分屏/片头片尾需对输入段、时长、失败回滚有明确规则；混剪现有转场见 MONTAGE.md。
-- **M6 音频**：新 BGM、环境音与用户配音须按明确的输入授权和流映射规则工作；现有音轨编辑接口见 [DEDUP_AUDIO.md](DEDUP_AUDIO.md)。
-- **M7 水印**：当前可见区域仅显式 `--delogo` 矩形；不存在通用外部 mask 模块，暗水印处理必须有可重复的嵌入/提取 oracle，不保证移除。
-- **M8 文本**：OCR/ASR 改写候选的设计要求是来源与人工审核；当前没有通用 content_review 命令，不把设计当实现。
-- **自检/配置**：`core/quality_vmaf.py` 为显式可选自检，不能把低分自动回退当作已有默认行为；本地账号 JSON 优先级与安全边界见 [DEDUP_PROFILES.md](DEDUP_PROFILES.md)。
-
-现有滤镜实现的接口与相互依赖需通过 `pycut/core/dedup.py`、
-`pycut/core/dedup_presets.py`、`pycut/core/fingerprint.py` 与真实 ffmpeg 探测核对，
-不应从模块需求表推断当前代码一定会调用哪种滤镜。
-
----
-## 10. 风险与红线
-
-1. **不承诺 100% 过审**：平台模型持续升级，本方案目标是降低相似度。
-2. **只对自有/授权素材使用**，不用于搬运他人内容规避版权。
-3. **九源仙项目红线**：禁止任何功效/医疗宣称；去重引入的贴纸/角标文字同样受此约束。
-4. **镜像、倒放、单纯画中画已基本失效**，且人工复审风险更高 —— 不要作为主力手段。
-5. 最稳妥的做法仍然是**技术改动 + 真实内容增量**（新解说、重新编排的结构）。
-
----
-
-## 11. 参考资料
-
-- 平台查重机制与实操规避：<https://www.lanvge.com/3046>
-- 去重技术方案与开源工具（vid_dup_finder / Video-Dedup-Tool）：
-  <https://blog.csdn.net/g470641382/article/details/165619557>
-- 多层指纹与 ffmpeg 参数矩阵（TikTok 场景）：
-  <http://renderio.dev/blogs/avoid-tiktok-duplicate-detection-at-scale>
-- 抖音去重机制深度研究（三层指纹体系）：
-  <https://github.com/dada8899/digital-content-valuation/blob/main/execution/07_dedup_solution_research.md>
-- 暗水印去除原理与工具（PowerTools / blind-video-watermark / invisible_video_watermark）：
-  <https://octohz.com/p/1602>
-- 水印 mask 生成流水线（ffprobe 关键帧 → 梯度聚合 → removelogo）：
-  <https://deepwiki.com/m3at/video-watermark-removal/3.1-pipeline-workflow>
-- ffmpeg 滤镜/变速/插帧速查：
-  <https://github.com/garciadelcastillo/ffmpeg-cheatsheet>、
-  <https://www.agentskills.in/es/marketplace/@JosiahSiegel/ffmpeg-fundamentals-2025>
+Follow [../AGENTS.md](../AGENTS.md). Reuse core capabilities, avoid new dependencies,
+and test real implementations. Visual/audio changes require actual encoding, full
+decode, frame inspection, listening, and independent stream/timing checks. Long-video
+performance requires long inputs. Keep evidence in PRs rather than this design file.

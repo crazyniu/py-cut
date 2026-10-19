@@ -1,7 +1,4 @@
-"""不需要真实视频、ffmpeg 或交互终端的 TUI/CLI 回归测试。
-
-运行：python3 -m unittest discover -s tests -p 'test_tui_regression.py' -v
-"""
+"""Offline TUI/CLI checks without real media, FFmpeg, or an interactive terminal."""
 from __future__ import annotations
 
 from collections import deque
@@ -23,7 +20,7 @@ def slice_parser():
 
 
 class Screen:
-    """仅实现这些用例所用的 curses stdscr 协议。"""
+    """Minimal stdscr protocol used by these regression cases."""
 
     def __init__(self, keys=(), size=(24, 100)):
         self.keys = list(keys)
@@ -225,7 +222,6 @@ class TUIRegression(unittest.TestCase):
                 self.assertEqual(montage_cmd.run(args), 2)
 
     def test_cli_runner_launches_python_without_media(self):
-        # 仅查询版本号；没有 ffmpeg、素材或 LLM 调用。
         s = Screen(keys=[-1] * 20, size=(24, 100))
         with mock.patch.object(tui, "_attr", return_value=0):
             code, cancelled = tui_runner._run_one(

@@ -1,13 +1,7 @@
-"""montage 命令：混剪视频（爆款话术 + 片段库随机混剪 + 画中画叠加）。
+"""Public montage command: reference rhythm, random backgrounds, optional PIP and intro.
 
-三步流程（需求见 未命名.txt / docs/MONTAGE.md）：
-  步骤A：从爆款视频提取语音节奏与总时长基准（`core/montage_source.py`）
-  步骤B：从片段库随机取**竖屏**片段、不重复、填满基准时长、静音（`core/montage_clips.py`）
-  步骤C：从去重输出取切片，以画中画叠在右上角、静音（`core/montage_pip.py`）
-
-三者都支持单独跑（`--step a|b|c|all`），默认 `all` 跑完三步。
-素材里混有横屏（1920x1080 / 3840x2160），一律排除——只吃竖屏 9:16。
-"""
+Support --step a/b/c/all, reference-matched SRT, batch variants, and flat batch
+video output. Landscape material requires explicit --allow-landscape."""
 from __future__ import annotations
 
 import argparse
@@ -96,7 +90,7 @@ def register(subparsers) -> None:
 
 
 def _probe_library(clip_dir: Path, allow_landscape: bool, workers: int) -> int:
-    """一次扫描获取素材规模和横竖屏统计，不重新逐文件启动 ffprobe。"""
+    """Report library counts from one scan without repeated per-file probes."""
     from ..core.montage_clips import scan_library
 
     log(f"[探测] 片段库: {clip_dir}")
@@ -127,18 +121,9 @@ def _probe_library(clip_dir: Path, allow_landscape: bool, workers: int) -> int:
 
 
 def _resolve_srt(args: argparse.Namespace, source: Path) -> str:
-    """确定字幕文件路径（步骤D 用），返回空串表示不烧字幕。
+    """Resolve subtitles: --no-sub/empty disables, explicit path wins, auto pairs by stem.
 
-    优先级：
-      1. `--no-sub`  -> 不烧（空串）
-      2. `--srt ""`  -> 不烧（空串）
-      3. `--srt <路径>` -> 用用户给的路径（不存在则由流水线打日志跳过）
-      4. `--srt auto`（默认）-> 与基准视频同目录同名的 .srt：
-         `1.mp4 -> 1.srt`、`foo.mov -> foo.srt`。找不到也返回空串并提示。
-
-    设计动机：用户明确要求「字幕和爆款视频同目录同名」，这样批量切不同素材时
-    每支视频自动带自己的话术，不必每次手改固定路径（旧的 MONTAGE_SUB_PATH）。
-    """
+    Missing automatic matches log a skip; explicit missing files are rejected by _run."""
     if args.no_sub:
         return ""
     raw = args.srt
@@ -153,29 +138,6 @@ def _resolve_srt(args: argparse.Namespace, source: Path) -> str:
     log(f"[字幕] 未找到同名字幕 {candidate.name}（跳过烧字幕；"
         f"可 --srt 指定路径或把 .srt 放到视频同目录）")
     return ""
-
-
-def _is_portrait(p: Path) -> bool:
-    """按侧边比粗判竖屏（用于 --probe 统计，不做精确探测，快）。"""
-    import subprocess  # noqa: PLC0415
-    try:
-        r = subprocess.run(
-            [config.FFPROBE, "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height", "-of", "csv=p=0", str(p)],
-            capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    out = r.stdout.strip().splitlines()
-    if not out:
-        return False
-    parts = [x for x in out[0].split(",") if x.strip()]
-    if len(parts) < 2:
-        return False
-    try:
-        w, h = int(parts[0]), int(parts[1])
-    except ValueError:
-        return False
-    return h > 0 and (w / h) <= config.MONTAGE_MAX_SIDE_RATIO
 
 
 def run(args: argparse.Namespace) -> int:
@@ -217,7 +179,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     dedup_dir = dedup_dir[0] if len(dedup_dir) == 1 else dedup_dir
     from ..core.output_paths import montage_output, montage_batch, montage_stem
 
-    # --probe 只检查片段库，不需要基准视频、字幕或已有成片。
+    # Probe mode needs only the clip library, not reference/subtitle/output files.
     if args.probe:
         if STOP.flag:
             log("[中断] 混剪素材探测已取消（退出码 130）")
@@ -251,8 +213,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
         log(f"[错误] 指定字幕文件不存在: {args.srt}（请确认路径或用 --no-sub）")
         return 2
 
-    # 字幕配对：默认 auto=与基准视频同目录同名 .srt（1.mp4 -> 1.srt）。
-    # 用户显式传 --srt 路径时优先用；传空串（--srt ""）或 --no-sub 则不烧字幕。
+    # Explicit SRT wins; auto pairs the reference stem and empty/no-sub disables burning.
     srt = _resolve_srt(args, source)
 
     try:
@@ -332,8 +293,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     if STOP.flag:
         log("[中断] 混剪任务已取消，不执行后续裂变（退出码 130）")
         return 130
-    # 除仅提取基准的 step=a 外，任何“无成片路径”的结果都不能报告成功。
-    # run_pipeline 负责实际产物完整性检查；这里防止异常结果字典漏报 error。
+    # Except step a, a missing output path is a failure even if the result omits an error.
     if result.get("error") or (args.step != "a" and not result.get("final")):
         reason = result.get("error") or "处理结果缺少成片路径"
         progress(progress_stage, 1, progress_total, failed=1, detail="当前任务失败，停止后续处理")
@@ -342,10 +302,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
 
     progress(progress_stage, 1, progress_total, success=1, detail="基准分析完成" if args.step == "a" else "首条成片已生成", output="" if args.step == "a" else str(out_dir))
 
-    # ---------------- 批量裂变 ----------------
-    # --fission N 表示「每支爆款视频出 N 支不同成片」。首支已由上面那次跑出
-    # （复用 opts.seed），第 2..N 支换个 seed + 换个输出名再跑，随机选片/扰动不同
-    # 但话术与节奏不变。seed 派生：用户显式给 seed 时在其上累加，否则按源+序号。
+    # Variants share preparation but derive independent seeds and output names.
     fission = max(1, int(getattr(args, "fission", 1) or 1))
     failed_fissions = 0
     if fission > 1 and args.step != "a":

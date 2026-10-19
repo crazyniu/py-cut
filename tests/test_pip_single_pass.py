@@ -1,4 +1,4 @@
-"""PiP 阶段只允许一次编码；输出不可在失败时污染旧成片。"""
+"""PIP builder executes one final encode and preserves prior output on failure."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -64,7 +64,7 @@ class SinglePassPipTests(unittest.TestCase):
                  mock.patch.object(montage_pipeline, "log"):
                 result = montage_pipeline.run_pipeline(opts)
             builder.assert_called_once()
-            runner.assert_not_called()  # 构造函数本身已经执行 FFmpeg，不能再运行 argv
+            runner.assert_not_called()  # The builder has already executed FFmpeg; never execute returned argv again.
             if fail:
                 self.assertEqual(result.get("error"), "步骤C 画中画叠加失败: PiP render failed")
                 self.assertEqual(final.read_bytes(), b"old good result" * 200)

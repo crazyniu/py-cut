@@ -1,76 +1,66 @@
-# 产品功能与演进设计
+# Product contracts and candidate capabilities
 
-> 本文只记录长期产品需求、架构边界和扩展方向，不管理 Issue、Todo 或进度。
-> 开发范围以当前用户需求为准，验证与交付证据记录在 PR；历史关闭 Issue 不作为能力完成证据。
-> 工程验证和算法限制见 [ENGINEERING.md](ENGINEERING.md)，去重模块的详细设计见 [DEDUP.md](DEDUP.md)。
+This is durable product/design scope, not a backlog or status tracker. Current user
+requests define implementation scope; source and PR evidence establish behavior.
+See [ENGINEERING.md](ENGINEERING.md), [DEDUP.md](DEDUP.md), and [MONTAGE.md](MONTAGE.md).
 
----
+## Public contracts
 
-## 核心功能的现有接口契约
+| Command | Input and behavior | Output/verification |
+|---|---|---|
+| `cover` | User-supplied recursive multi-root MP4s; vision localization and one full-width Gaussian blur | Separate output, original audio, atomic publication, verified markers; uncertainty requires review |
+| `dedup` | Seeded container/geometry/pixel/time/structure/audio variations with three presets and explicit switches | pHash change, PSNR damage floor, video-duration checks, optional UTF-8 BOM JSON report |
+| `montage` | Reference rhythm/audio/SRT plus independently selected background and optional PIP/intro pools | Fixed body canvas/FPS/duration, original SRT timing/audio, flat video-only variant batch |
 
-### cover —— 用户切片的字幕擦除
-- 切片由用户自行提供，程序不再提供切片命令或源视频目录。
-- 混剪切片目录支持多个根，递归合并扫描并去重。
-- 视觉模型定位字幕，FFmpeg 单层毛玻璃遮盖，音轨保留；检测与复检不确定时待复查。
-- 输入与输出分离，幂等完成标记和原子发布。
-- 入口：`./run.sh cover` / TUI 字幕擦除。
+Users supply clips. Do not restore a public slice command, source-video settings,
+or slicing wizard. cover/dedup use Web/.env roots and preserve sources. Montage TUI
+selects references, requires one shared 1..99 variant count, then confirms. All
+material roots scan recursively with file deduplication and no directory-symlink
+traversal. Explicit CLI arguments remain supported.
 
-### dedup —— 视频去重（降低相似度）
-- 分层扰动：容器元数据 / 几何 / 像素色彩 / 时间 / 结构内容 / 音频 / 水印
-- 三档预设（`light` / `standard` / `aggressive`）+ 单项开关
-  （镜像/变速/边框/角标/画中画/贴纸/delogo）
-- 按 seed 随机化参数组合，固定输入与 seed 可复现参数组合，编码字节受环境影响
-- **自检闭环**：pHash 距离（分档门槛）+ PSNR 灾难下限 + 时长偏差（视频流口径）
-- 支持单个切片与单个长视频（需按输入时长验证性能）
-- JSON 报告（utf-8-sig），记录每条参数、距离、PSNR、门禁结果
-- 入口：`pycut.py dedup`（`--check` 只自检不产出）
-- **扩展边界**：新增去重滤镜不得破坏默认档位与已有门禁，详见 [DEDUP.md](DEDUP.md)
-- 完整需求与实测标定：见 [`docs/DEDUP.md`](DEDUP.md)
+Montage retains its A/B/C/D/E flow: reference profiling, seeded varied background,
+bounded continuous PIP, styled SRT/ASS, then original audio. PIP/subtitles share the
+final encode when enabled; optional intro joins after the body. Preserve calibrated
+subtitle style and actual frame/audio completeness. Long-video performance requires
+matching input-scale evidence.
 
-### montage —— 混剪视频
-五步流程（详见 [`docs/MONTAGE.md`](MONTAGE.md)）：
-- **A** 从爆款视频提取语音节奏与时长基准（`silencedetect`）
-- **B** 从片段库随机取**竖屏**片段、不重复（内容级去重）、镜像/加速扰动、
-  贴纸叠加、静音、拼接
-- **C** 独立随机取画中画切片，逐段准备略长于正文的小窗轨道，保留标准档扰动、镜像、静态羽化和阴影；最终一次叠加、按正文长度截断，全程连续
-- **D** SRT → ASS → libass 烧录（54px 大字 + 半透明底框）
-- **E** 贴回基准视频原声（静音成片不可用）
-- 入口：`pycut.py montage`（`--probe` 只看素材规模、`--step` 单独跑某步）
-- ASS 字幕样式沿用现行半透明底框与标定字号，不擅自改变默认；多背景可读性须以当前素材目检确认。
+## Candidate designs, not implemented-interface promises
 
----
+### Transition artwork
 
-## 后续能力需求（不是开发状态）
+Wedding-oriented seams may use hearts, glitter, frames, softer motion, or warmer
+art direction. Candidate implementations include fades, slide-ins, and animated
+PNG/WebM artwork from bundled or user-provided material. Existing seam fades do not
+imply these transitions exist. Define timing, resources, licensing, duration, and
+rollback before implementing any new mode.
 
-### 1. transition —— 婚礼场景段间转场贴纸
-**需求**：在婚礼视频的切片之间增加**转场贴纸**（如爱心、闪粉、相框等动态贴纸），
-提升成片观感。
+### Dedup capability extensions
 
-**要点（待细化）**：
-- 在 montage 拼接的接缝处插入转场（淡入淡出 / 滑入 / 贴纸动画）。
-- 贴纸资源：内置若干 PNG/WebM 贴纸，或支持用户自定义目录。
-- 婚礼场景可能需要更柔和的转场与暖色调。
+The eight families in DEDUP.md describe container, geometry, pixel, time, structure,
+audio, watermark, and text directions. Preserve preset defaults, deterministic
+parameter selection, verification, and audiovisual integrity when extending them.
+Audio replacement, repair, and OCR/ASR rewriting require owned/authorized sources;
+automated text needs human review and must not introduce unsubstantiated efficacy/
+medical claims. Do not infer CLI support or platform acceptance from design tables.
 
-### 2. dedup —— 容器、时间、结构、音频与文本扩展
+### Optional high-quality subtitle reconstruction
 
-**需求**：围绕 [DEDUP.md 第 3 节](DEDUP.md) 的八大功能模块扩展可选能力，
-同时保留现有预设、seed 可复现、自检与音画完整性门禁。未经验证不得声称可通过平台审核。
-音轨替换、水印修复、OCR/ASR 改写仅针对自有/授权素材；自动生成的文案需人工审核，
-不得引入任何未经证实的功效/医疗宣称。
+Current cover obscures with frosted glass; it does not reconstruct background.
+A future --quality high could evaluate ProPainter/LaMa or other external backends,
+subject to explicit authorization, licensing, compatibility, measured quality/speed,
+and audiovisual integrity. No such public mode is implied. Keep the default Gaussian
+coverage and current requirement not to depend on a local model.
 
-每一模块的设计与实现边界见 DEDUP.md；
-此处不维护优先级、认领人或完成状态。
-### 3. quality high —— 高质量字幕修复（可选）
-**需求**：当前 `subtitle.cover_clip` 用全宽单层毛玻璃遮盖字幕，不进行背景重建。
-设计候选 `--quality high` 可评估 AI 视频修复模型（ProPainter / LaMa），质量、性能和兼容性须以实际后端测试为准。
-**要点**：作为未来可评估的 cover 可选模式，默认仍用现行毛玻璃；用户当前要求不依赖本地模型。外部后端须另行明确授权并评估许可、性能和音画完整性，不能据此假定 CLI 已有 high 模式。
+### Semantic selection
 
----
+ASR/OCR-guided semantic shot selection is a separate candidate from rhythm-driven
+montage. Define provenance, model/dependency cost, selection quality, and human text
+review before adding it. Current montage does not need transcription.
 
+## Extension principles
 
-## 设计原则（贯穿后续）
-
-- 所有新功能以**子命令**挂载到 `pycut.py` 入口，复用 `core/` 成熟能力，不重复造轮子。
-- 目录按职责拆分，保持长期可维护（见 `AGENTS.md` 与 `README.md`）。
-- 涉及 LLM 的视觉/文本能力统一走 `core/llm.py`。
-- 涉及 ffmpeg 的封装统一走 `core/ffmpeg.py` + `core/slice_pipeline.cut_clip`。
+Add public commands as register/run modules and register them in cli.COMMANDS.
+Keep reusable operations in core; use core/llm.py for model calls and existing
+FFmpeg/process helpers for media work. Keep modules focused, no duplicate processing
+pipelines, and follow [../AGENTS.md](../AGENTS.md). Do not store priorities, owners,
+current progress, or temporary test reports here.

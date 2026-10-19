@@ -1,19 +1,17 @@
-"""可选段间淡化效果：只处理已标准化的静音片段，不改变时长和时间槽。
+"""Independent brightness fades for normalized silent segments.
 
-每段首尾分别做独立亮度淡入/淡出；不会交叉重叠，不缩短时长。
-此模块只构造 ffmpeg 参数，不执行外部命令，也不改动默认编码设置。
-"""
+No overlap or duration changes. This module constructs filters/commands only."""
 from __future__ import annotations
 
 import math
 from pathlib import Path
 
 from .. import config
-from .montage_clips import CRF_DEFAULT, _enc_args, _probe_duration
+from .montage_clips import CRF_DEFAULT, _enc_args
 
 
 def fade_duration(segment_duration: float, requested: float) -> float:
-    """每端最多占片段时长的一半；不在两端制造重叠负时长。"""
+    """Clamp each end fade to half the segment duration."""
     duration = float(segment_duration)
     seconds = float(requested)
     if not math.isfinite(duration) or duration <= 0:
@@ -25,7 +23,7 @@ def fade_duration(segment_duration: float, requested: float) -> float:
 
 def seam_fade_filters(duration: float, seconds: float, first: bool = False,
                       last: bool = False, *, start: float = 0.0) -> list[str]:
-    """在输出精确 seek 前的时间轴应用淡化，保留原片段帧预算。"""
+    """Offset fades onto the pre-output-seek timeline without changing the frame budget."""
     length = float(duration)
     fade = fade_duration(length, seconds)
     filters = []
@@ -42,11 +40,7 @@ def build_seam_fade_cmd(src: Path, out: Path, *,
                         first: bool = False, last: bool = False,
                         fps: int | None = None,
                         crf: str = CRF_DEFAULT) -> list[str]:
-    """标准化片段的段间黑场淡化：第一个不淡入，最后一个不淡出。
-
-    使用 fade 滤镜，而非 xfade 叠帧：不改变时间槽时长，保证后续字幕、
-    画中画和基准原声音轨仍沿用原时间轴。仅适用于静音片段。
-    """
+    """Build silent nonoverlapping fades, skipping first fade-in and last fade-out."""
     from .ffmpeg import FFMPEG
 
     filters = seam_fade_filters(duration, seconds, first, last)
@@ -57,11 +51,3 @@ def build_seam_fade_cmd(src: Path, out: Path, *,
         "-i", str(src), "-vf", ",".join(filters),
         *_enc_args(Path(out), fps or config.MONTAGE_FPS, str(crf)),
     ]
-
-
-def probe_segment_duration(path: Path) -> float:
-    """复用现有时长探测，无法识别的段不允许执行转场。"""
-    duration = _probe_duration(Path(path))
-    if not math.isfinite(duration) or duration <= 0:
-        raise ValueError(f"无法探测有效片段时长: {path}")
-    return duration

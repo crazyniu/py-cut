@@ -1,4 +1,4 @@
-"""dedup 收到 Ctrl+C/SIGTERM 后始终报告非零状态的无媒体回归。"""
+"""Offline dedup interruption regression requiring nonzero SIGINT/SIGTERM results."""
 from __future__ import annotations
 
 import tempfile

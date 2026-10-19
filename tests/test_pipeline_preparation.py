@@ -1,4 +1,4 @@
-"""同批裂变准备复用、提前失败和实际参数传递。"""
+"""Batch-local preparation reuse, pre-encode failures, and effective parameter propagation."""
 import os
 import subprocess
 import sys

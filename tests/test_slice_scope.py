@@ -1,4 +1,4 @@
-"""用户切片素材预览及内部切片扫描范围回归：真实临时文件树。"""
+"""Supplied-clip preview and internal slicing scope over real temporary file trees."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ class SliceScopeTests(unittest.TestCase):
 
     def _selected_by_cli(self, argv):
         args = slice_parser().parse_args(argv)
-        # _pick_files 是 slice_cmd.run 设置 config.SRC_DIR 后执行的逻辑。
+        # The real command updates config.SRC_DIR before calling _pick_files.
         with mock.patch.object(config, "SRC_DIR", self.root):
             return slice_cmd._pick_files(args)
 

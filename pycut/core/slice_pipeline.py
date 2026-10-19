@@ -1,9 +1,7 @@
-"""切片流水线编排：场景分段 -> 人脸分流 -> 字幕擦除 = 最终切片。
+"""Internal legacy slicing pipeline and reusable clip-cutting helpers.
 
-这是「切片」功能的完整实现，被 commands/slice_cmd 调用。
-混剪（montage）、去重（dedup）、补跑擦除（cover）作为独立命令，各自复用
-本模块的 cut_clip / Manifest 等基础能力（见 commands/ 目录）。
-"""
+Scene splitting, face routing, and optional subtitle coverage remain available to
+internal callers/tests. slice is not registered as a public CLI/TUI command."""
 from __future__ import annotations
 
 import csv
@@ -28,10 +26,6 @@ from .progress import progress, completed_futures
 from .utils import fmt_bytes, fmt_dur, log, run_cmd
 
 
-# ---------------------------------------------------------------------------
-# 选项（与 argparse 解耦的纯数据，便于命令层构造 / 单测）
-# ---------------------------------------------------------------------------
-
 @dataclass
 class SliceOptions:
     force: bool = False
@@ -43,10 +37,6 @@ class SliceOptions:
     workers_llm: int = config.WORKERS_LLM
     workers_enc: int = config.WORKERS_ENC
 
-
-# ---------------------------------------------------------------------------
-# 清单（CSV utf-8-sig + JSON 双写）
-# ---------------------------------------------------------------------------
 
 class Manifest:
     def __init__(self, out_dir: Path):
@@ -77,10 +67,6 @@ class Manifest:
                 json.dump(self.rows, f, ensure_ascii=False, indent=2)
 
 
-# ---------------------------------------------------------------------------
-# 结果聚合
-# ---------------------------------------------------------------------------
-
 @dataclass
 class VideoResult:
     stem: str
@@ -103,12 +89,7 @@ def out_dirs_for(stem: str) -> tuple[Path, Path]:
 
 
 def video_done(stem: str, segments: int, *, require_sub: bool = False) -> bool:
-    """只有预期全部切片齐备时才能续跑跳过。
-
-    旧实现只要任一输出目录非空就跳过：一次中途失败后目录里仅有
-    001.mp4，也会把整支视频永远当成已完成。这里按检测出的切点校验
-    编号、数量、文件大小以及需要时的字幕检测标记。
-    """
+    """Resume only when all expected numbered, nonempty clips and required subtitle markers exist."""
     if segments <= 0:
         return False
     clips = []
@@ -131,11 +112,9 @@ def video_done(stem: str, segments: int, *, require_sub: bool = False) -> bool:
 
 
 def list_videos(limit: int | None = None) -> list[Path]:
-    """列出源目录全部 mp4（递归子目录）。
+    """Recursively collect source MP4s using os.walk/scandir.
 
-    必须走文件系统遍历（macOS 的 `find -iname` 会静默丢文件），这里用 os.walk
-    （底层仍是 scandir）。素材常按平台分目录（如 抖音/快手），故递归收集。
-    """
+    Do not replace traversal with macOS find -iname; it has silently omitted files."""
     files: list[Path] = []
     for dirpath, _dirnames, filenames in os.walk(str(config.SRC_DIR)):
         for fn in filenames:
@@ -147,12 +126,8 @@ def list_videos(limit: int | None = None) -> list[Path]:
     return files
 
 
-# ---------------------------------------------------------------------------
-# 切割（双重 seek）
-# ---------------------------------------------------------------------------
-
 def cut_clip(info: VideoInfo, start: float, end: float, out_path: Path) -> tuple[bool, int]:
-    """双重 seek 精确切割 -> h264_videotoolbox 硬件编码。"""
+    """Cut accurately using coarse input plus fine output seek and the configured encoder."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_name(out_path.stem + ".tmp.mp4")
     if tmp.exists():
@@ -178,7 +153,7 @@ def cut_clip(info: VideoInfo, start: float, end: float, out_path: Path) -> tuple
         "-b:v", info.bitrate,
         "-profile:v", "high",
         "-pix_fmt", "yuv420p",
-        "-fps_mode", "cfr",       # ffmpeg 9.0 起 -vsync 已移除
+        "-fps_mode", "cfr",       # FFmpeg 9 removed -vsync; use -fps_mode cfr.
         "-movflags", "+faststart",
     ]
     if info.has_audio:
@@ -196,12 +171,11 @@ def cut_clip(info: VideoInfo, start: float, end: float, out_path: Path) -> tuple
         return False, 0
 
     size = tmp.stat().st_size
-    # 上次的去字幕标记只对旧视频有效，强制重切后绝不能继续沿用：
-    # process_clip 会因为 .covered.json 存在而直接跳过新切片。
+    # A forced recut invalidates old subtitle completion markers for the replaced clip.
     marker = out_path.with_name(out_path.name + ".covered.json")
     try:
         marker.unlink(missing_ok=True)
-        os.replace(str(tmp), str(out_path))  # 原子落盘
+        os.replace(str(tmp), str(out_path))
     except OSError as exc:
         log(f"[切割失败] 无法发布切片或清理旧字幕标记: {exc}")
         try:
@@ -211,10 +185,6 @@ def cut_clip(info: VideoInfo, start: float, end: float, out_path: Path) -> tuple
         return False, 0
     return True, size
 
-
-# ---------------------------------------------------------------------------
-# 单视频处理
-# ---------------------------------------------------------------------------
 
 def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
                   manifest: Manifest) -> VideoResult:
@@ -232,7 +202,7 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
         log(f"[无段落] {info.stem}：无法生成 {opts.min_seg:g}–{config.MAX_SEG:g}s 切片")
         return res
 
-    # 试跑必须打印切点，即使已存在产物也不能被“续跑”逻辑吞掉。
+    # Dry-run still reports cuts even when prior output would qualify for resume.
     if not opts.force and not opts.dry_run and video_done(
         info.stem, len(segs),
         require_sub=not opts.no_sub,
@@ -258,7 +228,6 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
     face_dir.mkdir(parents=True, exist_ok=True)
     noface_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- 逐段人脸分析 ---
     stats: list[FaceStat] = []
     verdicts: list[str] = []
     with tempfile.TemporaryDirectory(prefix="slice_frames_") as _td:
@@ -271,7 +240,7 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
             verdicts.append(decide_face(st))
             progress("人脸分流", len(stats), len(segs), success=len(stats), detail="人脸分析完成的镜头数量")
 
-    # --- ambiguous 段送 LLM 兜底（as_completed + 显式索引配对，避免错位）---
+    # Match asynchronous LLM replies by explicit segment index.
     amb_idx = [i for i, v in enumerate(verdicts) if v == "ambiguous"]
     if amb_idx and llm.enabled and not opts.no_llm:
         progress("人脸复核", 0, len(amb_idx), detail="LLM 复核不确定的人脸判断")
@@ -299,7 +268,6 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
         progress("人脸复核", len(amb_idx), len(amb_idx), success=len(llm_results),
                  failed=len(amb_idx) - len(llm_results), detail=("复核失败的片段已回退到 Haar 判断" if len(llm_results) < len(amb_idx) else "人脸复核完成"))
 
-    # --- 逐段落盘任务 ---
     enc_tasks = []  # (idx, s, e, out_path, verdict, row)
     for i, seg in enumerate(segs):
         if STOP.flag:
@@ -356,7 +324,6 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
         }
         enc_tasks.append((i, seg[0], seg[1], out_path, v, row))
 
-    # --- 并发编码 ---
     t_enc = time.time()
 
     def _do(t):
@@ -392,7 +359,6 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
                     old.unlink()
                     old.with_name(old.name + ".covered.json").unlink(missing_ok=True)
 
-    # --- 流水线第三步：字幕擦除（--no-sub 跳过）---
     if not opts.no_sub and done_clips and not STOP.flag:
         t_sub = time.time()
         log(f"[字幕] 检测并擦除 {len(done_clips)} 个切片 ...")
@@ -402,7 +368,7 @@ def process_video(llm: Any, info: VideoInfo, opts: SliceOptions,
                 return "skip"
             try:
                 return process_clip(llm, p)
-            except Exception as e:  # noqa: BLE001 单片段失败不拖垮整批
+            except Exception as e:  # noqa: BLE001 - isolate per-segment failures.
                 log(f"  [字幕异常] {p.name}: {type(e).__name__} {e}")
                 return "fail"
 

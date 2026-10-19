@@ -1,4 +1,4 @@
-"""配置页 UI 契约的轻量回归；保留全部现有目录选择和 .env 协议。"""
+"""Lightweight settings UI contract with existing picker and .env protocols."""
 from __future__ import annotations
 
 import re

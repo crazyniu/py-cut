@@ -1,26 +1,11 @@
-"""混剪步骤C：把「去重输出」的切片以**画中画**形式叠在步骤B 结果的右上角。
+"""Plan and render optional picture-in-picture over a normalized silent background.
 
-输入是步骤B 的成片（已静音、已统一到基准分辨率），输出是最终混剪成片：
-右上角在**指定的时间区间内**才出现画中画，其余时刻画面干净，时长与基准一致。
-
-三个公开函数各管一段：
-    `scan_dedup_pool`     —— 递归扫描去重素材池，按最短时长过滤
-    `plan_pip_timeline`   —— 在成片时间轴上规划互不重叠的画中画区间
-    `build_pip_cmd`       —— 连续小窗流拼接、单次叠加及可选字幕，一次编码输出
-
-关键实现要点（都是踩过才知道的）：
-  * **画中画必须用 `-ss/-t` 输入侧截取**：每个画中画是独立输入，各自 seek 互不干扰；
-    输出侧 seek 会先解全部帧，47 条素材下慢到不可用。
-  * **`setpts=PTS-STARTPTS+起点`不可省**：overlay 是拿主流时间戳去队列里配对的
-    次流帧，不做时间平移的话，等enable 打开时次流已经播完了（黑屏/错位）。
-  * **连续模式先 concat 小窗流，再 overlay 一次**；只有间隔模式按各自
-    `enable='between(t,起,止)'` 显示，保留用户显式留白。
-  * **不得拉伸变形**：画中画用 `scale=宽:-2`，`-2` = 按源宽高比自动取偶数高。
-  * **分辨率不得改变**：base 已是基准尺寸，只在尺寸不符时才插 `scale`，
-    否则就是 AGENTS.md 里记的「二次重采样，白丢清晰度」。
-  * 坐标 `W-w-右边距:上边距` —— overlay 的 `W/H` 是**主输入**（即成片）的宽高，
-    `w/h` 是画中画自己的宽高，所以右上角必须写成 `W-w-mx`，不能写死数字。
-"""
+Scan the pool, plan nonoverlapping intervals, then render through build_pip_cmd.
+Continuous multi-shot mode prepares lossless small-window segments sequentially
+and overlays one concatenated stream. Gapped mode retains explicit intervals.
+Keep real source frames through the body frame budget; never fake coverage with
+a frozen tail. Preserve aspect ratio, PTS alignment, feathering, shadow, and
+segment-level standard variation. Optional ASS shares the final composition."""
 from __future__ import annotations
 
 import os
@@ -41,21 +26,17 @@ from .utils import log, run_cmd
 from .progress import progress
 from .runtime import check_stop
 
-# ---------------------------------------------------------------------------
-# 时间轴参数（config 里没给画中画的出现时长/间隔，值在此处定）
-#   slot = 一次画中画持续多久；gap = 两次之间的空白（避免连续闪烁）
-#   两者按 slot + gap 的节奏铺满成片，素材不够就少放几段（见 plan_pip_timeline）
-# ---------------------------------------------------------------------------
-PIP_SLOT = 2.5             # 单个画中画的出现时长（秒）
-PIP_GAP = 0.6# 两次画中画之间的间隔（秒）
-PIP_GAP_JITTER = 0.2       # 间隔抖动 ±，避免机械的等距感
-PIP_LEAD_IN = 0.5          # 第一个画中画之前的留白
-PIP_MIN_SHOT = 0.8         # 短于此就不放（闪一下看不清，也白占一次解码）
 
-# 编码参数
+PIP_SLOT = 2.5
+PIP_GAP = 0.6
+PIP_GAP_JITTER = 0.2
+PIP_LEAD_IN = 0.5
+PIP_MIN_SHOT = 0.8
+
+
 PIP_X264_PRESET = "veryfast"
 PIP_CRF_DEFAULT = "20"
-# 多输入时不能让每路解码/每个滤镜各自按 CPU 数扩张线程。
+# Bound per-input decoder/filter threads; do not multiply CPU-wide pools by input count.
 # A single shot can stay inline. Every multi-shot continuous track is prepared
 # sequentially: input count alone is not a safe decoder/filter memory budget.
 # Even 21 shots have stalled on real material below the previous 32-shot limit.
@@ -67,7 +48,7 @@ ENC_TIMEOUT_PER_SEC = 20
 ENC_TIMEOUT_MIN = 240
 ENC_TIMEOUT_MAX = 3600
 
-# 临时文件后缀（带 pid，避免同批并发时抢写同一文件）
+
 TMP_SUFFIX = ".piptmp"
 
 
@@ -153,16 +134,13 @@ def _run_with_activity(cmd: list[str], timeout: int, *, interval: float = 10.0,
 
 @dataclass
 class PipItem:
-    """一条可用的画中画素材。"""
+    """Probed picture-in-picture source metadata."""
     path: Path
     duration: float
 
 
-# ---------------------------------------------------------------------------
-# 素材池扫描
-# ---------------------------------------------------------------------------
 def _iter_mp4(root: Path):
-    """合并多个根下的 MP4/MOV/M4V；目录访问失败交由调用方提示。"""
+    """Collect MP4/MOV/M4V across roots; propagate directory access errors."""
     from .scan import list_videos_recursive
     from .montage_clips import VIDEO_EXTS
     yield from (p for p in list_videos_recursive(root, max_depth=None, raise_on_error=True)
@@ -170,20 +148,16 @@ def _iter_mp4(root: Path):
 
 
 def _probe_duration(path: Path) -> float:
-    """复用背景的一次完整元数据探测与缓存，不为时长另开 ffprobe。"""
+    """Reuse the background metadata query/cache instead of a separate duration probe."""
     from .montage_clips import _probe_one
     item = _probe_one(path)
     return item.duration if item is not None else 0.0
 
 
 def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
-    """递归扫描去重素材池，返回可用切片。
+    """Return valid pool items sorted by path for seeded reproducibility.
 
-    root   —— 默认 `config.MONTAGE_DEDUP_DIR`
-    min_dur —— 默认 `config.MONTAGE_CLIP_MIN_DUR`；短于此的素材不用（会闪）
-
-    探测失败 / 读不出时长的直接跳过，不抛异常。按路径排序保证可复现。
-    """
+    Skip individual probe failures and clips below min_dur; surface directory errors."""
     base = root if root is not None else config.PIP_DIRS
     lo = float(min_dur) if min_dur else float(config.MONTAGE_CLIP_MIN_DUR)
 
@@ -202,7 +176,7 @@ def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
             if count % 20 == 0 or count == len(paths):
                 progress("画中画素材扫描", count, len(paths),
                          detail=f"已探测 {count}/{len(paths)} 条画中画")
-    # 探测并发完成，仍按源路径顺序配对，以保持 seed 可复现。
+    # Restore source order after concurrent probes so seeded planning stays reproducible.
     for path in paths:
         dur = durations[path]
         if dur < lo:
@@ -224,31 +198,14 @@ def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
     return items
 
 
-# ---------------------------------------------------------------------------
-# 时间轴规划
-# ---------------------------------------------------------------------------
 def plan_pip_timeline(pool: list[PipItem], total_duration: float,
                       slot=None, seed=None, continuous: bool = False) -> list[dict]:
-    """规划画中画在成片时间轴上的出现区间。
+    """Return seeded, nonoverlapping picture-in-picture entries.
 
-    返回每项形如
-        {"item": PipItem, "start": float, "duration": float,
-         "offset": float, "reached_end": bool}
-    `offset` 是从该切片第几秒开始取。
-
-    规则：
-      * 同一时刻只有一个画中画；连续模式首尾相接，间隔模式保留 `gap`；
-      * 同一素材不重复使用；
-      * 每段的出现时长 = `slot`（默认 `PIP_SLOT`），素材本身不够长则按实际截短；
-      * `offset + duration` 保证不超过素材实际时长（否则输入侧 `-t` 会伸到素材
-        末尾之外，overlay 在区间尾部拿到空帧 -> 末帧黑屏）；
-      * 素材不够铺满 `total_duration` 时**如实返回较少的项**，并在最后一项标
-        `reached_end=True`（不编造、不重复用素材去凑）；时间轴正常排满不算；
-      * `random.Random(seed)` 保证同 seed 结果可复现。
-
-    连续模式按完整镜头预留约一个 slot 的余量，最终合成统一按正文长度截断；
-    只有素材连正文长度都覆盖不了时才标记不足。
-    """
+    Each entry has item, start, duration, offset, and reached_end. Never reuse a source
+    or extend offset + duration beyond it. Continuous mode reserves complete shots
+    past the body for rounding slack; gapped mode preserves gap. Mark insufficient
+    material only when it cannot cover the required body duration."""
     items = [p for p in (pool or []) if p is not None]
     total = float(total_duration)
     if not items or total <= 0:
@@ -261,7 +218,7 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
     rng = random.Random(seed)
 
     order = list(items)
-    rng.shuffle(order)          # 顺序随机 = 素材选取随机（seed 可复现）
+    rng.shuffle(order)
 
     used: set[int] = set()
     timeline: list[dict] = []
@@ -270,14 +227,14 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
 
     while True:
         rest = goal - t
-        # 找一条还没用、且够长的素材
+
         picked = None
         for idx, it in enumerate(order):
             if idx in used or it.duration < PIP_MIN_SHOT:
                 continue
             required = slot_len
             if continuous:
-                # 尾部保留的总素材容量不足时延长当前镜头，而非有素材仍留空。
+                # Extend the current shot if later unused capacity cannot cover the remaining body.
                 remaining_capacity = sum(candidate.duration for j, candidate in enumerate(order)
                                          if j not in used and j != idx
                                          and candidate.duration >= PIP_MIN_SHOT)
@@ -289,24 +246,20 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
             break
 
         if picked is None:
-            # 素材用完了 —— 这才是「素材不够填满」，标reached_end
             reached_end = True
             break
         if rest < (0.01 if continuous else PIP_MIN_SHOT):
-            # 规划已覆盖目标；连续模式不额外截出很短的尾段。
+            # Continuous mode reserves complete shots; final composition trims to the body budget.
             break
 
         idx, it, dur = picked
         if not continuous:
             dur = min(dur, rest)
-        # 截取起点：在素材可用范围内随机取，避开首尾（首尾常是转场/黑场）
+        # Sample offsets within real source bounds, avoiding transitions where possible.
         offset = rng.uniform(0.0, it.duration - dur) if it.duration > dur else 0.0
 
         used.add(idx)
-        # **先截短再 round**：round 会把2.0687 进位成 2.069，
-        # 于是 offset+duration 反超素材实际时长（实测039.mp4 2.0687s 被规划成
-        # 2.069s），输入侧 -t 就会伸到素材末尾之外，overlay 在区间尾部拿到空帧
-        # -> 末帧黑屏。所以 round 之后再夹一次，保证不越界。
+        # Clamp again after rounding so offset + duration never exceeds available source frames.
         dur_r = round(dur, 3)
         off_r = round(offset, 3)
         dur_r = min(dur_r, it.duration - off_r)
@@ -323,7 +276,6 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
         gap = 0.0 if continuous else rng.uniform(PIP_GAP - PIP_GAP_JITTER, PIP_GAP + PIP_GAP_JITTER)
         t += dur_r + gap
         if t >= goal - (0.01 if continuous else PIP_MIN_SHOT):
-            # 时间轴排满了，正常结束（不是素材不够）
             break
 
     covered = sum(e["duration"] for e in timeline)
@@ -337,23 +289,17 @@ def plan_pip_timeline(pool: list[PipItem], total_duration: float,
     return timeline
 
 
-# ---------------------------------------------------------------------------
-# 滤镜链 / 命令行
-# ---------------------------------------------------------------------------
 def _even(v: float, lo: int = 2) -> int:
-    """向下取偶数（h264 要求宽高为偶），并保证不小于 lo。"""
+    """Round down to an even dimension, bounded below by lo."""
     n = int(v)
     n -= n % 2
     return max(lo, n)
 
 
 def _ms(v: float) -> str:
-    """秒 -> 毫秒字符串，**一律截断、绝不进位**。
+    """Format seconds at millisecond precision by truncation, never rounding upward.
 
-    实测踩坑：`round(2.068733, 3)` = 2.069 > 素材真实时长 2.068733，
-    写进 `-t` 就把截取区间伸到素材末尾之外，overlay 在区间尾部拿到空帧 ->
-    末帧黑屏。所以凡是「取多少」的地方（`-ss` / `-t`）都用截断格式。
-    """
+    Rounding can push a requested interval past the source end and lose real tail frames."""
     ms = int(v * 1000.0)
     if ms < 0:
         ms = 0
@@ -402,12 +348,9 @@ def _style_small_pip(parts: list[str], source: str, tag: str,
 
 
 def _clamp_entries(timeline: list[dict]) -> list[dict]:
-    """把时间轴条目整理成可执行的输入列表，并按素材实际剩余时长截短。
+    """Clamp requested intervals to each source duration and return executable inputs.
 
-    截短是必须的：素材从 `offset` 起不足 `duration` 时，overlay 到了区间末尾
-    还没有对应帧，画面上会出问题。这里以 probe 到的素材时长为准，
-    再在命令层用 `-t` 二次保险。
-    """
+    The FFmpeg -t limit provides an additional bound; do not request unavailable frames."""
     out: list[dict] = []
     for entry in (timeline or []):
         item = entry.get("item")
@@ -431,12 +374,12 @@ def _clamp_entries(timeline: list[dict]) -> list[dict]:
 
 
 def _tmp_path(out: Path) -> Path:
-    """临时输出路径（带 pid，防同批并发抢写）。"""
+    """Return an isolated temporary output path."""
     return out.with_name(f"{out.stem}.{os.getpid()}{TMP_SUFFIX}{out.suffix}")
 
 
 def _ffmpeg_error(stderr: str) -> str:
-    """保留首个根因和结束上下文，不只剩 Nothing was written。"""
+    """Retain the first cause and trailing context from FFmpeg diagnostics."""
     lines = stderr.strip().splitlines()
     if not lines:
         return "无 FFmpeg 错误输出"
@@ -454,7 +397,7 @@ def _encode_cmd(base: Path, tmp: Path, fcomplex: str,
         "-threads", str(PIP_DECODER_THREADS), "-i", str(base),
         "-filter_complex", fcomplex,
         "-map", "[vout]",
-        "-an",                              # 最终成片必须静音
+        "-an",
         "-c:v", "libx264", "-threads", str(PIP_ENCODER_THREADS), "-preset", PIP_X264_PRESET,
         "-crf", str(crf),
         "-pix_fmt", "yuv420p",
@@ -468,17 +411,11 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
                   canvas=None, scale=None, margin=None, fps=None,
                   crf: str = PIP_CRF_DEFAULT, seed: int | None = None,
                   ass_path: Path | None = None) -> list[str]:
-    """把画中画叠到 base 上，输出最终成片，返回**实际执行的** ffmpeg argv。
+    """Render and atomically publish picture-in-picture; return the argv already executed.
 
-    `canvas`   —— 目标画布，默认取 base 自身的宽高（必须与 base 一致）
-    `scale`    —— 画中画宽度 = 画布宽 × 该比例（默认 config.MONTAGE_PIP_SCALE）
-    `margin`   —— 距右/上边缘留白 = 画布宽/高 × 该比例（默认 config.MONTAGE_PIP_MARGIN）
-    `fps`      —— 输出帧率（默认 config.MONTAGE_FPS）
-    `crf`      —— libx264 质量
-
-    时间轴为空时直接转存 base（`-c copy` 更快）；copy 失败则回退重编码，
-    保证输出文件确实存在。全程写临时文件后 `os.replace` 原子替换。
-    """
+    canvas/fps define output geometry/timing; scale/margin are canvas fractions and
+    crf controls libx264. An empty timeline can copy the base, with re-encode fallback.
+    This function executes FFmpeg; callers must not execute the returned argv again."""
     check_stop()
     base = Path(base)
     out = Path(out)
@@ -530,7 +467,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
                 raise RuntimeError(f"画面与字幕合成失败 rc={rc}: {_ffmpeg_error(err)}")
             if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:
                 log(f"  [画中画] -c copy 转存失败（rc={rc}），回退重编码")
-                # 不能让 copy 失败留下的半成品成为回退编码的输出。
+                # Remove partial copy output before the re-encode fallback.
                 if tmp.is_file():
                     tmp.unlink()
                 cmd = _encode_cmd(
@@ -546,11 +483,10 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
             os.replace(str(tmp), str(out))
             return cmd
         finally:
-            # 非空时间轴有清理逻辑，空时间轴的 copy/fallback 失败也必须一致。
+            # Empty-timeline failure needs the same temporary cleanup as normal composition.
             if tmp.is_file():
                 tmp.unlink()
 
-    # --- 输入：base 是第0 路，每个画中画各自 -ss/-t 输入侧精确截取 ---
     # B already normalizes size/pixel format/FPS. Its copied H.264 segments
     # can still switch colour tags (709/601); FFmpeg's default reinit would
     # reset the entire graph, including the other input's N and static masks.
@@ -564,15 +500,14 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
         cmd += ["-ss", _ms(e["offset"]), "-t", _ms(e["duration"]),
                 "-threads", str(PIP_DECODER_THREADS), "-i", str(e["path"])]
 
-    # --- base 链：只有尺寸与目标不一致时才scale（避免二次重采样）---
+    # Avoid resampling an already matching background canvas.
     head = "setsar=1"
     if (W, H) != (int(info.width), int(info.height)):
         head = f"scale={W}:{H}:flags=bicubic,setsar=1"
 
     parts = [f"[0:v]{head}[bg]"]
     cur = "bg"
-    # 连续模式先拼成一条小窗视频流，再与主画面叠加一次，避免每帧
-    # 顺次穿过几十个全画布 overlay。多段任务统一逐段准备无损小窗。
+    # Prepare lossless small windows sequentially, then overlay one stream onto the main frame.
     budget = max(1, round(info.duration * fps))
     continuous = abs(entries[0]["start"]) < .001 and all(
         abs(right["start"] - (left["start"] + left["duration"])) < .002
@@ -580,9 +515,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
             entries[-1]["start"] + entries[-1]["duration"] >= info.duration - 1 / fps - .002)
     rng = random.Random(seed)
     if seed is not None:
-        # PR #115 曾为提速删除画中画原有的 standard 几何/像素扰动。
-        # 恢复段级去重，但继续在小窗上处理并保留单次全画面 overlay，
-        # 不恢复原先每段 2 路全画面阴影/羽化链。
+        # Retain standard segment variation on small windows without per-segment full-canvas effects.
         from .dedup import montage_variation
         from .dedup_presets import derive_seed
         log(f"  [画中画去重] standard 几何/像素扰动已启用 · {len(entries)} 段（片段独立 seed）")
@@ -595,14 +528,12 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     prepared_segments = []
     track_tail_start = 0
     for i, e in enumerate(entries):
-        # 跟当前版本一样以 30% 的概率镜像，原标准档默认不会再做镜像，
-        # 故不会出现两次 hflip 恰好抵消的情况。
+        # Standard variation does not mirror; this independent 30% flip cannot cancel a second hflip.
         mirror = "hflip" if seed is not None and rng.random() < .3 else ""
         spatial = (f"scale={pip_w}:{pip_h}:force_original_aspect_ratio=increase,"
                    f"crop={pip_w}:{pip_h},setsar=1")
         if seed is not None:
-            # 复用独立 dedup 和混剪背景已经在用的滤镜生成器，不改变
-            # PiP 段长、FPS、音轨或每段的随机镜头选择。
+            # Reuse the shared effects builder without altering segment timing, FPS, or audio.
             _params, variation = montage_variation(
                 pip_w, pip_h, derive_seed(seed, "pip", i))
             if variation:
@@ -611,7 +542,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
             spatial += f",{mirror}"
         spatial += ","
         if continuous:
-            # 用累计边界量化帧数，不能逐段独立取整后累积时长误差。
+            # Quantize cumulative boundaries; independent segment rounding would accumulate drift.
             start_frame = round(e["start"] * fps)
             end_frame = round((e["start"] + e["duration"]) * fps)
             frames = end_frame - start_frame
@@ -640,9 +571,8 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
             )
             cur = f"v{i}"
     if continuous:
-        # 在真实帧流内标记末帧，不分出 select/nullsink 独立消费分支。
-        # 独立分支可能提前拉取整条小窗流，迫使可见分支缓存整片帧。
-        # 主画面等长不能证明画中画完整；缺真实帧时不靠 tpad 蒙混过关。
+        # Mark the real tail on the visible stream; a separate consumer can buffer the whole track.
+        # Background duration alone does not prove PIP coverage; never freeze-pad missing tail frames.
         parts.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[piptrack]")
         track_tail_start = len(parts)
         parts.append(f"[piptrack]metadata=mode=add:key=pycut.complete:value=1:"
@@ -669,12 +599,12 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
     cmd += [
         "-filter_complex", fcomplex,
         "-map", "[vout]",
-        "-an",                              # 最终成片必须静音
+        "-an",
         "-c:v", "libx264", "-threads", str(PIP_ENCODER_THREADS), "-preset", PIP_X264_PRESET,
         "-crf", str(crf),
         "-pix_fmt", "yuv420p",
         "-r", str(fps), "-fps_mode", "cfr",
-        # 次流末帧经 framesync/CFR 可多延一帧；输出仍严格按主视频帧预算。
+        # Enforce the body frame budget despite framesync/CFR adding a secondary-stream tail frame.
         "-frames:v", str(max(1, round(info.duration * fps))),
         "-movflags", "+faststart",
         str(tmp),

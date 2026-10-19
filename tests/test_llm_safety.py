@@ -1,4 +1,4 @@
-"""离线 LLM 重试及备用网关回归测试，不依赖真实 API/视频。"""
+"""Offline LLM parsing/retry/sticky-backup tests without real API/video calls."""
 from __future__ import annotations
 
 import json

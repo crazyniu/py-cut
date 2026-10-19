@@ -1,4 +1,4 @@
-"""缩放尺寸取整边界必须在真实 FFmpeg 中验证。"""
+"""Verify FFmpeg scale/crop integer boundaries using the real encoder."""
 from pathlib import Path
 import shutil
 import tempfile
@@ -13,7 +13,7 @@ from pycut.core.utils import run_cmd
 @unittest.skipUnless(shutil.which('ffmpeg'), 'requires FFmpeg')
 class CropGeometry(unittest.TestCase):
     def test_seed_87_preserves_crop_and_full_frame_budget_for_source_formats(self):
-        # 旋转后宽702，702*1.0138=711.6876；scale 输出711而非round所得712。
+        # 702*1.0138=711.6876: FFmpeg scale truncates to 711, while round incorrectly predicts 712.
         params, chain = dedup.montage_variation(720, 1280, 87)
         self.assertEqual(params['zoom'], 1.0138)
         self.assertIn('crop=702:1270:', chain)

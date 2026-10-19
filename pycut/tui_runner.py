@@ -1,8 +1,7 @@
-"""终端任务运行器：子进程运行 CLI，curses 主线程只负责渲染与键盘输入。
+"""Run CLI subprocesses while the main thread owns curses rendering and input.
 
-使用已有 CLI/ffmpeg 处理逻辑，不建立第二套参数表。处理失败立即阻断同一向导
-中依赖的后续子命令（例如 slice 失败不能对旧的切片结果执行 dedup）。
-"""
+Use the existing command parsers and processing paths. Stop dependent jobs after
+a failure; show explicit completion, review, failure, and interruption states."""
 from __future__ import annotations
 
 from collections import deque
@@ -34,7 +33,7 @@ def _cap_log_line(line: str) -> str:
 
 
 def _sanitize(line: str, *, truncate: bool = True) -> str:
-    """清理 CSI/OSC 和非打印字符；独立使用时仍遵守原长度上限。"""
+    """Strip CSI/OSC and nonprintable characters, respecting the optional length limit."""
     safe = "".join(
         c for c in _CONTROL.sub("", _OSC.sub("", line))
         if c.isprintable() or c == "\t"
@@ -43,7 +42,7 @@ def _sanitize(line: str, *, truncate: bool = True) -> str:
 
 
 def _redact(line: str, argv: list[str]) -> str:
-    """从子进程文本中遮盖显式传入的 API Key，避免回显泄漏。"""
+    """Remove explicitly supplied API keys from subprocess output."""
     for i, arg in enumerate(argv):
         value = ""
         if arg in _SECRET_FLAGS and i + 1 < len(argv):
@@ -75,7 +74,7 @@ def _safe_log_line(line: str, argv: list[str]) -> str:
 
 
 def _display_command(argv: list[str]) -> str:
-    """隐藏未来可能从高级参数传入的 API Key。"""
+    """Render a command with explicit API keys redacted."""
     out = []
     secret = False
     for arg in argv:
@@ -175,7 +174,6 @@ def _init_montage_log(batch: dict, argv_list: list[list[str]]) -> None:
         return
     root = roots[0]
     # Video folders contain only published media. Keep diagnostics outside out/.
-    # Typical: /剪辑/out/混剪 -> /剪辑/logs/混剪.
     log_root = (root.parent.parent / "logs" / root.name
                 if root.parent.name.lower() == "out"
                 else root.parent / (root.name + "_logs"))
@@ -473,7 +471,7 @@ def _terminate(proc: subprocess.Popen, *, force: bool = False) -> None:
 
 def _run_one(stdscr, argv: list[str], index: int, total: int,
              history: deque[str], batch: dict | None = None) -> tuple[int, bool]:
-    """在新的进程组中执行 CLI；只由主线程操作 curses。"""
+    """Run a CLI job in its own process group; only the main thread touches curses."""
     cmd = [sys.executable, str(_ROOT / "pycut.py"), *argv]
     try:
         proc = subprocess.Popen(
@@ -606,7 +604,7 @@ def _run_one(stdscr, argv: list[str], index: int, total: int,
 
 
 def run_jobs(stdscr, argv_list: list[list[str]]) -> tuple[int, bool]:
-    """按依赖顺序运行多个 argv；完成后展示结果，返回 (退出码, 是否退出 TUI)。"""
+    """Run jobs in dependency order; show results and return (exit_code, quit_tui)."""
     if not argv_list:
         return 0, False
     history: deque[str] = deque(maxlen=600)

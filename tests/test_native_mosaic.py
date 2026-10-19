@@ -1,4 +1,4 @@
-"""真实 FFmpeg 验证整宽单层毛玻璃、保留音轨、校验失败与中断。"""
+"""Real FFmpeg coverage/audio checks, failed validation, and interruption handling."""
 import shutil
 import subprocess
 import tempfile
@@ -40,7 +40,7 @@ class NativeMosaicTests(unittest.TestCase):
             self.assertLess(outside.mean(),8)
             for x in (0,168):
                 self.assertGreater(np.abs(after[238:286,x:x+12].astype(float)-before[238:286,x:x+12]).mean(),15)
-            # 模糊滤镜只叠加一个连续区域，不使用像素化缩放或多层overlay。
+            # One continuous Gaussian-blur region, with one overlay and no pixelation.
             self.assertLess(after[242:282].astype(float).std(axis=(0,1)).max(),15)
             def audio_hash(path):
                 return subprocess.check_output(['ffmpeg','-v','error','-i',str(path),

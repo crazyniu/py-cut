@@ -22,7 +22,7 @@ def sibling(root: Path, kind: str) -> Path:
 
 
 def slice_output_root(source: Path, explicit: str = "") -> Path:
-    """CLI/TUI共用：显式输出 > 配置画中画目录 > 源目录同级切片。"""
+    """Choose explicit output, configured PIP root, then a sibling slicing directory."""
     from .. import config
     if explicit:
         return Path(explicit).expanduser()
@@ -71,14 +71,14 @@ def validate_targets(pairs: list[tuple[Path, Path]]) -> None:
 
 
 def matching_root(src: Path, roots) -> Path:
-    """嵌套根优先归属最长路径；每个文件只输出一次。"""
+    """Assign nested roots to the longest matching path so each file has one owner."""
     from ..settings import directories
     parents = [root for root in directories(roots) if src.resolve().is_relative_to(root)]
     return max(parents, key=lambda p: len(p.parts)) if parents else source_root(src)
 
 
 def without_outputs(files: list[Path], roots, task_name: str, out_dir="") -> list[Path]:
-    """仅排除本次扫描根内部的实际输出目录，支持父子根安全重跑。"""
+    """Exclude only actual output trees nested inside the scanned roots for safe reruns."""
     from ..settings import directories
     inputs = directories(roots)
     outputs = ([Path(out_dir).expanduser().resolve()] if out_dir else

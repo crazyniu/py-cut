@@ -1,131 +1,241 @@
-# AGENTS.md —— 给 AI 协作者的项目规范
+# AGENTS.md — AI contributor contract
 
-本文件是 AI（含本会话 agent）修改、扩展本项目时的**强制约定**。动手前先通读。
+Read this file and [docs/ENGINEERING.md](docs/ENGINEERING.md) before editing.
+These requirements apply to all contributors, including the current agent.
 
-## 0. 一句话定位
+## 0. Product and execution ownership
 
-`pycut` 是一个**长期维护**的短视频本地处理工具箱。提供 `cover`（字幕擦除）、
-`dedup`（降低视频相似度）、`montage`（混剪）三个命令。切片由用户准备，不恢复 `slice` 命令或向导。
-**所有功能都从 `pycut.py` 入口以子命令执行，参数既支持命令行参数，也支持终端 TUI 交互输入。**
+`pycut` is a maintained local short-video toolbox with three public commands:
+`cover` (subtitle coverage), `dedup` (similarity reduction), and `montage` (remixing).
+Users supply clips. Do not restore a public `slice` command or slicing wizard.
+All features enter through `pycut.py` subcommands, with CLI arguments and TUI input.
 
-## 0.1 本项目执行方式
+Codex owns requirements, implementation, review, integration, testing, acceptance,
+commits, and merging. Use native Codex tools or direct CLI for desktop/browser,
+terminal, worktree, GitHub, and delivery operations. Do not use Orca, OMP, or Claude
+for development, review, testing, or acceptance. This project rule overrides older
+parent rules assigning Codex only a coordination role; other release/PR rules apply.
 
-- 本项目由 Codex 直接完成需求理解、代码实现、审查、修正、测试、验收、提交与合并，对最终交付负责。
-- 不再通过 Orca 组织或执行本项目任务，也不通过 Orca 向 OMP 或 Claude 委派开发、审查、测试或验收；不把这些入口的可用性作为开工或交付条件。
-- 本节优先于上级规范中要求使用 Orca、限制 Codex 仅做协调或指定 Claude 验收的分工约定，仅适用于 `py-cut`；其余项目管理、验证与分支保护要求继续遵守。
+### 0.1 Start-of-work audit
 
-## 0.5 动手前必读的两份文档
+- Read root/applicable nested AGENTS files, relevant long-lived docs, and real source.
+- Verify remotes/default branch, fetch, inspect branch/worktrees/dirty files, open
+  PRs, reviews, CI, and concurrent work. Preserve unrelated changes; avoid duplicate PRs.
+- This project does **not** use Linear. Do not query, create, claim, or update Linear
+  tasks. Use the current request for scope and `natefox2017/py-cut` for code, commits,
+  branches, PRs, reviews, CI, and merges. Historical issue closure is not implementation proof.
+- Do not create another task-management system proactively.
+- State goal, scope, inputs/outputs, error behavior, constraints, unknowns, and
+  verifiable acceptance criteria. Resolve routine choices directly. Clarify material
+  product, security, or cost ambiguity; minimally test assumptions that could invalidate a plan.
 
-| 文档 | 什么时候看 |
-|---|---|
-**`docs/ENGINEERING.md`** | 记录工程限制、验证经验与技术边界；不存 Bug/Todo |
-**`AGENTS.md`（本文件）**第 5 节 | 关键坑清单，含三大功能专属的 ffmpeg 陷阱 |
+### 0.2 Collaboration and delivery
 
-## 0.6 项目管理与开工核查
+- Work directly by default. Only when the user explicitly requests parallel work,
+  use independent Codex conversations with the same model, separate branches and
+  worktrees, and explicit file/interface ownership. Never edit one worktree concurrently.
+- Use `codex/<descriptive-name>` branches without requiring task IDs. Use an isolated
+  branch/worktree. Respect existing PR ownership, dependencies, and unrelated work.
+- Implement complete goals in independently verifiable batches. Review and test the
+  resulting change, fix its issues, and repeat only affected checks when needed.
+- Record PASS / PARTIAL / NOT RUN / BLOCKED from evidence. Missing equipment is NOT RUN;
+  keep progressing on executable work. Distinguish existing failures from regressions.
+- Complete required tests, review, CI, merge, and acceptance before claiming completion.
+  A merge does not prove acceptance. Do not mark unverified items complete.
+- Use the normal PR flow within authorization. Do not bypass protection/review or
+  force-push over others. Auto-merge is allowed after required review/tests/acceptance
+  pass without another confirmation. Re-read final remote PR, checks, and merge SHA.
+- Before asking approval for a proposal, revise and check it twice. Deliver the result,
+  actual validation, and remaining limits concisely. Use direct, positive statements.
 
-- **本项目后续开发不使用 Linear**：不查询、创建、领取或更新 Linear 任务，不把其可用性、负责人或状态作为开发与交付门禁。用户当前需求确定范围，GitHub 仓库 `natefox2017/py-cut` 管代码、分支、Commit、PR、Review、CI 与合并；默认分支须从远端核实。
-- 不主动新建其他任务系统。历史 Issue 仅供溯源，关闭不代表功能已实现。
-- **每次开工先审计**：读取根及适用子目录 AGENTS.md、相关长期文档与真实源码；检查 remote/default branch、fetch、当前分支/工作树、开放 PR/Review/CI 和其他开发活动。保留未提交改动，避免重复实现和冲突。
+### 0.3 Verification scope
 
-## 0.7 需求与并行协作
+Ordinary PRs run required lightweight checks and directly affected regression tests.
+Do not repeatedly run full/E2E/performance/expensive scans for routine pushes.
+Run full synthetic-media regression via `workflow_dispatch` for releases/deployment,
+architecture or significant public-interface/security/permission/dependency changes,
+or explicit full-test requests. Verify required checks/protection before changing CI;
+if unavailable, report that and preserve known check names.
 
-- 开工时明确业务背景、目标、修改边界、输入输出、异常、技术约束与可验证的验收标准；未知信息显式标待核实。主对话负责核查、确定共享契约、协调冲突和汇总。
-- 默认由 Codex 直接执行。用户明确要求并行时，使用相同模型的独立 Codex 会话，各自使用独立分支与 Worktree，仍须遵守第 0.1 节。**不得并发编辑同一工作树**。有依赖或共享文件先确定契约再串行或调整边界。
-- 分支使用 `codex/` 前缀与明确的功能名称，无需任务编号。PR 独立说明问题、最终行为、测试证据和未验证边界。已有他人 PR 不另做一份。
+Visual changes require the real encoder, complete decoding, extracted-frame inspection,
+and audio listening plus stream/duration checks when audio is affected. Filter strings,
+rc=0, pHash, or PSNR alone do not prove visual quality, watermark removal, or platform
+acceptance. Mocks test protocols/errors, not real LLM accuracy. Short media do not prove
+large-input performance. Put commands, input summaries, versions/SHA, and evidence in
+PRs; redact credentials.
 
-## 0.8 状态、验收与 CI
+### 0.4 Documentation and comment language
 
-- 测试和验收以实际证据记录 PASS/PARTIAL/NOT RUN/BLOCKED；必要测试、Review、合并和验收全部通过才交付完成。**合并不是测试完成**，部分交付不能勾选未验证项。
-- 完工回读远端 PR/CI/合并 SHA。用授权范围内的正常 PR 流程交付，不绕过保护/Review、不强推覆盖。必要测试、Review 和验收通过后，可启用自动合并，无需再次确认。
-- 日常仅运行仓库必需检查和与变更对应的轻量验证；普通 push/PR 不重复跑全量、E2E、性能或耗时扫描。完整合成媒体回归通过手动 `workflow_dispatch`；发布/部署、架构或重要公共接口、安全/权限、重大依赖变更及用户明确要求全量时才运行相应重检查。
-- 调整 CI 前核实必需检查与保护；接口不可用就记录未核实，保留已知 check 名称，不擅自删除或绕过。未执行测试不可宣称通过。
-- 视觉处理须用真实实现编码、完整解码、抽帧目检，音频须审听并核对流/时长；滤镜字符串、rc=0、pHash/PSNR 不足以证明画面质量、暗水印移除或平台无法识别。Mock 验证协议/错误处理，不能替代真实 LLM 准确率；短素材不证明大素材性能。测试命令/输入摘要/版本/SHA/证据记录在 PR，密钥始终脱敏。
+Use **English** for maintained project documentation, code comments, and docstrings.
+Write for AI collaborators: concise module responsibility, input/output contract,
+side effects, invariants, error/cleanup ownership, and reasons for non-obvious choices.
+Remove stale chronology, repeated code narration, obsolete examples, and unsupported
+claims. Preserve exact identifiers, CLI flags, file formats, and compatibility rules.
+Keep user-visible Chinese UI/log/help text and literal filesystem/data names unchanged
+unless the user explicitly requests localization.
 
-## 0.9 长期文档边界
+Markdown stores only durable requirements, workflows, architecture, interfaces/data
+contracts, technical designs, and development/test/deployment rules. README is the
+entry point; ROADMAP/MONTAGE/DEDUP describe product contracts, ENGINEERING captures
+technical boundaries, and this file governs AI collaboration. Do not store backlogs,
+bugs, current progress, temporary plans/handoffs/reports, commit/PR timelines, or CI
+run logs in Markdown. Put temporary evidence and remaining limits in the chat/PR.
+Update durable docs incrementally when their contracts change.
 
-Markdown 仅保留有效需求、业务流程、架构、接口/数据契约、技术方案和开发/测试/部署规范。入口 README；产品设计 docs/ROADMAP.md、MONTAGE.md、DEDUP.md；工程边界 docs/ENGINEERING.md；AI 协作约束在本文件。
-禁止 Markdown 存 Todo/Backlog/Bug、当前进度、临时计划/交接、Commit/PR 流水账、临时测试报告与 CI 运行记录。有效技术知识保留，不为整理无意义增加文件。契约变化时增量更新文档，临时验证与剩余限制记录在当前对话和 PR。
+## 1. Runtime constraints
 
-## 1. 运行环境（硬性，违反即跑不起来）
+- Run processing through `./run.sh <command> ...`, never directly through
+  `python3 pycut.py`. The launcher selects Python, installs missing requirements,
+  validates cv2/media tools, prints the effective gateway without secrets, and starts.
+- On macOS prefer `/Users/apple/.workbuddy/binaries/python/versions/3.13.12/bin/python3`
+  when present. Other hosts use the launcher-selected interpreter. Require OpenCV 4.x
+  Haar support. For EXTERNALLY-MANAGED system Python, create project `.venv`; never
+  use `--break-system-packages`. Install missing FFmpeg through the platform package
+  manager, recheck, and stop on failure.
+- Windows uses `run.cmd`, with winget for missing Python/FFmpeg; re-detect after install.
+  Start CLI/TUI only after validation. Static checks do not replace Windows execution.
+- Video dependencies are numpy and opencv-python. The terminal picker explicitly
+  uses MIT `textual-fspicker==1.0.1` and transitive Textual; Windows uses windows-curses.
+  Keep LLM, .env, and CLI code standard-library based; do not add casual dependencies.
+- Prefer Homebrew ffmpeg-full and VideoToolbox on macOS; use PATH FFmpeg/FFprobe and
+  libx264 elsewhere. Centralize `PYCUT_FFMPEG`/`PYCUT_FFPROBE` overrides in config.py.
+- FFmpeg 9 removed `-vsync`: use `-fps_mode cfr`. Do not add `-threads N` to scene
+  detection; explicit thread limits regressed that path.
 
-- **统一入口 `./run.sh`**：自动选解释器 → 按 `requirements.txt` 装依赖（已装则跳过）
-  → 校验 cv2 → 打印生效网关 → 运行。日常跑任务一律用 `./run.sh <command> ...`，
-  不要绕过它直接 `python3 pycut.py`（会踩解释器/依赖坑）。
-  Windows 的对应入口为 `run.cmd`，使用 winget 安装缺失的 Python/FFmpeg，安装后重新检测；仅检查通过才启动 CLI/TUI。
-- **解释器**：macOS 优先使用自带 cv2/numpy 的托管解释器
-  `/Users/apple/.workbuddy/binaries/python/versions/3.13.12/bin/python3`（存在时）。
-  其他环境由 `./run.sh` 选择当前解释器并校验 OpenCV 4.x 的 Haar 支持，不要求 macOS 路径存在；禁止绕过启动器运行处理任务。
-  缺少依赖时启动器自动安装；系统 Python 标记 EXTERNALLY-MANAGED 时允许启动器创建项目 `.venv`，不得使用 `--break-system-packages`。缺少 FFmpeg 时通过当前系统包管理器安装并复检，失败停止。
-- **依赖**：视频核心仅 `numpy` + `opencv-python`，目录选择明确复用 MIT 开源的 `textual-fspicker==1.0.1`（传递依赖 `textual`），Windows 使用 `windows-curses`。其余 LLM、.env 和 CLI 仍优先标准库，除目录选择所需依赖外不得随意扩展。
-- **ffmpeg**：macOS 优先 Homebrew `ffmpeg-full` 与 VideoToolbox，其他环境使用 PATH 的 ffmpeg/ffprobe 与 libx264。
-  `PYCUT_FFMPEG` / `PYCUT_FFPROBE` 环境变量可覆盖路径，集中定义在 `pycut/config.py`。
-- **ffmpeg 9.0 差异**：`-vsync` 已移除，用 `-fps_mode cfr`；`-threads N` 在 scene 检测下反而更慢，**不要加**。
+## 2. Module layout
 
-## 2. 目录约定（已在 README 画树）
+Keep reusable processing in `pycut/core/` and command orchestration in
+`pycut/commands/`. Command modules expose `register(subparsers)` and `run(args)`;
+register new public commands in `cli.COMMANDS`. Do not combine multiple features
+into one file. QA tools belong in `tools/`, tests in `tests/`, temporary scripts,
+media, and reports in ignored `work/`, and durable designs in `docs/`.
 
-- 逻辑按职责拆进 `pycut/core/`（与命令编排解耦）。**不要把多个功能塞进一个文件。**
-- 命令实现只在 `pycut/commands/`，每个模块暴露 `register(subparsers)` 与 `run(args)`。
-- 新增功能 = 新建 `commands/xxx_cmd.py` + 在 `cli.py` 的 `COMMANDS` 注册表登记。
-- 可复用 QA 工具放 `tools/`；测试放 `tests/`；临时脚本/素材/报告放被忽略的 `work/`；长期需求和设计放 `docs/`。
+## 3. Configuration and task contracts
 
-## 3. 配置与常量
+### 3.1 Constants and gateways
 
-- 所有标定过的数值在 `pycut/config.py`（场景阈值 `SCENE_TH=0.30`、最短段 `MIN_SEG=2.0`、
-  编码码率等）。**未经重新标定不要改这些数值**——它们是本地实测得到的。
-- LLM 走 **OpenAI 兼容协议**，用**纯标准库 urllib**（环境没装 openai/requests）。
-  新增 LLM 调用复用 `core/llm.py` 的 `LLMClient.ask_vision(frame, prompt)`。
-- **网关只有两个：主网关 `main` / 备用网关 `backup`**（`config.GATEWAYS` 只有这两个键，
-  不按厂商命名）。主网关默认 DeepSeek 官方，但**可以在 `.env` 换成任意 OpenAI 兼容网关**；
-  改地址/模型即可，代码无需改动。`config.DEFAULT_GATEWAY = "main"` 是常量，
-  不再有 `PYCUT_GATEWAY` 之类的选择开关。
-- **密钥从 `.env` 或环境变量读取，代码里不允许出现明文密钥**（`config.py` 里只有空串默认值）。
-  主网关：`PYCUT_MAIN_URL` / `PYCUT_MAIN_KEY`（旧名 `DEEPSEEK_API_KEY` 仍兼容）/ `PYCUT_MAIN_MODEL`；
-  备用网关：`PYCUT_BACKUP_URL` / `PYCUT_BACKUP_KEY` / `PYCUT_BACKUP_MODEL`（地址或模型留空时回落主网关值）。
-  `.env` 已被 git 忽略，模板见 `.env.example`；真实环境变量优先于 `.env`。
-- **备用网关的用途是自动容灾**：主网关连续失败达 `config.LLM_FAILOVER_FAILS`（=3）次，
-  `LLMClient` 自动切到备用网关并**粘住**（`_delegate`），后续调用都走备用，日志打印切换提示。
-  `--no-fallback` 可关闭；传了 `--llm-url/--llm-key/--llm-model` 显式覆盖时不挂备用。
-  备用网关未配密钥时不切换（`make_llm` 里用 `config.key_ready(other)` 判断）。
-  `config.key_ready()` / `config.gateway_summary()` 用于检查状态
-  （**日志里绝不打印密钥本身**，占位值如 `sk-你的密钥` 视为未配置）。
-- **Web / .env 是目录配置入口**：`pycut/settings.py` 统一读取与原子保存项目根 `.env`；`pycut/web_config.py` 使用标准库 HTTP 服务，只监听 `127.0.0.1`，校验 Host/Origin/会话令牌，不回显密钥。启动 TUI 仅启动本机服务，不自动打开浏览器；各正常窗口页面共用原五行块状大 Logo 与实际设置 URL，配置区清楚提示复制完整地址到浏览器、设置素材目录和模型；共用头部下方统一分割线，返回实际占用高度供内容布局；小窗口仅在高度不足时使用紧凑 Logo，W 只提示手动访问地址。
-- **TUI 保留三个处理向导**：任务开始前重新加载 `.env` 并校验目录；缺配置引导 Web，不再调用终端目录选择器。仅提供字幕擦除、去重和混剪；素材递归读取，不限制三层。混剪依次多选爆款视频、统一输入每个话术的裂变数（1～99），同一数量应用全部选中话术、汇总确认执行；数量输入是必经步骤，返回保留选择与已填数。
-- **键盘与执行**：↑↓ 移动，→/Enter 进入；确认页必须 Enter 执行，Esc 返回。主菜单只有 Q 退出。CLI 子进程仍经 `tui_runner` 显示实时日志，失败停止依赖任务，不能将非零退出码当成功。显式 CLI 参数保持兼容。混剪主进度只展示整批计划/实际已生成成片数与一个进度条，不展示内部步骤；失败自动显示错误日志。三类任务结束须停留在明确结果页，区分完成/待复查/失败/中断，Enter/Esc确认返回；每流程阶段计数与目录独立，不把阶段计数相加冒充视频总数。
-- **批量裂变**：同一命令内共享参考视频画像、背景/画中画扫描与在线贴纸下载；每支成片的随机规划及编码独立执行，随机选片、处理结果和准备状态不做跨任务持久缓存。只读素材元数据允许在临时目录缓存，必须按真实路径、文件大小/mtime/ctime/inode及ffprobe工具身份/查询参数校验失效；失败、坏缓存或文件变化回退真实探测，不能缓存识别/处理成功状态。任务结束清理下载目录。
-- **前贴**：可选，未配置或目录没有视频时跳过；目录访问、坏素材等真实错误不能当作空库吞掉。非空时从配置目录随机选一个完整视频，复用混剪去重与贴纸，不调用字幕擦除。正文音轨优先复制爆款原声，不滤波、变速或补长；正文字幕与原声完成后才拼接，成片时长为前贴加正文，前贴拼接可为统一格式转码音频。任何处理失败不得覆盖原成片。中间文件需与被原子替换的文件位于同一文件系统。
+Keep calibrated values in config.py (including SCENE_TH=0.30 and MIN_SEG=2.0).
+Do not change calibrated numbers without reproducible recalibration.
 
-输出契约：显式 CLI 输出路径优先。话术根目录 `PYCUT_REFERENCE_DIR` 的每个子文件夹放一个视频与同名 SRT，列表显示相对路径；每次混剪在显式 `--out-dir` 或 `PYCUT_OUTPUT_DIR` 根目录下新建一个批次目录，所有话术及裂变视频直接放在同一批次目录，不保留话术子目录；同名自动编号，不覆盖已有视频。批次目录只保留视频，不输出 JSON，结束时打印完整批次目录路径。`PYCUT_CLIP_DIR`（混剪切片）、`PYCUT_PIP_DIR`（画中画切片）、`PYCUT_INTRO_DIR`（前贴）支持单路径旧值或 JSON 路径数组字符串。Web 多行增删/系统原生文件夹选择，取消不改路径，无图形桌面可手动输入；CLI 对应参数可重复。共用 `settings.directories` 解析，所有新素材库无限深递归并去除重复文件，不跟随目录软链接。原视频设置不再使用。字幕擦除/去重默认另存每个输入根同级 `字幕查重`/`去重`，保留既有分组与编号，整批预检碰撞，不能覆盖源文件。画中画与前贴可选，真读取错误不能当空库吞掉；正文/前贴的原声契约不变。
+Use standard-library urllib and reuse `LLMClient.ask_vision(frame, prompt)`.
+`config.GATEWAYS` has exactly `main` and `backup`; DEFAULT_GATEWAY is always `main`,
+with no PYCUT_GATEWAY selector. Main defaults to DeepSeek but may be any compatible
+endpoint configured by URL/model without code changes.
 
-## 4. 字幕擦除流程
+Credentials come only from environment/.env, never committed defaults. Main uses
+PYCUT_MAIN_URL/KEY/MODEL (legacy DEEPSEEK_API_KEY remains supported); backup uses
+PYCUT_BACKUP_URL/KEY/MODEL. Blank backup URL/model inherit main. Real environment
+variables override .env. Keep .env ignored and .env.example safe.
 
-用户提供视频切片，`cover` 递归读取多个配置目录。视觉模型多帧定位字幕区域，按全宽单层毛玻璃覆盖，抽帧复检；仅验证通过写完成标记。无字幕正常；不确定/超时/残留返回待复查，不标成功；真实编码失败与中断非零。每轮共享30秒等待预算，单次HTTP最多15秒；等待时更新进度。旧切片算法仅留为内部复用与历史模块测试，不属于公开命令。
+After LLM_FAILOVER_FAILS=3 consecutive failures, switch to a configured backup and
+retain `_delegate` for subsequent requests. `--no-fallback` disables this; explicit
+`--llm-url/key/model` suppresses automatic backup attachment. Do not switch without
+a ready backup key. key_ready/gateway_summary must recognize placeholders and never
+print key contents.
 
-## 5. 关键坑（踩过，别再踩）
+### 3.2 Settings and TUI
 
-- **macOS `find -iname "*.mp4"` 会静默丢文件** → 一律用 `os.scandir`（`list_videos` / `collect_clips`）。
-- **双重 seek**：关键帧间隔 8.33s 而镜头中位数仅 2.03s，只靠输入侧 `-ss` 会抽到别的镜头的帧。切割与抽帧都必须输入侧粗 seek（回退 1.0s）+ 输出侧精 seek。见 `config.COARSE_BACKOFF`、`cut_clip`、`faces._extract_one`。
-- **LLM 推理模型** `max_tokens` 必须 ≥500，否则 `content` 被 reasoning 吃光返回空；`finish_reason=length` 时换 1200 重试（`core/llm.py` 已处理）。
-- **并发结果配对**：用 `as_completed` + 显式回传索引，绝不用 `ex.map` 的解包顺序（顺序会错位导致判定张冠李戴）。
-- **字幕处理按用户要求覆盖单层矩形毛玻璃**：宽度固定为视频全宽，高度跟随检测到的字幕并加上下余量；仅一层高斯模糊和一次 overlay，禁止像素化缩放或重复叠层；不得恢复逐字掩膜修复，区域外不参与模糊。
-- **幂等**：字幕已处理写 `<切片>.covered.json`；重跑须读取用户原始切片，不能把已遮盖结果误当原片；输入与输出保持分离。
-- `ffprobe avg_frame_rate` 用**不带 `-select_streams`** 的通用封装（`core/ffmpeg.py: probe_scalar`）时，会同时返回视频流与音频流两行，音频流那行是 `0/0` → 只能取首行（`subtitle.py:166` 已这么处理）。实测桌面切片 20 个抽样中 18 个如此，**别用 `-select_streams v:0` 的命令去验证这条**（那样看不到 `0/0`）。`dedup.py:_video_duration` 用了 `-select_streams v:0`，不受此影响。
-- **注释与报告里的「实测」数字必须是自己跑出来的，且能被独立复现**。转述他人数据即使方向对也不可查证；凭单次观察下结论（尤其喂了截断/异常样本却不自知）会让后来人无法复核。实测数字要能让人照着重跑一遍得到同样的结果。
-- **要验证别人的代码，直接调用项目里的真实实现，别自己拼一条"等价"的命令**。简化版往往缺少关键前提（我曾用 `ffprobe ... | head -1` 去验证 `probe_scalar`，`head -1` 恰好把 `0/0` 过滤掉，得出"从未出现"的错误结论还写进了注释）。自己拼的命令验证不了被测函数的真实行为。
-- **不要为推演出来的边界条件加防御**。判断依据来自实测枚举而非想象：本机 ffprobe 9.0.2 的 `stream.duration` 输出只有三种形态——有效数值 / `N/A` / 空（rc=1），异常输入走 rc=1，**从不输出 `nan`/`inf`**；所以 `_video_duration` 现有的一条 `except ValueError` 就够，不要加 `math.isfinite` 之类永远不成立的检查。
-- **密钥不要硬编码提交**：新增网关/换 key 走 `.env` 或环境变量，禁止把明文 key 写进 `config.py` 后提交（所有默认密钥必须为空，新部署走 `.env`）。
+settings.py owns .env parsing and atomic saves. web_config.py is standard-library HTTP,
+loopback-only at 127.0.0.1, with Host/Origin/session-token checks and no key echo.
+TUI starts the service without opening a browser. Normal pages share the original
+five-line block logo, actual settings URL, copy-to-browser/configuration instructions,
+and one divider whose occupied height is returned to content layout. Wide windows
+place settings beside the logo; narrow windows stack them. Use compact branding only
+when height is insufficient. W displays manual URL access instructions.
 
-## 6. 最小开发与验证流程
+Reload .env and validate task-used directories before each wizard. Missing settings
+lead to Web configuration, not terminal directory selection. Keep only cover/dedup/
+montage. Recursively read material without a three-level limit. Montage selection is:
+multiple reference videos -> one mandatory count (1..99) for every selected reference
+-> final summary. Returning preserves selections and entered counts.
 
-1. 按第 0.6–0.8 节核查；独立分支/Worktree 开工，读相关 `core/` 复用点。
-2. 小步修改，先 dry-run / 单视频试跑，再需要的批量；处理任务只能用启动器。
-3. 使用启动器选择的 Python 跑相关 `tests/test_*.py`；pytest 能收集现有 unittest，不连续双跑同一套。视频处理要独立核对帧数、时长及音轨；视觉/音频满足第 0.8 节。
-4. 检查 `git diff --check`、必要语法/文档引用；只在长期契约变化时增量更新文档。
-5. 提交独立 PR，记录验证和限制；完成 Review、CI、合并、验收并回读远端结果。
+Up/down move; Right/Enter enters; only Enter executes on confirmation. Esc returns;
+only Q exits the home menu. tui_runner launches CLI children and shows real-time logs;
+nonzero exits stop dependent jobs. Preserve explicit CLI compatibility. Montage shows
+one batch progress bar with planned/completed final-video counts and animated activity;
+internal steps do not increase the total. Show errors automatically. All tasks stop at
+an explicit complete/review/failed/interrupted page until Enter/Esc returns. Keep stage
+counts and directories separate rather than adding them into a false video total.
 
-## 7. 不要做的事
+### 3.3 Materials, variants, and output
 
-- 不要把切片/混剪/查重逻辑全堆进一个 `.py`。
-- 不要引入 openai/requests/ffmpeg-python 等未安装依赖（保持标准库 + cv2 + numpy）。
-- 不要把用户的桌面产出（切片目录、清单）纳入 git（它们不在仓库内，且属个人数据）。
-- 不要改动 `config.py` 里的标定数值，除非重新实测并写明依据。
-- 不要把明文 API Key 提交进仓库（用 `.env` / 环境变量）。
+- Explicit CLI output wins. Each PYCUT_REFERENCE_DIR subfolder contains a reference
+  video and same-stem SRT; list relative names to distinguish references.
+- PYCUT_CLIP_DIR, PYCUT_PIP_DIR, and PYCUT_INTRO_DIR accept a legacy single path or a
+  JSON path-array string. Use settings.directories consistently. Web supports row
+  addition/removal, native folder selection, cancellation without changes, and manual
+  input on headless hosts. CLI material arguments are repeatable. Retire source-video
+  settings from the public workflow.
+- Merge recursive roots without duplicate files or following directory symlinks.
+  Optional empty PIP/intro pools may be skipped, but real read/probe errors must surface.
+- Each montage invocation creates a batch under explicit --out-dir or configured
+  output root. TUI references/variants share that one batch. Flatten all videos there,
+  number collisions without overwriting, keep only videos (no JSON), and print the
+  complete batch path on completion.
+- Cover/dedup write siblings named `字幕查重`/`去重` for each input root, preserving
+  existing groups/numbers. Preflight whole-batch collisions; never overwrite sources.
+- Within one variant batch, share reference analysis, background/PIP scans, and online
+  sticker download. Each final video independently plans randomness and encoding.
+  Do not persist random selections, processing results, or preparation/success state.
+- Read-only metadata may be cached in temporary storage only with real path, file
+  size/mtime/ctime/inode, probe-tool identity, and query validation. Failures, invalid
+  caches, or changed files fall back to real probes. Clean downloaded stickers at end.
+- Intro is optional; absent/empty skips it. For a nonempty pool choose one complete
+  video, reuse montage variation/stickers, and preserve its subtitles without cover.
+  Finish body subtitles/reference audio before joining the intro. Duration is intro
+  plus body. Body audio is copied without filtering/speed change/extension; joining
+  may transcode audio for uniform format. Failure preserves prior final output.
+  Atomic-replacement intermediates must be on the same filesystem as the target.
+
+## 4. Subtitle coverage
+
+Cover recursively reads supplied clips, locates subtitles across sampled frames with
+a vision model, applies one full-width rectangular frosted-glass layer, and samples
+again for verification. Persist completion only after verification. No subtitles is
+normal; uncertainty/timeouts/residue require review, never false success. Encoding
+failure and interruption return nonzero. Share 30 seconds per detection round, cap
+individual HTTP at 15 seconds, and update progress while waiting. Legacy slicing
+algorithms remain internal reuse/test surfaces, not public commands.
+
+## 5. Known implementation traps
+
+- Use os.scandir/os.walk traversal (list_videos/collect_clips); macOS find -iname has
+  silently omitted MP4 files.
+- Use coarse input seek backed off by COARSE_BACKOFF=1.0 plus accurate output seek
+  for cuts and precise frame extraction. Long GOPs can otherwise select another shot.
+- Reasoning-model max_tokens must be >=500; retry length exhaustion with 1200 so
+  reasoning does not consume the entire content budget.
+- Pair asynchronous results using as_completed plus explicit indices. Never infer
+  identity from completion/unpacking order.
+- Subtitle coverage is one Gaussian blur and one overlay, full video width with
+  detected height plus margins. No pixelation, repeated layers, or per-glyph inpainting.
+  Pixels outside the rectangle remain untouched.
+- `<clip>.covered.json` belongs to the original source. Keep input/output separate;
+  never treat an already covered output as an original on rerun.
+- probe_scalar without stream selection can return video rate then audio `0/0` on
+  another line. Parse the first line. A selected v:0 probe cannot reproduce this case.
+- Test the real implementation, not a hand-built equivalent that hides its behavior
+  (for example, piping probe output to head removes the extra audio line).
+- Measurements in comments/reports must be personally reproducible with commands,
+  inputs, and versions. Do not promote historical numbers or one truncated sample into
+  current evidence. Keep unreproducible historical observations as research context.
+- Do not add speculative defenses. Observed FFprobe duration forms are numeric, N/A,
+  or empty failure; do not add nan/inf branches based only on imagined output.
+- Never commit plaintext credentials. Gateway changes belong in .env/environment;
+  code key defaults stay empty.
+
+## 6. Minimal development loop
+
+1. Audit and isolate work; read relevant reusable core implementations.
+2. Make focused edits; start with dry-run/single-video checks before necessary batches.
+   Processing always goes through the launcher.
+3. Run affected tests using the launcher-selected Python. Pytest collects unittest;
+   do not immediately repeat the same suite with another runner. Independently check
+   frame counts, duration, audio streams, and actual visual/audio results when affected.
+4. Run git diff --check, syntax/reference checks, and required CI. Update durable docs
+   only for contract changes; keep temporary evidence in PR/chat.
+5. Submit an independent PR explaining final behavior, evidence, and unverified limits.
+   Complete review, CI, merge, acceptance, and remote verification.
+
+Do not commit personal desktop outputs, manifests, temporary media, or secrets.
+Do not add openai/requests/ffmpeg-python or bypass launchers/dependency boundaries.

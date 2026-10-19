@@ -1,4 +1,4 @@
-"""段间淡化回归：默认关闭、时长边界及 CLI 参数校验。"""
+"""Optional seam-fade defaults, duration bounds, and CLI validation."""
 from __future__ import annotations
 
 import argparse

@@ -27,7 +27,7 @@ def parse(line: str) -> dict | None:
 
 
 def completed_futures(tasks, on_wait):
-    """等待后台片段时仍发送进度；不让慢请求看起来像卡死。"""
+    """Yield completed futures while emitting progress during slow background requests."""
     from concurrent.futures import wait, FIRST_COMPLETED
     pending = set(tasks)
     while pending:

@@ -1,7 +1,4 @@
-"""退出码契约回归：错误输出不能误报成功，失败不能运行依赖任务。
-
-所有测试只使用临时的非视频文本文件及 mock，不执行 FFmpeg/LLM。
-"""
+"""Exit-code/dependency contracts using temporary non-video files and mocks only."""
 
 from __future__ import annotations
 
@@ -23,7 +20,7 @@ class ExitCodeTests(unittest.TestCase):
         self.source.write_bytes(b"dummy-input")
 
     def _run_montage(self, step, fission, responses):
-        # 以真实 CLI parser 创建 args，直接测试命令入口的返回契约。
+        # Use the real CLI parser to test the command return contract.
         argv = ["montage", "--source", str(self.source), "--no-sub",
                 "--step", step, "--fission", str(fission)]
         args = cli.build_parser().parse_args(argv)
@@ -53,7 +50,7 @@ class ExitCodeTests(unittest.TestCase):
         self.assertEqual((rc, calls), (2, 1))
 
     def test_step_a_may_succeed_without_final_video(self):
-        # --step a 仅提取基准，不会生成视频，空 final 属于正常契约。
+        # Step a profiles only; an empty final path is valid for that stage.
         rc, calls = self._run_montage("a", 1, [self._success_result(final="")])
         self.assertEqual((rc, calls), (0, 1))
 

@@ -1,1 +1,1 @@
-"""pycut.core —— 核心处理模块（与外部命令编排解耦）。"""
+"""Core media operations, independent of command orchestration."""

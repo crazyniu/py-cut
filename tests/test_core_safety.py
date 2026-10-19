@@ -1,8 +1,6 @@
-"""视频核心流程的无媒体回归：避免丢片、错报完成与意外覆盖。
+"""Offline media orchestration regression for complete outputs and safe publication.
 
-仅 mock 外部探测/编码，使用临时文件验证真实源/产物路径逻辑。
-执行：python -m unittest discover -s tests -p 'test_core_safety.py' -v
-"""
+Mock only external probing/encoding; use temporary files for real path logic."""
 from __future__ import annotations
 
 import argparse
@@ -88,7 +86,7 @@ class CoreSafetyTests(unittest.TestCase):
                 self.assertIn("冲突", rows[i]["error"])
 
     def _mock_dedup_encode(self, accepted):
-        """创建真实临时产物，模拟仅 ffmpeg 和质量门禁。"""
+        """Create real temporary output while mocking the encoder and verification gates."""
         def build(_src, tmp, _params, _info, _opts, _logo):
             return ["fake-ffmpeg", str(tmp)], []
 
@@ -184,7 +182,6 @@ class CoreSafetyTests(unittest.TestCase):
             self.assertIn("画中画素材目录没有可用", result.get("error", ""))
             self.assertFalse(result.get("final"))
 
-
     def test_montage_probe_is_optional_flag_and_needs_no_source(self):
         from pycut.commands import montage_cmd
         args = cli.build_parser().parse_args(
@@ -268,7 +265,6 @@ class CoreSafetyTests(unittest.TestCase):
             self.assertEqual(final.read_bytes(), b"new" * 700)
             self.assertFalse(staged.exists())
 
-
     def test_montage_landscape_flag_changes_actual_scan_results(self):
         from pycut.core import montage_clips
         with tempfile.TemporaryDirectory() as td:
@@ -314,7 +310,6 @@ class CoreSafetyTests(unittest.TestCase):
             scanned.assert_called_once_with(
                 root, min_dur=opts.min_clip, max_dur=opts.max_clip,
                 workers=opts.workers, allow_landscape=True)
-
 
     def test_reencoding_slice_invalidates_old_subtitle_marker(self):
         with tempfile.TemporaryDirectory() as td:
@@ -374,8 +369,6 @@ class CoreSafetyTests(unittest.TestCase):
             opts = montage_pipeline.MontageOptions(srt="fake.srt")
             with mock.patch.object(montage_subtitles, "parse_srt",
                                    return_value=[montage_subtitles.SubtitleCue(1, 0, 5, "test")]), \
-                 mock.patch.object(montage_subtitles, "assign_cues_to_slots",
-                                   return_value=[object()]), \
                  mock.patch.object(montage_subtitles, "build_ass",
                                    return_value=(ass_path, {"font_name": "test", "font_size": 20})), \
                  mock.patch.object(montage_subtitles, "build_subtitle_cmd",
@@ -389,7 +382,6 @@ class CoreSafetyTests(unittest.TestCase):
                     root / "output.mp4", [(0.0, 5.0)], (720, 1280), opts)
             self.assertFalse(ok)
             self.assertFalse(ass_path.exists())
-
 
     def test_montage_dedup_compares_full_files_on_partial_hash_collision(self):
         from pycut.core import montage_clips

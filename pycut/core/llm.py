@@ -1,11 +1,8 @@
-"""LLM 客户端（OpenAI 兼容 / 纯标准库 urllib）。
+"""OpenAI-compatible vision client using standard-library urllib.
 
-设计要点：
-  - 不依赖 openai / requests / httpx（环境未装，且应保持在标准库内）。
-  - 推理模型需 max_tokens >= 500，否则 content 被 reasoning 吃光返回空。
-  - 连续失败达阈值 -> 全局禁用，避免长任务空转。
-  - 视觉问答 = 单帧 base64 + 自定义 prompt，通用复用（人脸判定 / 字幕检测）。
-"""
+Reasoning models need an adequate output-token budget. Count unusable responses
+as failures; switch to a configured backup after consecutive failures and retain
+that delegate for the rest of the client lifetime."""
 from __future__ import annotations
 
 import base64
@@ -24,11 +21,7 @@ from .utils import log
 
 
 class LLMClient:
-    """单个网关的 LLM 客户端。
-
-    主网关实例可挂一个备用网关实例（fallback）：主网关连续失败达
-    config.LLM_FAILOVER_FAILS 次时自动切到备用网关并粘住（后续调用都走备用）。
-    """
+    """One gateway client with optional sticky failover after LLM_FAILOVER_FAILS failures."""
 
     def __init__(self, url: str, key: str, model: str, enabled: bool = True,
                  label: str = "main", fallback: "LLMClient | None" = None):
@@ -36,9 +29,9 @@ class LLMClient:
         self.key = key
         self.model = model
         self.enabled = enabled
-        self.label = label              # main / backup，仅用于日志
-        self.fallback = fallback        # 备用网关客户端（可为 None）
-        self.switched_to: str | None = None   # 已切换到哪个网关（None=未切换）
+        self.label = label
+        self.fallback = fallback
+        self.switched_to: str | None = None
         self._calls = 0
         self._failures = 0
         self._delegate: LLMClient | None = None
@@ -46,7 +39,6 @@ class LLMClient:
         self._lock = threading.Lock()
         self._jpg_quality = 80
 
-    # ---- 统计（已切换到备用时，累计自身 + 备用网关的计数）----
     @property
     def calls(self) -> int:
         return self._calls + (self._delegate.calls if self._delegate is not None else 0)
@@ -92,7 +84,7 @@ class LLMClient:
             return -1, str(e)
 
     def _extract_json(self, text: str) -> dict | None:
-        """防御式解析：去 markdown 围栏 -> 首尾花括号 -> 正则兜底。"""
+        """Parse JSON after removing Markdown fences, with brace and regex fallbacks."""
         if not text:
             return None
         t = text.strip()
@@ -119,7 +111,7 @@ class LLMClient:
         return None
 
     def ask(self, frame) -> dict | None:
-        """人脸判定：返回 {"face": bool, "confidence": float, "reason": str} 或 None。"""
+        """Return {face, confidence, reason}, or None when vision classification fails."""
         return self.ask_vision(frame, (
             "判断这张视频截图里是否清晰可见至少一个人的脸（大头/半身/全身有人脸均可）。"
             "只回答 JSON，不要任何解释文字，格式: "
@@ -127,8 +119,8 @@ class LLMClient:
         ))
 
     def ask_vision(self, frame, prompt: str, *, deadline: float | None = None) -> dict | None:
-        """通用视觉问答：单帧或多帧 + 自定义 prompt，返回解析后的 JSON dict 或 None。"""
-        # 已切到备用网关：后续调用都走备用（粘性切换，避免来回抖动）
+        """Send one or more frames and a prompt; return a parsed JSON dict or None."""
+        # Sticky failover prevents subsequent requests from oscillating between gateways.
         if self._delegate is not None:
             return self._delegate.ask_vision(frame, prompt, deadline=deadline)
         if not self.enabled:
@@ -181,9 +173,7 @@ class LLMClient:
                     msg = first.get("message") or {}
                     content = msg.get("content")
                     finish = first.get("finish_reason")
-                    # 200 只代表 HTTP 成功，不代表模型返回了可用的 JSON。
-                    # 原实现两个 continue 绕过了失败计数：连续收到空内容 /
-                    # reasoning token 耗尽时永远不会启用备用网关。
+                    # HTTP 200 with empty/invalid model content still counts toward failover.
                     if (not content or not str(content).strip()) and finish == "length":
                         payload = dict(payload, max_tokens=config.LLM_MAX_TOKENS_RETRY)
                     else:
@@ -200,7 +190,7 @@ class LLMClient:
                     self._consec_fail += 1
                 continue
 
-            # 4xx（除可重试状态）直接放弃，不重试
+            # Do not retry non-retryable 4xx responses.
             if 400 <= status < 500 and status not in config.LLM_RETRY_STATUS:
                 with self._lock:
                     self._failures += 1
@@ -223,7 +213,7 @@ class LLMClient:
         if consec >= config.LLM_MAX_CONSEC_FAIL:
             self._disable("连续失败")
 
-        # 主网关连续失败 -> 切换备用网关重试本次调用
+        # Retry this request on the backup after consecutive primary failures.
         fb = self.fallback
         if fb is not None and fb.enabled and consec >= config.LLM_FAILOVER_FAILS:
             log(f"[LLM] {self.label} 网关连续失败 {consec} 次，"
@@ -238,12 +228,10 @@ class LLMClient:
 def make_llm(name: str, url: str | None = None, key: str | None = None,
              model: str | None = None, enabled: bool = True,
              use_fallback: bool = True) -> LLMClient:
-    """按 --gateway 预设（main/backup）+ --llm-* 覆盖构造 LLMClient。
+    """Build a client from gateway defaults and explicit URL/key/model overrides.
 
-    use_fallback=True 且备用网关已配置密钥时，会挂上另一个网关作为备用：
-    主网关连续失败达阈值即自动切换。传了 --llm-* 显式覆盖时不挂备用
-    （用户手指定了网关，切到别的网关不符合预期）。
-    """
+    Attach a configured backup only when fallback is enabled and no explicit override
+    was supplied; explicit endpoint choices must not silently switch gateways."""
     n = name if name in config.GATEWAYS else config.DEFAULT_GATEWAY
     u, k, m = config.apply_llm_overrides(n, url, key, model)
 

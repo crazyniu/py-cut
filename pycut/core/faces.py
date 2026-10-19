@@ -1,10 +1,7 @@
-"""人脸检测与三态判定（Haar 快速分筛 + LLM 兜底）。
+"""Three-state face classification using strict/loose Haar detection and optional LLM review.
 
-策略：
-  - Haar 严格 / 宽松两档先做快速分筛，省下绝大多数 LLM 调用。
-  - 仅 ambiguous 段（抽帧失败 / 严格无命中但宽松有命中）才送中间帧给 LLM 兜底。
-  - 三态：face / noface / ambiguous（noface 必须建立在"确实看到了帧且确实没检出脸"）。
-"""
+Only ambiguous segments reach the LLM. noface requires decoded frames with no
+detection; extraction failure remains ambiguous."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -19,7 +16,7 @@ from .utils import run_cmd
 
 
 def load_cascades(cv2_module) -> tuple:
-    """加载 Haar 级联（正面 + 侧面）。失败抛异常由调用方处理。"""
+    """Load frontal/profile Haar cascades; raise when unavailable."""
     cdir = cv2_module.data.haarcascades
     f_path = Path(cdir) / "haarcascade_frontalface_default.xml"
     p_path = Path(cdir) / "haarcascade_profileface.xml"
@@ -31,7 +28,7 @@ def load_cascades(cv2_module) -> tuple:
 
 
 def _extract_one(path: Path, t: float, tmpdir: Path, tag: str):
-    """单帧抽取，必须用双重 seek（与切片同逻辑，否则会抽到别的镜头的帧）。"""
+    """Extract one frame using coarse input seek plus accurate output seek."""
     dst = tmpdir / f"{tag}.jpg"
     coarse = max(0.0, t - config.COARSE_BACKOFF)
     fine = t - coarse
@@ -48,7 +45,7 @@ def _extract_one(path: Path, t: float, tmpdir: Path, tag: str):
 
 
 def extract_frames(path: Path, seg: tuple[float, float], tmpdir: Path):
-    """段内按 25/50/75% 抽 3 帧，两端内缩 12% 避开转场帧。"""
+    """Sample configured positions inside the segment, inset from transition frames."""
     s, e = seg
     span = e - s
     if span <= 0:
@@ -67,7 +64,7 @@ def extract_frames(path: Path, seg: tuple[float, float], tmpdir: Path):
 
 def haar_faces(cascades, frame, scale_factor: float, min_neighbors: int,
                min_size_ratio: float):
-    """在单帧上跑 Haar 两分类器，返回检测框列表。"""
+    """Return detection boxes from both Haar classifiers for one frame."""
     frontal, profile = cascades
     h, w = frame.shape[:2]
     min_side = max(8, int(h * min_size_ratio))
@@ -91,15 +88,15 @@ def haar_faces(cascades, frame, scale_factor: float, min_neighbors: int,
 
 @dataclass
 class FaceStat:
-    strict_frames: int = 0      # 严格档命中人脸的帧数
-    loose_frames: int = 0       # 宽松档命中人脸的帧数
-    max_ratio: float = 0.0      # 最大人脸宽 / 帧高
+    strict_frames: int = 0
+    loose_frames: int = 0
+    max_ratio: float = 0.0
     total_frames: int = 0
     mid_frame: Any = field(default=None, repr=False)
 
 
 def analyze_segment(path: Path, seg: tuple[float, float], tmpdir: Path) -> FaceStat:
-    """段内抽帧 -> Haar 两档统计 -> 记录中间帧供 LLM 兜底。"""
+    """Sample frames, count strict/loose detections, and retain a middle frame for LLM review."""
     frames = extract_frames(path, seg, tmpdir)
     stat = FaceStat(total_frames=len(frames))
     if not frames:
@@ -128,18 +125,18 @@ def analyze_segment(path: Path, seg: tuple[float, float], tmpdir: Path) -> FaceS
     return stat
 
 
-# analyze_segment 需要 cascades；由命令层在启动时注入。
+# The command layer injects cascades before analyze_segment runs.
 _CASCADES = None
 
 
 def bind_cascades(cascades) -> None:
-    """命令层 self_check 后注入 Haar 级联，供 analyze_segment 使用。"""
+    """Inject checked Haar cascades before segment analysis."""
     global _CASCADES
     _CASCADES = cascades
 
 
 def decide_face(stat: FaceStat) -> str:
-    """三态判定：face / noface / ambiguous。"""
+    """Return face, noface, or ambiguous from the sampled detection statistics."""
     if stat.total_frames <= 0:
         return "ambiguous"
     if stat.strict_frames >= stat.total_frames / 2.0 and stat.max_ratio >= config.FACE_WIDTH_RATIO:

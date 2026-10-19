@@ -1,24 +1,8 @@
-"""混剪步骤A：从爆款视频提取「语音节奏 + 时长基准」。
+"""Reference video profiling: duration, format, and speech rhythm (no ASR).
 
-混剪三步（需求见 docs/MONTAGE.md）：
-    A. 本模块——量出基准视频的语音段（节奏骨架）与总时长
-    B. core/montage_clips.py——按 A 给出的槽位从片段库取画面填满
-    C. core/montage_pip.py——把切片以画中画叠在 B 的结果上
-
-本步骤**不做 ASR 转写**：混剪要的是「节奏」不是「文案」——成片沿用基准视频的
-断句与语速，画面则完全换成片段库/切片的画面，文字必然对不上，转写没有用处。
-引入 whisper 之类的 ASR 会带来模型下载与推理耗时，收益为零，故不做。
-
-silencedetect 的踩坑记录（本机 ffmpeg 9.0.2 实测）：
-  - **结果全在 stderr**，`-f null -` 时 stdout 是 0 字节。读 stdout 会得到空结果。
-  - 加 `-vn -sn -dn` 跳过视频解码：同一条77s 素材 2.55s -> 0.11s（20倍），
-    音频滤镜不需要画面。
-  - `silencedetect` 只报**达到 d 阈值的静音段**，不是「有声音的段」。所以语音段
-    必须由静音区间取补集得到。
-  - 视频以静音结尾时，最后一个 `silence_start` 没有配对的 `silence_end`
-    （实测-25dB 下 3 个start 全部配上了，但不能指望），补集时必须补到容器时长，
-    否则会漏掉最后一段语音。
-"""
+silencedetect reports silence on stderr. Skip video decoding and complement the
+silence intervals to obtain speech. Close an unmatched trailing silence at the
+reference duration. Background shots come from the clip library, not this video."""
 from __future__ import annotations
 
 import re
@@ -26,50 +10,47 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import config
-from .ffmpeg import FFMPEG, FFPROBE, probe_scalar
+from .ffmpeg import FFMPEG
 from .dedup import _video_duration
 from .utils import log, run_cmd
 from .montage_clips import _probe_one
 
-# ffprobe 解析失败时的兜底帧率（本素材实测 30fps）
+
 FALLBACK_FPS = 30.0
 
-# ffprobe 单次探测超时（秒）
-_PROBE_TIMEOUT = 60
-# silencedetect 跑一遍的超时，按音频长度估算并封顶（77s 素材实测 0.11s）
+
 _SILENCE_TIMEOUT = 600
 
-# silencedetect 原始行（实测格式）：
+
 #   [Parsed_silencedetect_0 @ 0x...] silence_start: 31.746667
 #   [Parsed_silencedetect_0 @ 0x...] silence_end: 32.110272 | silence_duration: 0.363605
-# 时间字段的形态本机实测只有「有效数值」一种，不会有 nan/inf，故不做 isfinite 防御。
 _RE_SILENCE_START = re.compile(r"silence_start:\s*([0-9.]+)")
 _RE_SILENCE_END = re.compile(r"silence_end:\s*([0-9.]+)")
 _RE_SILENCE_DUR = re.compile(r"silence_duration:\s*([0-9.]+)")
 
-# 相邻语音段间隔小于此值就合并，避免切出 0.05s 的碎片槽
+# Merge tiny speech gaps to avoid flash-length slots.
 _MERGE_GAP = 0.05
 
 
 @dataclass
 class SpeechSegment:
-    """一段连续语音（秒，容器时间轴）。"""
+    """Continuous speech interval in seconds on the reference timeline."""
 
     start: float
     end: float
 
     @property
     def duration(self) -> float:
-        """段时长 = end - start。"""
+        """Return interval length in seconds."""
         return self.end - self.start
 
 
 @dataclass
 class SourceProfile:
-    """基准视频画像：步骤B/C 的画布、帧率、时长与节奏骨架都从这里取。"""
+    """Reference metadata and speech rhythm; montage output uses its configured canvas."""
 
     path: Path
-    duration: float               # 容器总时长
+    duration: float
     width: int
     height: int
     fps: float
@@ -79,16 +60,12 @@ class SourceProfile:
 
     @property
     def silence_total(self) -> float:
-        """总静音时长 = 容器时长 - 语音总时长（下限0）。"""
+        """Return nonnegative duration not classified as speech."""
         return max(0.0, self.duration - self.speech_total)
 
 
 def _float_or_zero(text: str) -> float:
-    """把 ffprobe 的单行输出转float，失败返回 0.0。
-
-    ffprobe 缺字段时 **rc 仍是 0**，stdout 才是 `N/A`（见 dedup._video_duration
-    的实测记录），所以只能靠 float() 抛ValueError 来兜。
-    """
+    """Parse the first probe line; missing fields such as N/A return zero."""
     try:
         return float((text or "").strip().splitlines()[0])
     except (IndexError, TypeError, ValueError):
@@ -96,12 +73,9 @@ def _float_or_zero(text: str) -> float:
 
 
 def _fps_to_float(text: str) -> float:
-    """'30/1' / '30000/1001' / '29.97' -> float；`0/0`、`N/A`、空 -> 0.0。
+    """Parse a rate or fraction from the first probe line; invalid or zero denominators return zero.
 
-    必须取**首行**：不带 `-select_streams` 的通用封装（probe_scalar）会同时返回
-    视频流与音频流两行，音频流那行是 `0/0`（AGENTS.md 第 5 节 / dedup 实测
-    12 个里 10 个如此，有音轨的才有）。直接整串float() 会抛 ValueError。
-    """
+    Unselected probes can append an audio 0/0 line after the video frame rate."""
     v = (text or "").strip().splitlines()
     v = v[0].strip() if v else ""
     if not v or v in ("0/0", "N/A"):
@@ -117,11 +91,9 @@ def _fps_to_float(text: str) -> float:
 
 
 def _parse_silence_events(text: str) -> tuple[list[float], list[float], list[float]]:
-    """从 ffmpeg stderr 里解析 silencedetect 事件。
+    """Parse ordered (starts, ends, durations) from silencedetect stderr.
 
-    返回 (静音起点列表, 静音终点列表, 静音时长列表)。三个列表按出现顺序一一对应；
-    尾部静音缺 `silence_end` 时，终点列表比起点列表少一个（调用方按duration 补）。
-    """
+    Trailing silence can have a start without a corresponding end."""
     starts: list[float] = []
     ends: list[float] = []
     durs: list[float] = []
@@ -141,33 +113,30 @@ def _parse_silence_events(text: str) -> tuple[list[float], list[float], list[flo
 
 
 def _complement(starts: list[float], ends: list[float], duration: float) -> list[tuple[float, float]]:
-    """静音区间取补集得语音区间。
+    """Return speech as the complement of silence intervals within [0, duration].
 
-    语音 = [0, s1_start] + [s1_end, s2_start] + ... + [sn_end, duration]。
-    末尾的 `ends` 若缺失（视频以静音收尾），最后一段直接补到 duration——
-    否则会漏掉结尾的一段语音。
-    """
+    Close a missing trailing silence end at duration."""
     total = max(0.0, duration)
     silences: list[tuple[float, float]] = []
     for i, s in enumerate(starts):
         e = ends[i] if i < len(ends) else total
         silences.append((s, e))
-    # 补齐缺尾的静音段，并夹紧到 [0, total]
+    # Close unmatched trailing silence and clamp intervals to the reference duration.
     silences = [(max(0.0, s), min(total, e)) for s, e in silences if e > s]
 
     speech: list[tuple[float, float]] = []
     cursor = 0.0
     for s, e in silences:
-        if s > cursor:                      # 两段静音之间的空隙即语音
+        if s > cursor:
             speech.append((cursor, s))
         cursor = max(cursor, e)
-    if total > cursor:                      # 最后一段静音之后的语音
+    if total > cursor:
         speech.append((cursor, total))
     return speech
 
 
 def _merge_close(spans: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """合并间隔 < _MERGE_GAP 的相邻语音段，避免碎片。"""
+    """Merge adjacent speech intervals separated by less than _MERGE_GAP."""
     out: list[tuple[float, float]] = []
     for s, e in spans:
         if out and s - out[-1][1] < _MERGE_GAP:
@@ -182,11 +151,9 @@ def detect_speech_segments(path: Path, noise_db: float | None = None,
                            seg_min: float | None = None,
                            seg_max: float | None = None, *,
                            duration: float | None = None) -> list[SpeechSegment]:
-    """用 ffmpeg silencedetect 提取语音段（已按 seg_min 过滤、超 seg_max 截断）。
+    """Detect speech using configured silence thresholds; drop short and cap long intervals.
 
-    参数默认全部取config.MONTAGE_SILENCE_NOISE_DB / SILENCE_MIN_DUR /
-    SEG_MIN_DUR / SEG_MAX_DUR。返回值是语音段，不是静音段。
-    """
+    Return speech intervals, not the silence events emitted by FFmpeg."""
     noise_db = config.MONTAGE_SILENCE_NOISE_DB if noise_db is None else noise_db
     min_silence = config.MONTAGE_SILENCE_MIN_DUR if min_silence is None else min_silence
     seg_min = config.MONTAGE_SEG_MIN_DUR if seg_min is None else seg_min
@@ -199,7 +166,7 @@ def detect_speech_segments(path: Path, noise_db: float | None = None,
 
     args = [
         FFMPEG, "-hide_banner", "-nostats",
-        "-vn", "-sn", "-dn",# 只要音频，别解视频（77s 素材 2.55s -> 0.11s）
+        "-vn", "-sn", "-dn",# Audio analysis must not decode the video stream.
         "-i", str(path),
         "-af", f"silencedetect=noise={noise_db}dB:d={min_silence}",
         "-f", "null", "-",
@@ -209,11 +176,10 @@ def detect_speech_segments(path: Path, noise_db: float | None = None,
         log(f"[步骤A] silencedetect 失败 rc={rc}: {err.strip().splitlines()[-1] if err.strip() else '无输出'}")
         return []
 
-    # silencedetect 的结果**只在 stderr**，stdout 是空的（见模块 docstring）
+    # silencedetect writes events to stderr, not stdout.
     starts, ends, _durs = _parse_silence_events(err)
     spans = _complement(starts, ends, duration)
 
-    # 太短的段丢弃、过长的段保留头部截断
     kept: list[tuple[float, float]] = []
     for s, e in spans:
         if e - s < seg_min:
@@ -229,20 +195,19 @@ def detect_speech_segments(path: Path, noise_db: float | None = None,
 
 def probe_source(path: Path, *, noise_db: float | None = None,
                  min_silence: float | None = None) -> SourceProfile | None:
-    """探测基准视频并跑一遍语音检测，返回完整画像；失败返回 None。"""
+    """Return cached reference metadata plus speech analysis, or None on probe failure."""
     path = Path(path)
     if not path.is_file():
         log(f"[步骤A] 基准视频不存在: {path}")
         return None
 
-    # 同一完整 JSON 查询同时获得视频时长、尺寸、帧率和音轨存在性。
-    # 背景、画中画、字幕检测共用文件身份校验的元数据缓存。
+    # Share one file-identity-validated JSON metadata query with background/PIP/subtitle paths.
     details: dict = {}
     info = _probe_one(path, details=details)
     if info is None:
         log(f"[步骤A] {path.name}: 探测不到有效视频信息")
         return None
-    # 正文以视频流为准，不能因为元数据缺失而改用较长的音轨/容器时长。
+    # Body timing uses the video stream, not a potentially longer audio/container duration.
     duration = _float_or_zero(str(details.get("duration") or ""))
     if duration <= 0:
         log(f"[步骤A] {path.name}: 探测不到视频时长")
@@ -271,7 +236,7 @@ def probe_source(path: Path, *, noise_db: float | None = None,
 
 
 def _even_fill(total: float, min_slot: float, max_slot: float) -> list[tuple[float, float]]:
-    """无语音段时的退化铺法：按 max_slot 均匀切，末段不足 min_slot 就并入前一段。"""
+    """Fill without speech using bounded slots; merge a short tail into its predecessor."""
     slots: list[tuple[float, float]] = []
     cursor = 0.0
     while total - cursor > 1e-6:
@@ -290,23 +255,17 @@ def plan_clip_slots(segments: list[SpeechSegment], total_duration: float,
                     min_slot: float | None = None,
                     max_slot: float | None = None
                     ) -> list[tuple[float, float]]:
-    """把语音段转成「每个片段该取多长」的时间槽（步骤B 的直接输入）。
+    """Convert speech intervals into duration slots for background selection.
 
-    以语音段为节奏骨架：一段语音对应一个槽，槽长= 段长，成片节奏因此与原视频
-    话术一致（混剪的核心价值）。总时长受 `total_duration × fill_ratio` 约束：
-    累加到接近上限后，最后一个槽按剩余量截断，超出的段直接丢弃。
-
-    返回的 (start, end) 是**基准视频里的时间位置**（从原视频哪一秒取画面），
-    步骤B 用双seek 从基准视频截取对应片段。保证：每槽长度 >0 且落在
-    [min_slot, max_slot]、起点单调递增、总时长 <= 上限。
-    """
+    Bound each slot by min_slot/max_slot and the total_duration * fill_ratio budget.
+    The planner consumes interval lengths; these positions do not select reference pictures."""
     fill_ratio = config.MONTAGE_TARGET_FILL_RATIO if fill_ratio is None else fill_ratio
     min_slot = config.MONTAGE_CLIP_MIN_DUR if min_slot is None else min_slot
     max_slot = config.MONTAGE_CLIP_MAX_DUR if max_slot is None else max_slot
 
     budget = max(0.0, total_duration * fill_ratio)
     if budget < min_slot:
-        # 预算本身还不到一个最小槽：无论怎么切都会违反 min_slot 下限，只能不出槽
+        # A budget smaller than min_slot cannot produce a valid slot.
         log(f"[步骤A] 预算 {budget:.2f}s < 最小槽 {min_slot:.2f}s，无可用时间槽")
         return []
 
@@ -314,17 +273,16 @@ def plan_clip_slots(segments: list[SpeechSegment], total_duration: float,
         log(f"[步骤A] 无语音段，退化为按{max_slot}s 均匀铺满 {budget:.2f}s")
         return _even_fill(budget, min_slot, max_slot)
 
-    # 语音段太短 -> 并入前一段（并入后仍不得超max_slot）；超过上限 -> 截断（保留头部）
+    # Merge short speech into the previous slot without exceeding max_slot; cap long speech.
     spans: list[list[float]] = []
     for seg in segments:
         s, e = float(seg.start), float(seg.end)
         e = min(e, s + max_slot)
         if e - s < min_slot:
             if spans:
-                # 并入前一段：只吃到 max_slot 为止，溢出部分不接
                 spans[-1][1] = min(max(spans[-1][1], e), spans[-1][0] + max_slot)
                 continue
-            e = s + min_slot           # 首段太短：撑到 min_slot
+            e = s + min_slot
             if e > budget:
                 break
         spans.append([s, e])
@@ -334,13 +292,13 @@ def plan_clip_slots(segments: list[SpeechSegment], total_duration: float,
     for s, e in spans:
         remain = budget - acc
         if remain < min_slot:
-            break                # 剩余额度不够一个最小槽，丢弃多余的段
+            break
         if e - s > remain:
-            e = s + remain        # 最后一个槽按剩余量截断
+            e = s + remain
         slots.append((s, e))
         acc += e - s
 
-    # 兜底：截断后可能不足 min_slot，与前一段合并（绝不返回小于 min_slot 的槽）
+    # Merge a short remainder without returning a sub-minimum slot.
     if len(slots) >= 2 and slots[-1][1] - slots[-1][0] < min_slot:
         ps, _ = slots[-2]
         slots[-2] = (ps, slots[-1][1])

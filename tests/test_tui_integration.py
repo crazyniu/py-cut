@@ -1,7 +1,4 @@
-"""无需外部视频、ffmpeg、网络或 API 密钥的 TUI 端到端交互回归。
-
-覆盖三个处理向导的 CLI 映射、目录导航、键盘菜单、取消/窄窗口与任务循环。
-"""
+"""Offline fake-screen coverage of wizard CLI mapping, navigation, cancellation, and task loops."""
 
 from __future__ import annotations
 
@@ -15,7 +12,7 @@ from pycut import settings, cli, config, tui, tui_runner
 
 
 class FakeScreen:
-    """把键盘和画布边界变成可重复断言的最小 curses 协议。"""
+    """Deterministic keyboard and canvas-boundary assertions for wizard tests."""
 
     def __init__(self, keys=(), size=(24, 100)):
         self.keys = list(keys)
@@ -128,7 +125,6 @@ class TUIIntegrationTests(unittest.TestCase):
              mock.patch.object(config, "CLIP_DIRS", [Path("/tmp/clips")]), \
              mock.patch.object(config, "PIP_DIRS", [Path("/tmp/pip")]), \
              mock.patch("pycut.core.montage_clips._collect_files", side_effect=[[first] * 4, [second] * 3]), \
-             mock.patch.object(tui, "_count_sticker_images", return_value=1), \
              mock.patch.object(tui, "list_videos_recursive", return_value=[first, second]), \
              mock.patch.object(tui, "_multi_select", return_value=selection), \
              mock.patch.object(tui, "_set_fission_counts", return_value=True), \
@@ -153,8 +149,6 @@ class TUIIntegrationTests(unittest.TestCase):
             with mock.patch.object(tui, "_pick_dir", side_effect=[
                      "/tmp/video", "/tmp/clips", "/tmp/pip"]) as picker, \
                  mock.patch("pycut.core.montage_clips._collect_files", return_value=[Path("candidate.mp4")] * 2), \
-                 mock.patch.object(tui, "_count_sticker_images",
-                                   side_effect=[0, 1]), \
                  mock.patch.object(tui, "list_videos_recursive", return_value=[video]), \
                  mock.patch.object(tui, "_multi_select", return_value=selection), \
                  mock.patch.object(tui, "_set_fission_counts", return_value=True), \

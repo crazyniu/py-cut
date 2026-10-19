@@ -1,4 +1,4 @@
-"""可复现 ASS 两种字幕样式对照：纯逻辑、无 FFmpeg/用户素材。"""
+"""Offline ASS outline/box comparison planning without FFmpeg or user media."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Issue #21：M1 可选 ABR 码率扰动；仅临时文件与模拟编码器。"""
+"""Optional seeded ABR behavior using temporary files and mocked encoders."""
 from __future__ import annotations
 
 import json
@@ -23,7 +23,7 @@ class DedupBitrateTests(unittest.TestCase):
         self.assertTrue(self._parse("--vary-bitrate").vary_bitrate)
 
     def test_seeded_bitrate_deterministic_and_bounded(self):
-        # 基线直接复用已标定的视频编码目标，不修改 config。
+        # Reuse the calibrated baseline rather than changing config.
         for baseline, base_kbps in (
             (config.BITRATE_LOW, int(config.BITRATE_LOW[:-1]) * 1000),
             (config.BITRATE_HIGH, int(config.BITRATE_HIGH[:-1]) * 1000),
@@ -117,7 +117,7 @@ class DedupBitrateTests(unittest.TestCase):
 
             def encode(command, timeout):
                 commands.append(command)
-                # ffmpeg 失败 / 没帧时可能留下一个损坏的临时文件。
+                # Encoder failure can leave a corrupt staging file that must be cleaned.
                 Path(command[-1]).write_bytes(b"partial" if tiny else b"encoded" * 400)
                 return (1, "", "unsupported bitrate mode") if fail else (0, "", "")
 

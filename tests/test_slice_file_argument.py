@@ -1,4 +1,4 @@
-"""slice --file 的显式路径 / 历史名称匹配回归，无需 FFmpeg 或真实素材。"""
+"""Internal slice explicit-path/legacy-keyword behavior without FFmpeg or user media."""
 from __future__ import annotations
 
 import os
@@ -41,7 +41,7 @@ class SliceFileArgumentTests(unittest.TestCase):
     def test_relative_explicit_path_resolves_against_current_directory(self):
         chosen = self._file("sub/relative.mp4")
         relative = os.path.relpath(chosen, Path.cwd())
-        self.assertIn("/", relative)  # 将其识别为路径，而不是文件名
+        self.assertIn("/", relative)
         with mock.patch.object(config, "SRC_DIR", self.root / "missing"):
             self.assertEqual(
                 slice_cmd._pick_files(self._args("--file", relative)),
@@ -114,7 +114,7 @@ class SliceFileArgumentTests(unittest.TestCase):
              mock.patch.object(slice_cmd, "_summary", return_value=2), \
              mock.patch.object(slice_cmd, "log"):
             result = slice_cmd.run(args)
-        self.assertEqual(result, 2)  # 只模拟探测失败，不伪造处理成功
+        self.assertEqual(result, 2)  # Simulate probe failure, not a fabricated successful process result.
         check.assert_called_once_with(require_src=False)
         cascades.assert_called_once()
         probe.assert_called_once_with(chosen.resolve())

@@ -1,136 +1,163 @@
-# 工程边界与验证规范
+# Engineering boundaries and validation
 
-> 本文件只记录长期有效的技术限制、产品设计参数与可复现经验，**不管理 Bug、Todo 或开发进度**。
-> 开发范围以当前用户需求为准，测试与交付证据记录在 PR；历史 GitHub Issues 仅作溯源，不证明功能实现。
-> 长期需求见 [DEDUP.md](DEDUP.md)、[MONTAGE.md](MONTAGE.md)、[ROADMAP.md](ROADMAP.md)；当前功能以最新 main 代码为准。
+This document stores durable constraints, design parameters, and reproducible lessons.
+Keep bugs, progress, temporary reports, and CI/PR history in chat/PRs. Product contracts
+are in [DEDUP.md](DEDUP.md), [MONTAGE.md](MONTAGE.md), and [ROADMAP.md](ROADMAP.md).
+Current source and acceptance evidence determine capability; closed issues do not.
 
----
+## 1. Similarity measurements and effect boundaries
 
-## 一、已知技术限制
+The eight dedup capability families are a design map, not an implemented-feature list.
+Inspect core/dedup.py, dedup_presets.py, fingerprint.py, command help, and tests before
+claiming support. Perspective distortion remains disabled: perspective_px stays zero
+in the stable parameter schema. Restore it only after checking actual FFmpeg options,
+output geometry, and decoded pictures; do not assume an `s=` option exists.
 
-### 去重模块的能力边界
+pHash uses low-frequency DCT coefficients and is insensitive to much high-frequency
+noise/sharpening. A small hash change does not establish that a pixel effect failed,
+and no hash score proves embedded-watermark removal. Use a reproducible embedding/
+extraction oracle for each watermark scheme.
 
-去重涉及容器、几何、像素、时间、结构、音频、水印、文本八类能力。
-这些是 [DEDUP.md §3](DEDUP.md) 的设计需求，**不能把功能地图当作已实现列表**。
-源代码以 pycut/core/dedup.py、dedup_presets.py 与 fingerprint.py 为准；实现与验收按真实代码和 PR 证据核对。
-梯形透视变形目前禁用，不得未经画面验证自行恢复。
-### 1.2 去重：self-check 指标的固有局限
+PSNR compares corresponding pixels. Crop/scale/rotation destroys alignment, so it
+is a damage floor (`DEDUP_MIN_PSNR=12.0`), not a perceptual quality score. Neither
+PSNR nor pHash guarantees platform acceptance. Probabilistic structural effects
+require calibration covering both triggered and untriggered seeds; never use a
+single typical high distance as the minimum for all presets/material.
 
-- **pHash 测不出 M3 像素层和 M7 暗水印破坏的效果**。pHash 只取 DCT 8×8 低频 64 bit，
-  而 `noise` / `unsharp` 改变高频像素，但是否影响具体水印必须由提取器独立验证。实测单加噪 `alls=4` 的 pHash 距离
-  仅 0.4~0.6，与"仅重编码"（0.33）几乎相同。
-  → **不要因为 pHash 没动就认为参数无效**，两者目标函数不同。
-- **PSNR 不是画质指标**。几何改动必然让逐像素对齐崩溃，PSNR 掉到 12~25dB 属正常，
-  画面观感没问题。所以它只当"灾难下限"（`DEDUP_MIN_PSNR=12.0`），
-  不作为质量评分。
-- **去重不承诺 100% 过审**。平台模型持续升级，本工具只降低相似度。
+Historical measurements without retained inputs/commands/versions are research
+context, not current evidence or permission to change calibrated constants.
 
-### 1.3 梯形变形（perspective）已停用 —— 不要直接恢复
+## 2. Subtitle coverage
 
-`perspective` 在 ffmpeg 9 下不带 `s=` 时输出尺寸与输入不一致，四角坐标会把画面
-**径向拉花成细长条**（已抽帧确认是真实损坏，不是度量失真）。
-而去重收益仅 0.42~0.75 pHash。已停用，`dedup_presets` 里 `perspective_px` 恒为 0。
-如要恢复，必须先在实际 ffmpeg 版本验证滤镜参数、输出尺寸与画面效果；不能假设 `s=` 选项可用（参见 `docs/DEDUP.md`）。
+Vision-model localization determines height; the rectangle spans the full frame
+width with vertical margins. Apply one Gaussian blur and one overlay without
+pixelation or per-glyph inpainting. This obscures text, not restores its background.
+Failed/uncertain detection must not persist absence or verified-completion markers.
+Encoding failure preserves the source. See README and AGENTS for shared detection
+budgets, multi-frame requests, verification samples, and review semantics.
 
-### 1.4 字幕遮盖使用单层矩形毛玻璃
+## 3. Montage timing and encoding
 
-字幕检测依赖已配置的视觉 LLM。遮盖矩形宽度等于视频宽度，高度跟随字幕边界并略加余量；这是遮盖而非背景修复。检测失败不写入无字幕标记，编码失败保留源视频。
+### Reference rhythm and original timing
 
-### 1.5 混剪：语音切分依赖音频动态
+Continuous background music can prevent silence detection from finding useful
+speech breaks. The calibrated silence threshold is -20 dB; evaluate new material
+before tuning it. Prefer SRT-derived shot budgets when subtitles exist, otherwise
+speech intervals plus filler slots. Shot budgets select library footage, never
+reference pictures. Rendering retains original SRT timestamps and short cues,
+clipping only at body boundaries. Body duration equals reference video duration.
 
-`silencedetect` 在**持续背景音乐**的素材上会失效（音量不往下掉）。
-基准素材实测：`-32dB` 检出 0 段静音，`-20dB` 才有 7 段。
-已把默认阈值调到 `-20dB`（`MONTAGE_SILENCE_NOISE_DB`），
-换新素材若节奏明显不对，首调这个值。
-另外：有字幕文件时**按字幕切槽**（比语音段更细），没字幕才退回语音节奏 + 连续补槽。
+Burn ASS inside the final PIP encode when PIP is enabled; retain the separate subtitle
+path otherwise. PIP material keeps its own subtitles and never runs cover detection.
+Finish body subtitles/audio before optional intro concatenation; final duration is
+intro plus body.
 
-### 1.6 混剪：字幕与原声共用参考时间轴
+Copy original body audio without filtering, speed changes, or extension. Bound excess
+audio to picture duration; never use `-shortest` to shorten the video. If the output
+container cannot represent the audio codec, use explicit AAC compatibility fallback.
+Intro joining unifies/transcodes audio, so do not claim packet-identical audio after
+joining. Empty intro pools skip; genuine read/probe/processing failures must surface.
 
-正文保留参考视频总时长与原声，字幕按同名 SRT 原始时间戳烧录，不随随机镜头槽重排；短字幕保留，只有超出正文边界的部分被裁掉。前贴在正文字幕与原声处理完成后拼接，最终成片时长为前贴加正文。
-有画中画与同名字幕时，字幕 ASS 在画中画最终滤镜链中一并烧录，避免再次整片编码；无画中画保留独立字幕路径。画中画素材不走字幕识别或擦除，原有字幕保留；源文件不修改。
-正文音轨默认 stream copy，不滤波、变速或补长；按画面长度限制音频尾部，不使用 `-shortest` 裁短视频。容器确实不支持音频编码时允许兼容转码 AAC 并说明。前贴未配置或目录为空则跳过；非空前贴拼接仍统一音轨格式并转码，不能宣称拼接后的音频包完全相同。
-背景每段的几何/像素扰动、镜像/变速、贴纸及段间淡化合并到一次编码；淡化时间沿输出精确 seek 的同一时间轴偏移，保留累计帧预算。标准化为相同尺寸/帧率/编码格式后，concat 仅封装复制视频流，不再整片重编码。拼接时长检查与失败原子保护继续生效。
-背景补镜头按目标帧率比较已选与目标帧预算：已覆盖目标帧数时，不为亚帧级的秒数舍入余量补新镜头，避免短镜头最少一帧的编码规则额外增加正文帧数。仅运行步骤 B 时，只校验实际使用的背景与输出配置，画中画和前贴目录不参与门禁。
-画中画多输入叠加显式限制每路解码、复杂滤镜与输出编码线程，避免线程数随输入路数乘以 CPU 核数扩张；仍只做一次最终编码。连续画中画先顺序拼成一条固定尺寸的小窗流，再整体叠加一次；累计帧边界量化以保持总时长和短尾，间隔模式保留原区间。画中画片段恢复与背景一致的标准档几何/像素去重扰动（复用 core/dedup.py:montage_variation 与每片段独立派生 seed），并保留轻量随机镜像；先缩放到小窗后执行扰动，保持输出尺寸、帧率和 SAR=1，羽化/阴影在小窗流上用静态遮罩与扩散投影实现，有限帧循环只复制静态遮罩，不重复任何源视频尾帧；连续模式保持唯一一次主画面 overlay，间隔模式每个区间只增加小窗内合成，不恢复历史每段全画面的双重 overlay；基础叠加仍需要解码和一次最终编码。FFmpeg 失败保留首部根因和尾部上下文（长输出明确标记省略），步骤 C 的结果继续携带原始原因，不能只返回“Nothing was written”或“步骤C失败”。
-多段连续画中画统一逐段解码、缩放和按 seed 扰动，保存为 FFV1/BGRA 无损小窗片段；concat demuxer 逐个读取，最终只保留主画面和小窗两路输入，不按任意段数门槛恢复多路原素材同时解码。先规划完整镜头组成略长于正文的轨道，FFmpeg `-progress` 给出各片实际编码帧数，以实际帧数生成拼接时长；单片比名义预算少一帧不会单独拒绝，最终轨道必须覆盖正文。全尺寸画面、羽化阴影与 ASS 只做一次最终合成编码，按正文帧预算截断，并在可见帧流校验正文所需末帧；临时小窗在成功/失败/中断时清理。单段与显式间隔模式保留直接合成。超时携带进程停止前已输出的原始错误，不能只留下等待秒数。
-连续画中画的短尾不套用间隔模式的最短镜头限制：毫秒取整后再按实际剩余时长裁短也须保留 `allow_short`，避免丢掉最后一两帧的画中画。输出帧预算以主视频时长与目标帧率为准，副流经 framesync/CFR 不得延长正文。
-步骤 B 已统一背景尺寸、像素格式和帧率，但复制拼接的 H.264 片段仍可能切换 BT.709/601 色彩标签。最终画中画合成对该背景输入设置 `-reinit_filter 0`，防止色彩元数据变化重建整条滤镜链、重置小窗计帧及静态遮罩；末帧校验仍要求真实画中画覆盖正文，不能通过删校验或冻结尾帧处理。
+### Background normalization
 
-### 1.6.1 处理边界与工作文件
+Fuse segment geometry/pixel effects, mirror/speed, sticker, and seam fades into one
+encode. Offset fades along the same pre-output-seek timeline so fine seek does not
+cut them off. Normalize dimensions, FPS, SAR, pixel format, and codec before concat;
+then stream-copy rather than encode the whole background again. Validate every
+selected segment and final duration before atomic publication.
 
-每次 CLI 混剪新建一个输出批次目录；TUI 多选话术的各子进程共用同一批次目录。成片平铺，同名按编号避让已有文件，裂变沿用选定的文件名前缀；只发布视频，不写 JSON，完成时打印批次目录绝对路径。
+Compare filled/required frame budgets at target FPS. Once the budget is covered, do
+not add a one-frame shot for a sub-frame seconds-rounding residue. Successful step b
+uses only background/output settings; disabled PIP/intro paths cannot block it.
 
-混剪先检查输入并规划两路素材，再执行背景与画中画编码、字幕、原声和可选前贴，验证后才发布最终文件。每次调用使用独立背景文件；分段目录与拼接清单区分进程和调用线程。成功的 `--step b` 保留背景产物，其余成功/失败/中断路径均清理工作文件。
+### Bounded continuous PIP
 
-长任务在子阶段开始、编码返回、自检结束和最终发布前检查中断；停止标志不得只在 CLI 汇总时读取。去重的自检在临时产物上执行，默认模式仍保留已完成但未达相似度门槛的产物；原地模式继续要求自检通过。中断不发布临时结果、不覆盖旧结果或源文件。字幕擦除同样在命令层发布前检查中断，识别不确定返回待复查而非伪装无字幕。
+Bound decoder/filter/output threads instead of allocating CPU-wide pools per source.
+Prepare multi-shot continuous PIP sequentially as FFV1/BGRA lossless small-window
+clips, then read them through concat demuxer. Final composition has just background
+and small-window video inputs regardless of source count. Single-shot/gapped paths
+retain their direct composition.
 
-### 1.7 混剪：素材库扫描与元数据缓存
+Scale before applying shared standard geometry/pixel variation with independent
+segment seeds, retain random mirroring, and restore SAR=1. Compute feather/shadow
+spatial masks once and repeat only these static masks for the finite frame budget.
+Continuous mode overlays the main canvas once; gapped mode precomposes each small
+window without restoring per-shot full-canvas shadow/feather chains.
 
-背景和画中画共用一次完整 JSON 元数据探测。临时 SQLite 缓存仅保存有效时长/尺寸/音轨存在性，按解析后的路径、文件 dev/inode/size/mtime_ns/ctime_ns、ffprobe 可执行文件身份和查询参数校验；探测失败/无效值不缓存，探测期间文件变化不写入。缓存损坏、无权限或锁超时不能导致任务失败，回退真实探测。素材目录仍实时枚举，新增/删除文件不会被旧列表遮住；随机规划、内容处理结果和成功标记不缓存。
+Plan complete shots beyond body duration to absorb boundary rounding. Record actual
+encoded frames from FFmpeg progress; a one-frame short individual clip is acceptable
+when the whole track still covers the body. Quantize cumulative boundaries, truncate
+once at final composition, and verify the required real tail on the visible stream.
+Do not clone source frames with tpad, use background duration as proof of PIP coverage,
+or discard continuous-mode short tails using the gapped-mode minimum. Clamp after
+millisecond truncation while retaining allow_short. framesync/CFR cannot extend the
+body frame budget. Clean small-window files on success, failure, and cancellation.
 
-### 1.8 混剪：素材库横屏混入了
+Stream-copied H.264 backgrounds may switch BT.709/601 colour metadata despite fixed
+geometry/FPS. Use `-reinit_filter 0` for that normalized background input during final
+PIP rendering to prevent graph reconstruction from resetting counters/static masks.
+Keep actual PIP tail validation; do not suppress it or freeze-pad to hide missing frames.
 
-素材库可能混入横屏与重复文件；默认按侧边比 `MONTAGE_MAX_SIDE_RATIO=1.40` 排除横屏，内容指纹去重降低重复取用。实际容量必须探测，不从历史素材数量推断。
+Retain the first FFmpeg root cause and trailing diagnostics, explicitly mark omitted
+middle output, and propagate original stage-C errors. Timeout diagnostics must include
+output captured before termination, not just the elapsed wait.
 
-### 1.9 TUI 为引导式向导，部分高级参数仅命令行可用
+## 4. Publication, cancellation, and temporary files
 
-TUI 走「读取 Web/.env 配置 → 报视频数 → 选开关 → 确认执行」的向导流程，只暴露高频决定项；
-网关在 Web/.env 配置；其余高级参数（并发、各阈值、seed 等）通过命令行 `--help` 传入。
-非交互环境（管道 / 无 tty）自动回退命令行帮助。
+Each CLI montage creates a batch; TUI reference subprocesses share one batch. Flatten
+all reference/variant videos, avoid filename collisions by numbering, keep only videos,
+and print the absolute batch path. Diagnostics belong in separate logs, not output JSON.
 
----
+Validate inputs and plan background/PIP before encoding. Isolate backgrounds, segment
+directories, and concat lists by invocation/process/thread. Keep the background only
+for successful step b; otherwise clean it on every exit path. Render all later stages
+privately and publish only the complete result.
 
-## 二、现行配置与设计参数（非开发状态）
+Check cancellation before stages, after encoders, after verification, and before final
+publication. A command-summary-only stop check is insufficient. Dedup verifies its
+temporary result first: normal output may retain a below-threshold result, but in-place
+replacement requires passed checks. Cancellation publishes nothing and preserves prior
+outputs/sources. Cover also checks cancellation at command publication boundaries;
+uncertain detection remains review.
 
-| # | 事项 | 现状 | 选项 |
-|---|---|---|---|
-1 | 在线贴纸素材 | 默认当次下载 Twemoji，记录 CC BY 4.0 来源 | `--sticker-dir` 指定本地 PNG |
-2 | 贴纸密度 | `--sticker-chance` 默认 0.65 | 嫌稀疏调到 0.9 |
-3 | 画中画覆盖率 | 连续模式要求覆盖完整成片，素材不足拒绝发布 | `--pip-gap` 可显式改为留空档 |
-4 | 去重 pHash 门槛 | 分档 light 1.0 / standard 1.4 / aggressive 1.6 | 换素材若频繁误判可再放宽 |
-5 | 混剪是否保留音轨 | 默认保留基准原声 | `--no-audio` 可产出静音片 |
+## 5. Material enumeration and metadata cache
 
----
+Background/PIP use one full JSON metadata query. Temporary SQLite stores valid read-only
+metadata, keyed by resolved path, dev/inode/size/mtime_ns/ctime_ns, FFprobe executable
+identity, and query arguments. Never cache probe failure/invalid values or files that
+change while probing. Corruption, permission errors, and lock timeout fall back to
+real probing. Enumerate directories live so additions/deletions remain visible.
+Do not cache random plans, processed results, or success/preparation state.
 
-## 三、技术陷阱与复现要求
+Default landscape exclusion is `w/h > MONTAGE_MAX_SIDE_RATIO` (1.40). Full-content
+hash confirmation prevents sampled-signature collisions from removing distinct media.
+Inspect current capacity; never infer it from an old library count.
 
-这些都在 `AGENTS.md` 有摘要，这里补充与三大功能直接相关的：
+## 6. FFmpeg and verification traps
 
-### 通用
-- **视觉类功能必须抽帧目视验证才算完成**。滤镜链有字符串 + ffmpeg rc=0 + 报告达标
-  这三项检查**不足以**证明画面真的变了（贴纸被静默跳过、羽化过强都曾全过这三项）。
-- **注释/报告里的"实测"数字必须能被独立复现**。曾出现引用他人未测过的数字当"实测"。
-- **验证别人的代码要调真实实现**，别自己拼"等价"命令
-  （曾用 `ffprobe | head -1` 验证 `probe_scalar`，恰好把要验证的 `0/0` 过滤掉了）。
-- **参数有概率开关时，标定必须覆盖命中/不命中两种情况**。
-  混剪结构层是概率触发，pHash 跨度 2.3~26.7（10 倍），门槛按典型值定会大批误判。
+- Any explicit `-map` disables automatic stream selection. Map `0:v:0` as well as
+  optional audio; otherwise a valid-looking command can produce audio only.
+- Do not add `-loop 1` to still-image inputs. overlay repeats the single frame;
+  unbounded looping can keep FFmpeg alive indefinitely.
+- probe_scalar without `-select_streams` can return video rate followed by audio
+  `0/0`. Parse the first line; selected-stream probes do not test this behavior.
+- Prefer video-stream duration. Container format=duration is the longest stream and
+  can hide shortened video behind unchanged audio. Missing values need the existing
+  frame-count/rate fallback, with container duration only as the last resort.
+- Direct concat inpoint/outpoint or mixed-format inputs can return rc=0 with shortened
+  output. Double-seek/normalize each segment before stream-copy concat.
+- Speed effects need take * speed source time before setpts compresses the interval.
+  Do not alter default mirror/speed behavior when their options are disabled.
+- FFmpeg scale expressions truncate dimensions. Match that integer behavior; rounding
+  can overestimate the available crop width by one pixel.
+- Average feather weights across axes rather than multiplying them.
+- drawbox uses iw/ih; overlay uses main-input W/H and secondary w/h.
+- Sequentially decode fingerprint samples and retrieve selected indices; random
+  keyframe seeks can select another shot. Different duration/speed also limits what
+  frame-paired scores establish; do not present them as perfect temporal alignment.
 
-### ffmpeg 相关
-- `-map 0:a?` 会让**视频流整个消失**（一旦出现任何 `-map`，ffmpeg 停止自动选流）。
-  用 `-vf` 时必须显式 `-map 0:v:0`。
-- 图片输入**不能加 `-loop 1`**，会让 ffmpeg 永不结束（实测挂到超时被杀）。
-  单帧 + overlay 默认 `eof_action=repeat` 够用。
-- `perspective` 在 ffmpeg 9 没有 `s=` 选项，见 1.3。
-- `probe_scalar` 不带 `-select_streams`，会同时返回视频流与音频流两行（音频是 `0/0`），
-  必须取首行。
-- `format=duration` 会取容器里最长流，音视频不同步时给错值。时长校验要读**视频流**时长。
-- **concat demuxer 的 inpoint/outpoint 不能用**，rc=0 但产物短一大截。
-  改为两阶段：每段双 seek 精确截取 → 统一规格 → 再 concat。
-- **setpts 加速会让段长不足**，成片总时长被拉短。要从源素材按 `take × speed` 取更久再压缩。
-- **加速前先算好取用时长**；加速与镜像的开关传默认值时不改变原行为（向后兼容）。
-- **几何中间尺寸按 FFmpeg 表达式向下截断**；不能用 `round` 预测缩放宽高，否则后续 crop 可超过实际输入一像素。例如 702×1.0138 被 scale 截成 711，按 round 预算 712 会导致裁切失败。
-- `geq` 里做羽化，两个方向要**平均**不是连乘（连乘会把主体压到近乎全透明）。
-- `drawbox` 不认 `W`/`H` 常量，只有 `iw`/`ih`。
-
-### 自检（fingerprint）
-- **时长不同 → 帧号配对会错位**。变速/时长变化场景要用时间戳对齐，或干脆只做报告不下结论。
-- 抽帧**不要用 seek**（关键帧间隔远大于抽帧间隔，会抽到别的镜头），顺序解码再按索引取。
-
----
-
-## 四、资料维护边界
-
-- 算法约束、授权素材复现实验、环境差异与长期设计决策可写在技术文档中。
-- 功能验证、PR 与验收证据记录在当前对话和 PR，不能在 Markdown 复制临时任务清单。
-- 未保留可重复运行的测试素材、命令和版本信息的历史数字仅供研究参考，不能直接作为新门槛。
-- 产品设计见 ROADMAP.md 与 DEDUP.md；实际能力须从命令帮助、源码和对应验收证据核对。
+Test real implementation functions, not hand-built equivalents that accidentally
+remove a failure mode. Complete decoding and frame inspection are required for
+visual changes; listen when audio is affected. Filter strings, rc=0, reports, and
+mocks cannot replace that evidence. TUI exposes frequent choices while advanced
+thresholds/concurrency/seed remain CLI options; noninteractive execution shows help.

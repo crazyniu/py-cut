@@ -1,4 +1,4 @@
-"""用户确认的混剪契约：字幕原时间轴、固定规格与在线贴纸失败阻断。"""
+"""Montage reference timestamps, fixed output geometry, and online-sticker failure boundaries."""
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile

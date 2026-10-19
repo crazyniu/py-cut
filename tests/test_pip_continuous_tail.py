@@ -1,4 +1,4 @@
-"""连续画中画的真实末帧必须有画中画，不能按间隔镜头阈值丢弃短尾。"""
+"""Continuous PIP must retain real short tails rather than using gapped-mode minimums."""
 from pathlib import Path
 import shutil
 

@@ -1,4 +1,4 @@
-"""合成素材验证前贴视频、贴纸、音轨与时长，不访问在线素材。"""
+"""Synthetic intro, sticker, audio, and duration checks without online material."""
 import shutil
 import subprocess
 import tempfile
@@ -18,7 +18,7 @@ class IntroTests(unittest.TestCase):
             folder = root/'prefixes'
             folder.mkdir()
             source = folder/'prefix.mp4'
-            # 前贴无声，正文有声：必须给前贴补静音，正文音轨继续保留。
+            # A silent intro needs silence; preserve the voiced body audio.
             subprocess.run(['ffmpeg','-y','-loglevel','error','-f','lavfi','-i',
                             'testsrc2=size=180x320:rate=30:duration=1','-c:v','libx264',
                             '-pix_fmt','yuv420p',str(source)], check=True)
@@ -46,7 +46,6 @@ class IntroTests(unittest.TestCase):
             folder=root/'empty';folder.mkdir()
             self.assertIsNone(prepend(video,folder,seed=1,canvas=(180,320),stickers=[],crf='20',keep_audio=False))
             self.assertEqual(video.read_bytes(), b'original')
-
 
     def test_compatible_video_stream_is_copied_without_reencoding_body(self):
         from unittest import mock
