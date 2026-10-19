@@ -107,7 +107,7 @@ class TUIIntegrationTests(unittest.TestCase):
                 self.assertEqual(result, [[command, "--src-dir", settings.encoded_directories([Path("/tmp/videos")])]])
                 args = cli.build_parser().parse_args(result[0])
                 self.assertEqual(args.command, command)
-                self.assertEqual(settings.directories(args.src_dir), [Path("/tmp/videos")])
+                self.assertEqual(settings.directories(args.src_dir), [Path("/tmp/videos").resolve()])
 
     def test_no_video_short_circuits_before_confirm(self):
         for wizard in (tui._wizard_cover, tui._wizard_dedup):
@@ -139,8 +139,8 @@ class TUIIntegrationTests(unittest.TestCase):
             args = cli.build_parser().parse_args(argv)
             self.assertEqual(args.command, "montage")
             self.assertEqual(args.source, str(source))
-            self.assertEqual(settings.directories(args.clip_dir), [Path("/tmp/clips")])
-            self.assertEqual(settings.directories(args.dedup_dir), [Path("/tmp/pip")])
+            self.assertEqual(settings.directories(args.clip_dir), [Path("/tmp/clips").resolve()])
+            self.assertEqual(settings.directories(args.dedup_dir), [Path("/tmp/pip").resolve()])
             self.assertEqual(args.fission, count)
 
     def test_montage_defaults_to_online_stickers_without_extra_picker(self):

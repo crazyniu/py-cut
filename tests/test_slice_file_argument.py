@@ -15,7 +15,7 @@ class SliceFileArgumentTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
 
     def _file(self, name: str, data: bytes = b"fake mp4") -> Path:
         file = self.root / name

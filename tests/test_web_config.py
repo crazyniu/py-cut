@@ -21,7 +21,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td, mock.patch.object(config, 'PROJECT_ROOT', Path(td)):
             path = Path(td) / '.env'
             path.write_text('# keep\nOTHER=value\nPYCUT_MAIN_KEY=original\n', encoding='utf-8')
-            folder = Path(td) / '中文 空格'
+            folder = Path(td).resolve() / '中文 空格'
             folder.mkdir()
             settings.save({'PYCUT_CLIP_DIR':str(folder), 'PYCUT_MAIN_KEY':''})
             self.assertEqual(settings.read_env()['PYCUT_MAIN_KEY'], 'original')
@@ -76,7 +76,7 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as error:
                 self.urlopen(req)
             feedback = json.loads(error.exception.read())
-            self.assertEqual(feedback['problems'], [f'混剪切片目录第 1 项不存在或无法访问：{Path(td, "missing")}'])
+            self.assertEqual(feedback['problems'], [f'混剪切片目录第 1 项不存在或无法访问：{Path(td, "missing").resolve()}'])
             self.assertEqual(before, Path(td, '.env').read_bytes())
             req = urllib.request.Request(url+'api/config', b'{', headers, method='POST')
             with self.assertRaises(urllib.error.HTTPError) as error:

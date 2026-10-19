@@ -21,6 +21,18 @@ def test_intro_not_required_and_web_labels_it_optional(tmp_path):
     assert '可选' in group.split('</legend>')[0]
 
 
+def test_background_only_ignores_unused_optional_libraries(tmp_path):
+    source = tmp_path / 'source.mp4'
+    source.touch()
+    values = {'PYCUT_PIP_DIR': str(tmp_path / 'missing-pip'),
+              'PYCUT_INTRO_DIR': str(tmp_path / 'missing-intro')}
+    with mock.patch.object(settings, 'effective', return_value=values), \
+         mock.patch.object(montage_cmd, 'run', return_value=0) as run:
+        assert cli.main(['montage', '--step', 'b', '--source', str(source),
+                         '--clip-dir', str(tmp_path), '--out-dir', str(tmp_path / 'out')]) == 0
+    run.assert_called_once()
+
+
 def test_empty_intro_preflight_and_late_scan_continue_but_scan_errors_fail(tmp_path):
     source = tmp_path / 'source.mp4'
     source.touch()
