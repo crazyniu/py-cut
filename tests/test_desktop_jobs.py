@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 from pycut.core.dedup_profiles import apply_account_profile
 from pycut.desktop.engine import (check_snapshot, option_specs, parse_options,
-                                  publication_identity, recover_publications)
+                                  publication_identity, recover_publications, signature, _montage)
 from pycut.desktop.jobs import JobManager
 from pycut.desktop.library import LibraryIndexer
 from pycut.desktop.store import Store
@@ -295,6 +295,28 @@ class DesktopJobTests(unittest.TestCase):
                 self.assertEqual(detail["outputs"], [])
             finally:
                 self.manager.shutdown()
+
+    def test_publication_uses_frozen_file_version_not_stale_ui_metadata(self):
+        from pycut.core.runtime import reset_stop
+        reset_stop()
+        background = Path(self.background["path"])
+        indexed_signature = self.store.asset_detail(self.background["id"])["signature"]
+        background.write_bytes(b"changed-before-submitting-job")
+        frozen = self.manager._snapshot(self.request())
+        current_signature = signature(background)
+        self.assertNotEqual(json.loads(indexed_signature), current_signature)
+        def pipeline(options):
+            final = options.out_dir / options.out_name
+            staged = final.with_suffix(".staged.mp4")
+            staged.write_bytes(b"complete-output")
+            options.before_publish(final, staged, [{"path": str(background), "role": "background", "offset": 0, "duration": 1}])
+            staged.replace(final)
+            return {"final": str(final)}
+        with patch("pycut.core.ffmpeg.self_check"), patch("pycut.commands.montage_pipeline.run_pipeline", side_effect=pipeline):
+            result = _montage(frozen, self.store.data_dir, self.store)
+        self.assertEqual(result["completed"], 1)
+        recorded = self.store.asset_detail(self.background["id"], self.project["id"])["uses"][0]
+        self.assertEqual(json.loads(recorded["signature"]), current_signature)
 
     def publication(self, identifier, path, *, identity=None):
         journal = self.store.data_dir / "publications" / (identifier + ".json")
