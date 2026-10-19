@@ -63,14 +63,17 @@ class _JsonLines:
         raise TimeoutError("本地 Agent 等待超时或任务已中断")
 
     def initialize_claude(self, deadline: float) -> dict:
-        self.send({"type": "control_request", "request_id": "catalog", "request": {
-            "subtype": "initialize", "hooks": {}, "skills": []}})
+        return self.request_claude("initialize", deadline, hooks={}, skills=[])
+
+    def request_claude(self, subtype: str, deadline: float, **fields) -> dict:
+        self.send({"type": "control_request", "request_id": subtype, "request": {
+            "subtype": subtype, **fields}})
         while True:
             message = self.next(deadline)
             response = message.get("response") or {}
-            if message.get("type") == "control_response" and response.get("request_id") == "catalog":
+            if message.get("type") == "control_response" and response.get("request_id") == subtype:
                 if response.get("subtype") != "success" or not isinstance(response.get("response"), dict):
-                    raise RuntimeError("本地 Claude Code 初始化失败")
+                    raise RuntimeError("本地 Claude Code 协议调用失败")
                 return response["response"]
 
     def close(self) -> None:

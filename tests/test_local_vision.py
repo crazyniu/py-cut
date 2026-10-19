@@ -105,7 +105,7 @@ class LocalVisionTests(unittest.TestCase):
 
     def test_unsupported_provider_is_explicit(self):
         with self.assertRaises(ValueError):
-            make_local_vision('claude')
+            make_local_vision('pi')
 
 
 if __name__ == '__main__':

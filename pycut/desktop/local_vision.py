@@ -265,9 +265,12 @@ class CodexVision:
             self._directory.cleanup()
 
 
-def make_local_vision(provider: str = "codex", binary: str = "", model: str = "") -> CodexVision:
+def make_local_vision(provider: str = "codex", binary: str = "", model: str = ""):
+    if provider == "claude":
+        from .claude_vision import ClaudeVision
+        return ClaudeVision(binary, model)
     if provider != "codex":
-        raise ValueError("当前仅支持 Codex 本地识别适配器")
+        raise ValueError("当前支持 Codex 与 Claude Code 本地识别适配器")
     return CodexVision(binary, model)
 
 
@@ -276,16 +279,16 @@ def detect_agents() -> list[dict]:
     for name, title in (("codex", "Codex"), ("claude", "Claude Code"), ("pi", "PI")):
         path = _binary(name)
         authenticated = False
-        if path and name == "codex":
-            client = CodexVision(path)
+        if path and name in {"codex", "claude"}:
+            client = make_local_vision(name, path)
             try:
                 authenticated = client.authenticated()
-            except (OSError, RuntimeError, TimeoutError):
+            except (OSError, RuntimeError, TimeoutError, subprocess.TimeoutExpired):
                 pass
             finally:
                 client.close()
-        supported = name == "codex"
-        detail = ("可使用已登录账号识别" if authenticated else "请先安装并登录 Codex") if supported else "已检测安装状态，尚未提供视觉协议适配"
+        supported = name in {"codex", "claude"}
+        detail = ("已检测登录；请选择支持图片的模型" if authenticated else f"请先安装并登录 {title}") if supported else "已检测安装状态，尚未提供视觉协议适配"
         result.append({"id": name, "name": title, "path": path, "installed": bool(path),
                        "authenticated": authenticated, "available": supported and authenticated,
                        "supports_vision": supported, "detail": detail})
