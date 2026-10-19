@@ -1,7 +1,7 @@
 # 产品功能与演进设计
 
 > 本文只记录长期产品需求、架构边界和扩展方向，不管理 Issue、Todo 或进度。
-> 当前缺陷、负责人与验收以 [Linear 项目](https://linear.app/gengyun/project/py-cut-development-963524cf0d78) 为准；历史关闭 Issue 不作为能力完成证据。
+> 开发范围以当前用户需求为准，验证与交付证据记录在 PR；历史关闭 Issue 不作为能力完成证据。
 > 工程验证和算法限制见 [ENGINEERING.md](ENGINEERING.md)，去重模块的详细设计见 [DEDUP.md](DEDUP.md)。
 
 ---

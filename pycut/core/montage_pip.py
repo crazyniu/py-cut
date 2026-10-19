@@ -450,6 +450,7 @@ def _encode_cmd(base: Path, tmp: Path, fcomplex: str,
     return [
         FFMPEG, "-y", "-loglevel", "error", "-nostdin",
         "-filter_complex_threads", str(PIP_FILTER_THREADS),
+        "-reinit_filter", "0",
         "-threads", str(PIP_DECODER_THREADS), "-i", str(base),
         "-filter_complex", fcomplex,
         "-map", "[vout]",
@@ -550,8 +551,13 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
                 tmp.unlink()
 
     # --- 输入：base 是第0 路，每个画中画各自 -ss/-t 输入侧精确截取 ---
+    # B already normalizes size/pixel format/FPS. Its copied H.264 segments
+    # can still switch colour tags (709/601); FFmpeg's default reinit would
+    # reset the entire graph, including the other input's N and static masks.
+    # Preserve the continuous PiP timeline across those metadata changes.
     cmd: list[str] = [FFMPEG, "-y", "-loglevel", "error", "-nostdin",
                       "-filter_complex_threads", str(PIP_FILTER_THREADS),
+                      "-reinit_filter", "0",
                       "-threads", str(PIP_DECODER_THREADS), "-i", str(base)]
     base_inputs = list(cmd)
     for e in entries:
