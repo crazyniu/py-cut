@@ -800,11 +800,11 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
     """Choose script-folder videos, then quantities and optional PIP."""
     from . import settings
     from .core.montage_clips import _collect_files, VIDEO_EXTS
-    from .core.output_paths import montage_output
+    from .core.output_paths import montage_output, montage_batch
     clips = config.CLIP_DIRS
     pips = config.PIP_DIRS
     intros = config.INTRO_DIRS
-    output = config.MONTAGE_OUT if os.environ.get("PYCUT_OUTPUT_DIR", "").strip() else montage_output(config.REFERENCE_DIR)
+    output = montage_output(config.REFERENCE_DIR)
     clip_files = {p.resolve() for root in clips for p in _collect_files(root)}
     if not clip_files:
         _flash(stdscr, "未找到混剪切片：" + _library_summary(clips)
@@ -838,7 +838,7 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
                  ("前贴目录", _library_summary(intros) if intros else "未配置，跳过"),
                  ("规格", "720×1280 · 9:16"),
                  ("原声", "正文使用话术原声，前贴保留自身原声"),
-                 ("输出", str(output))]
+                 ("输出", str(output) + "（本次新建批次目录，视频集中存放）")]
         lines += [(f"话术 {i}", f"{_reference_label(src)} × {fission[str(src)]}")
                   for i, src in enumerate(chosen, 1)]
         if not _confirm(stdscr, lines, [("叠加画中画", "关闭则不读取画中画素材", values[0])], values):
@@ -849,11 +849,13 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
             if errors or not pips or not any(_collect_files(p) for p in pips):
                 _flash(stdscr, "画中画素材不可用，请添加目录或取消勾选：" + "；".join(errors), "bad")
                 return None
+        batch_dir = montage_batch(output)
         argv_list = []
         for src in chosen:
             argv = ["montage", "--source", str(src),
                     "--clip-dir", settings.encoded_directories(clips),
                     "--out-dir", str(output),
+                    "--batch-dir", str(batch_dir),
                     "--intro-dir", settings.encoded_directories(intros),
                     "--fission", str(fission[str(src)])]
             if values[0]:

@@ -108,7 +108,6 @@ def test_montage_confirmation_keeps_total_visible_on_first_summary_row(tmp_path)
 
 
 def test_unconfigured_montage_output_uses_script_root_sibling(tmp_path):
-    from pycut.core.output_paths import montage_output
     reference = tmp_path / '话术'
     source = reference / 'a' / '1.mp4'; source.parent.mkdir(parents=True); source.touch()
     clips = tmp_path / '切片'; clips.mkdir(); (clips / 'clip.mp4').touch()
@@ -122,4 +121,5 @@ def test_unconfigured_montage_output_uses_script_root_sibling(tmp_path):
          mock.patch.object(tui, '_confirm', return_value=True):
         jobs = tui._wizard_montage(None, 100)
     args = cli.build_parser().parse_args(jobs[0])
-    assert Path(args.out_dir) == montage_output(reference)
+    assert Path(args.out_dir) == tmp_path / '混剪'
+    assert Path(args.batch_dir).parent == Path(args.out_dir)
