@@ -200,14 +200,17 @@ textarea {
   flex-direction: column;
 }
 .workflow-canvas {
+  position: relative;
   height: calc(100dvh - 260px);
   min-height: 400px;
-  flex: 1;
+  flex: none;
   border: 1px solid var(--mantine-color-dark-4);
   border-radius: var(--mantine-radius-sm);
   overflow: hidden;
   background: var(--mantine-color-dark-9);
 }
+.workflow-canvas > .react-flow { position: absolute; inset: 0; }
+.workbench.has-job .workflow-canvas { height: calc(100dvh - 400px); }
 .workflow-canvas .react-flow {
   --xy-background-color: var(--mantine-color-dark-9);
   --xy-controls-button-background-color: var(--mantine-color-dark-7);

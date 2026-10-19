@@ -124,7 +124,8 @@ export default function TaskPage({
         setIntro(existing(saved.intro_library_id));
         setSticker(existing(saved.sticker_library_id));
         if (typeof saved.fission === "number") setCount(saved.fission);
-        if (typeof saved.out_dir === "string") setOutput(saved.out_dir);
+        if (typeof saved.out_dir === "string" && (kind !== "montage" || saved.out_dir.trim()))
+          setOutput(saved.out_dir);
         if (saved.options && typeof saved.options === "object")
           setOptions(saved.options as Record<string, unknown>);
         if (typeof saved.subtitles === "boolean") setSubtitles(saved.subtitles);
@@ -198,6 +199,7 @@ export default function TaskPage({
         sort: "name",
         offset: 0,
         limit: 100,
+        kind: "video",
       })
         .then((result) => {
           if (!disposed) {
@@ -426,8 +428,48 @@ export default function TaskPage({
           {error}
         </Alert>
       )}
+      {job && (
+        <Paper withBorder p="md" mb="md">
+          <Group justify="space-between" mb="sm">
+            <Group gap="sm">
+              <Text size="sm" fw={600}>
+                {kinds[job.kind]}任务
+              </Text>
+              <Status value={job.status} />
+            </Group>
+            <Button
+              variant="subtle"
+              size="xs"
+              rightSection={<IconArrowRight size={14} />}
+              onClick={onJobs}
+            >
+              任务详情与成片
+            </Button>
+          </Group>
+          <Group justify="space-between" mb={6}>
+            <Text size="sm">
+              已完成 {job.completed} / {job.planned}{" "}
+              {kind === "montage" ? "支成片" : "个视频"}
+              {job.failed > 0 ? ` · 失败 ${job.failed}` : ""}
+              {job.review > 0 ? ` · 待复查 ${job.review}` : ""}
+            </Text>
+            <Text size="xs" c="dimmed">
+              {job.progress?.stage || job.stage || ""}
+            </Text>
+          </Group>
+          <Progress
+            value={job.planned ? (job.completed / job.planned) * 100 : 0}
+            color={job.status === "failed" ? "red" : "cyan"}
+          />
+          {job.error && (
+            <Text size="sm" c="red" mt="sm">
+              {job.error}
+            </Text>
+          )}
+        </Paper>
+      )}
       {kind === "montage" ? (
-        <div className="workbench">
+        <div className={`workbench ${job ? "has-job" : ""}`}>
           <Box className="workflow-column">
             <Workflow
               job={job}
@@ -635,46 +677,6 @@ export default function TaskPage({
               </Button>
             </Group>
           </Stack>
-        </Paper>
-      )}
-      {job && (
-        <Paper withBorder p="md" mt="md">
-          <Group justify="space-between" mb="sm">
-            <Group gap="sm">
-              <Text size="sm" fw={600}>
-                {kinds[job.kind]}任务
-              </Text>
-              <Status value={job.status} />
-            </Group>
-            <Button
-              variant="subtle"
-              size="xs"
-              rightSection={<IconArrowRight size={14} />}
-              onClick={onJobs}
-            >
-              任务详情与成片
-            </Button>
-          </Group>
-          <Group justify="space-between" mb={6}>
-            <Text size="sm">
-              已完成 {job.completed} / {job.planned}{" "}
-              {kind === "montage" ? "支成片" : "个视频"}
-              {job.failed > 0 ? ` · 失败 ${job.failed}` : ""}
-              {job.review > 0 ? ` · 待复查 ${job.review}` : ""}
-            </Text>
-            <Text size="xs" c="dimmed">
-              {job.progress?.stage || job.stage || ""}
-            </Text>
-          </Group>
-          <Progress
-            value={job.planned ? (job.completed / job.planned) * 100 : 0}
-            color={job.status === "failed" ? "red" : "cyan"}
-          />
-          {job.error && (
-            <Text size="sm" c="red" mt="sm">
-              {job.error}
-            </Text>
-          )}
         </Paper>
       )}
       <Modal

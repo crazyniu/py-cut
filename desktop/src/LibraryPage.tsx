@@ -63,6 +63,7 @@ export default function LibraryPage({ project }: { project: Project }) {
   const [query, setQuery] = useState("");
   const [debouncedQuery] = useDebouncedValue(query, 250);
   const [sort, setSort] = useState<string | null>("name");
+  const [kind, setKind] = useState<string>("video");
   const [root, setRoot] = useState<string | null>(null);
   const [removed, setRemoved] = useState("active");
   const [layout, setLayout] = useState("grid");
@@ -112,11 +113,12 @@ export default function LibraryPage({ project }: { project: Project }) {
     setSelected([]);
     setDetailId(null);
     setRoot(null);
+    setKind(libraries.find((item) => item.id === libraryId)?.role === "sticker" ? "image" : "video");
   }, [libraryId]);
   useEffect(() => {
     setPage(1);
     setSelected([]);
-  }, [debouncedQuery, sort, root, removed]);
+  }, [debouncedQuery, sort, root, removed, kind]);
   const loadAssets = useCallback(() => {
     if (!libraryId) return;
     let current = true;
@@ -125,6 +127,7 @@ export default function LibraryPage({ project }: { project: Project }) {
       library_id: libraryId,
       query: debouncedQuery,
       sort,
+      kind,
       root,
       removed: removed === "removed",
       offset: (page - 1) * 24,
@@ -142,7 +145,7 @@ export default function LibraryPage({ project }: { project: Project }) {
     return () => {
       current = false;
     };
-  }, [libraryId, debouncedQuery, sort, root, removed, page]);
+  }, [libraryId, debouncedQuery, sort, root, removed, page, kind]);
   useEffect(loadAssets, [loadAssets, revision]);
   useEffect(() => {
     setDetail(null);
@@ -392,6 +395,11 @@ export default function LibraryPage({ project }: { project: Project }) {
                   style={{ flex: 1, minWidth: 150 }}
                 />
                 <Select
+                  aria-label="素材类型" w={104} allowDeselect={false} value={kind}
+                  onChange={(value) => value !== null && setKind(value)}
+                  data={[{value:"",label:"全部类型"},{value:"video",label:"视频"},
+                    {value:"image",label:"图片"},{value:"subtitle",label:"字幕"}]} />
+                <Select
                   aria-label="排序"
                   w={120}
                   data={[
@@ -545,6 +553,9 @@ export default function LibraryPage({ project }: { project: Project }) {
                             title={asset.name}
                           >
                             {asset.name}
+                          </Text>
+                          <Text size="xs" c="dimmed" lineClamp={1} title={asset.path} mt={2}>
+                            {asset.path.split(/[\\/]/).slice(-2, -1).join("")}
                           </Text>
                           <Group justify="space-between" gap={4} mt={4}>
                             <Text size="xs" c="dimmed">

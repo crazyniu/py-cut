@@ -202,12 +202,15 @@ class Store:
             db.execute("DELETE FROM roots WHERE library_id=? AND path=?", (library_id, canonical(path)))
 
     def assets(self, library_id: str, query: str = "", removed: bool = False,
-               sort: str = "name", root: str = "", offset: int = 0, limit: int = 100) -> dict:
+               sort: str = "name", root: str = "", offset: int = 0, limit: int = 100,
+               kind: str = "") -> dict:
         ordering = {"name": "a.name COLLATE NOCASE,a.path", "duration": "a.duration DESC,a.path",
                     "size": "(a.width*a.height) DESC,a.path", "resolution": "(a.width*a.height) DESC,a.path",
                     "usage": "usage_count DESC,a.path", "usage_count": "usage_count DESC,a.path"}
         if sort not in ordering:
             raise ValueError("不支持的排序")
+        if kind not in ("", "video", "image", "subtitle"):
+            raise ValueError("不支持的素材类型")
         limit, offset = max(1, min(int(limit), 500)), max(0, int(offset))
         with self.connect() as db:
             library = self.require(db, "libraries", library_id)
@@ -219,6 +222,9 @@ class Store:
                 condition += " AND r.path=?"
                 args.append(canonical(root))
             condition += ")"
+            if kind:
+                condition += " AND a.kind=?"
+                args.append(kind)
             if query:
                 condition += " AND instr(lower(a.name),lower(?))>0"
                 args.append(query)

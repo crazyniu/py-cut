@@ -67,6 +67,18 @@ class CatalogTests(unittest.TestCase):
                          [(0, True), (25, True), (26, False)])
         self.assertEqual(events[-1]["available"], result["available"])
 
+    def test_type_filter_counts_and_pages_match_visible_assets(self):
+        self.file("reference.mp4")
+        self.file("reference.srt")
+        self.scan()
+        self.assertEqual(self.assets()["total"], 2)
+        videos = self.assets(kind="video", limit=1)
+        self.assertEqual(videos["total"], 1)
+        self.assertEqual(videos["items"][0]["name"], "reference.mp4")
+        self.assertEqual(self.assets(kind="subtitle")["items"][0]["name"], "reference.srt")
+        with self.assertRaises(ValueError):
+            self.assets(kind="unknown")
+
     def test_recursive_overlapping_roots_no_directory_symlinks(self):
         nested = self.file("a/b/c/d/竖屏.MP4")
         self.store.add_roots(self.library["id"], [str(nested.parent), str(self.root)])
