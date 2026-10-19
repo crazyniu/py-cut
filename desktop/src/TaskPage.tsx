@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useDebouncedCallback } from "@mantine/hooks";
 import {
   Alert,
   Badge,
@@ -26,6 +27,7 @@ import {
 } from "@tabler/icons-react";
 import {
   chooseDirectory,
+  chooseFile,
   kinds,
   message,
   rpc,
@@ -70,26 +72,114 @@ export default function TaskPage({
   const [audio, setAudio] = useState(true);
   const [selectedNode, setSelectedNode] = useState("reference");
   const [reset, setReset] = useState(0);
+  const [positions, setPositions] = useState<
+    Record<string, { x: number; y: number }>
+  >({});
+  const [ready, setReady] = useState(false);
+  const skipFirstSave = useRef(true);
+  const saveWorkbench = useDebouncedCallback(
+    (values: Record<string, unknown>) => {
+      void rpc("workbench.save", {
+        project_id: project.id,
+        kind,
+        values,
+      }).catch(report);
+    },
+    { delay: 400, flushOnUnmount: true },
+  );
   const [confirm, setConfirm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [job, setJob] = useState<Job>();
   const [error, setError] = useState("");
   useEffect(() => {
-    rpc<Library[]>("libraries.list", { project_id: project.id })
-      .then((items) => {
+    let disposed = false;
+    Promise.all([
+      rpc<Library[]>("libraries.list", { project_id: project.id }),
+      rpc<Record<string, unknown>>("workbench.get", {
+        project_id: project.id,
+        kind,
+      }),
+    ])
+      .then(([items, saved]) => {
+        if (disposed) return;
+        const existing = (value: unknown) =>
+          typeof value === "string" && items.some((item) => item.id === value)
+            ? value
+            : null;
         setLibraries(items);
         setSource(
-          items.find(
-            (item) =>
-              item.role === (kind === "montage" ? "reference" : "background"),
-          )?.id || null,
+          existing(saved.library_id) ||
+            items.find(
+              (item) =>
+                item.role === (kind === "montage" ? "reference" : "background"),
+            )?.id ||
+            null,
         );
         setBackground(
-          items.find((item) => item.role === "background")?.id || null,
+          existing(saved.background_library_id) ||
+            items.find((item) => item.role === "background")?.id ||
+            null,
         );
+        setPip(existing(saved.pip_library_id));
+        setIntro(existing(saved.intro_library_id));
+        setSticker(existing(saved.sticker_library_id));
+        if (typeof saved.fission === "number") setCount(saved.fission);
+        if (typeof saved.out_dir === "string") setOutput(saved.out_dir);
+        if (saved.options && typeof saved.options === "object")
+          setOptions(saved.options as Record<string, unknown>);
+        if (typeof saved.subtitles === "boolean") setSubtitles(saved.subtitles);
+        if (typeof saved.audio === "boolean") setAudio(saved.audio);
+        if (typeof saved.selected_node === "string")
+          setSelectedNode(saved.selected_node);
+        if (saved.positions && typeof saved.positions === "object")
+          setPositions(
+            saved.positions as Record<string, { x: number; y: number }>,
+          );
+        setReady(true);
       })
-      .catch((error) => setError(message(error)));
+      .catch((error) => {
+        if (!disposed) setError(message(error));
+      });
+    return () => {
+      disposed = true;
+    };
   }, [project.id, kind]);
+  useEffect(() => {
+    if (!ready) return;
+    if (skipFirstSave.current) {
+      skipFirstSave.current = false;
+      return;
+    }
+    saveWorkbench({
+      library_id: source,
+      background_library_id: background,
+      pip_library_id: pip,
+      intro_library_id: intro,
+      sticker_library_id: sticker,
+      fission: Number(count) || 1,
+      out_dir: output,
+      options,
+      subtitles,
+      audio,
+      selected_node: selectedNode,
+      positions,
+    });
+  }, [
+    ready,
+    source,
+    background,
+    pip,
+    intro,
+    sticker,
+    count,
+    output,
+    options,
+    subtitles,
+    audio,
+    selectedNode,
+    positions,
+    saveWorkbench,
+  ]);
   useEffect(() => {
     setSelection([]);
     setAssets([]);
@@ -154,6 +244,7 @@ export default function TaskPage({
   const invalidCount =
     !Number.isInteger(Number(count)) || Number(count) < 1 || Number(count) > 99;
   const canSubmit =
+    ready &&
     selection.length > 0 &&
     (kind !== "montage" ||
       Boolean(background && output.trim() && !invalidCount));
@@ -225,7 +316,11 @@ export default function TaskPage({
         label={kind === "montage" ? "话术视频" : "处理视频"}
         placeholder="搜索并多选视频"
         data={assets
-          .filter((item) => item.kind === "video")
+          .filter(
+            (item) =>
+              item.kind === "video" &&
+              (kind === "montage" || /\.mp4$/i.test(item.path)),
+          )
           .map((item) => ({
             value: item.id,
             label: `${item.name}${!item.available ? " · 离线" : ""}`,
@@ -316,7 +411,10 @@ export default function TaskPage({
               size="xs"
               variant="default"
               leftSection={<IconRefresh size={14} />}
-              onClick={() => setReset((value) => value + 1)}
+              onClick={() => {
+                setPositions({});
+                setReset((value) => value + 1);
+              }}
             >
               整理画布
             </Button>
@@ -338,6 +436,8 @@ export default function TaskPage({
               enabled={enabled}
               counts={counts}
               reset={reset}
+              positions={positions}
+              onPositions={setPositions}
             />
             <Paper withBorder p="md" className="workflow-summary">
               <Group justify="space-between">
@@ -433,6 +533,53 @@ export default function TaskPage({
                       setSubtitles(event.currentTarget.checked)
                     }
                   />
+                  {subtitles && (
+                    <>
+                      <Select
+                        label="字幕来源"
+                        value={
+                          options.srt && options.srt !== "auto"
+                            ? "custom"
+                            : "auto"
+                        }
+                        data={[
+                          { value: "auto", label: "自动使用关联同名 SRT" },
+                          { value: "custom", label: "指定 SRT 文件" },
+                        ]}
+                        onChange={async (value) => {
+                          if (value === "auto")
+                            setOptions((current) => ({
+                              ...current,
+                              srt: "auto",
+                            }));
+                          else {
+                            try {
+                              const path = await chooseFile(
+                                "选择 SRT 字幕文件",
+                                ["srt"],
+                              );
+                              if (path)
+                                setOptions((current) => ({
+                                  ...current,
+                                  srt: path,
+                                }));
+                            } catch (error) {
+                              report(error);
+                            }
+                          }
+                        }}
+                      />
+                      {options.srt && options.srt !== "auto" ? (
+                        <Text
+                          size="xs"
+                          c="dimmed"
+                          style={{ overflowWrap: "anywhere" }}
+                        >
+                          全部已选话术使用此字幕：{String(options.srt)}
+                        </Text>
+                      ) : null}
+                    </>
+                  )}
                   <Checkbox
                     label="保留话术原声"
                     checked={audio}
@@ -516,7 +663,8 @@ export default function TaskPage({
           </Group>
           <Group justify="space-between" mb={6}>
             <Text size="sm">
-              已完成 {job.completed} / {job.planned} 支
+              已完成 {job.completed} / {job.planned}{" "}
+              {kind === "montage" ? "支成片" : "个视频"}
               {job.failed > 0 ? ` · 失败 ${job.failed}` : ""}
               {job.review > 0 ? ` · 待复查 ${job.review}` : ""}
             </Text>

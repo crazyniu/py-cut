@@ -28,6 +28,7 @@ import {
   reveal,
   rpc,
   terminal,
+  useSummary,
   type Job,
   type Output,
   type Project,
@@ -189,7 +190,7 @@ export default function JobsPage({
                           >
                             查看
                           </Button>
-                          {!terminal(job) && (
+                          {!terminal(job) && job.status !== "cancelling" && (
                             <Button
                               variant="subtle"
                               color="red"
@@ -311,7 +312,7 @@ export default function JobsPage({
                 </Button>
               </Group>
             ))}
-            {!terminal(detail) && (
+            {!terminal(detail) && detail.status !== "cancelling" && (
               <Button
                 color="red"
                 variant="light"
@@ -344,6 +345,38 @@ export default function JobsPage({
             >
               在文件夹中显示
             </Button>
+            <Divider />
+            <Text size="sm" fw={600}>
+              本片实际使用的素材
+            </Text>
+            <ScrollArea mah={240}>
+              {preview.uses?.length ? (
+                preview.uses.map((use, index) => (
+                  <Box mb="md" key={index}>
+                    <Text size="sm" style={{ overflowWrap: "anywhere" }}>
+                      {use.name || use.path}
+                    </Text>
+                    <Text size="xs" c="dimmed" mt={4}>
+                      {useSummary(use)}
+                    </Text>
+                    {use.path && (
+                      <Button
+                        variant="subtle"
+                        size="compact-xs"
+                        mt={4}
+                        onClick={() => reveal(use.path!).catch(report)}
+                      >
+                        定位素材
+                      </Button>
+                    )}
+                  </Box>
+                ))
+              ) : (
+                <Text size="xs" c="dimmed">
+                  此处理结果没有混剪素材使用记录。
+                </Text>
+              )}
+            </ScrollArea>
           </Stack>
         )}
       </Modal>

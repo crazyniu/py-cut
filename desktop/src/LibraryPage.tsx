@@ -47,6 +47,7 @@ import {
   reveal,
   roles,
   rpc,
+  useSummary,
   type Asset,
   type Library,
   type Project,
@@ -147,7 +148,32 @@ export default function LibraryPage({ project }: { project: Project }) {
   async function mutate(method: string, params: Record<string, unknown>) {
     setBusy(true);
     try {
-      await rpc(method, params);
+      const result = await rpc<{ errors?: { path: string; error: string }[] }>(
+        method,
+        params,
+      );
+      if (method === "libraries.add_roots") {
+        const scan = await rpc<{ errors?: { path: string; error: string }[] }>(
+          "libraries.scan",
+          { library_id: params.library_id },
+        );
+        if (scan.errors?.length)
+          report(
+            new Error(
+              scan.errors
+                .map((item) => `${item.path}: ${item.error}`)
+                .join("\n"),
+            ),
+          );
+      } else if (result?.errors?.length) {
+        report(
+          new Error(
+            result.errors
+              .map((item) => `${item.path}: ${item.error}`)
+              .join("\n"),
+          ),
+        );
+      }
       await loadLibraries();
       setRevision((value) => value + 1);
     } catch (error) {
@@ -251,7 +277,14 @@ export default function LibraryPage({ project }: { project: Project }) {
               </Group>
               {library.roots.map((path) => (
                 <Group key={path} gap={3} wrap="nowrap" mb="xs">
-                  <Tooltip label={path} multiline w={250}>
+                  <Tooltip
+                    label={
+                      library.root_status?.find((item) => item.path === path)
+                        ?.error || path
+                    }
+                    multiline
+                    w={250}
+                  >
                     <Text
                       size="xs"
                       c="dimmed"
@@ -259,6 +292,22 @@ export default function LibraryPage({ project }: { project: Project }) {
                       style={{ overflowWrap: "anywhere", flex: 1 }}
                     >
                       {path}
+                      {library.root_status?.find((item) => item.path === path)
+                        ?.scanned_at &&
+                        !library.root_status?.find((item) => item.path === path)
+                          ?.available && (
+                          <Text component="span" size="xs" c="orange">
+                            {" "}
+                            · 离线
+                          </Text>
+                        )}
+                      {library.root_status?.find((item) => item.path === path)
+                        ?.error && (
+                        <Text component="span" size="xs" c="orange">
+                          {" "}
+                          · 读取异常
+                        </Text>
+                      )}
                     </Text>
                   </Tooltip>
                   <ActionIcon
@@ -331,6 +380,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                     { value: "name", label: "按名称" },
                     { value: "usage", label: "按使用次数" },
                     { value: "duration", label: "按时长" },
+                    { value: "size", label: "按画面尺寸" },
                   ]}
                   value={sort}
                   onChange={setSort}
@@ -586,6 +636,11 @@ export default function LibraryPage({ project }: { project: Project }) {
                 >
                   在文件夹中显示
                 </Button>
+                {detail.error && (
+                  <Text c="orange" size="xs">
+                    读取异常：{detail.error}
+                  </Text>
+                )}
                 {detail.srt_path && (
                   <Box>
                     <Text size="xs" c="dimmed">
@@ -608,7 +663,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                           {use.name || use.output_path || use.path || "成片"}
                         </Text>
                         <Text size="xs" c="dimmed">
-                          {use.role || ""} {use.created_at || ""}
+                          {useSummary(use)} {use.created_at || ""}
                         </Text>
                       </Box>
                     ))

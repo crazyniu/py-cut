@@ -18,6 +18,7 @@ interface StageData extends Record<string, unknown> {
   progress?: number;
 }
 type StageNode = Node<StageData>;
+type Positions = Record<string, { x: number; y: number }>;
 const definition = [
   {
     id: "reference",
@@ -106,6 +107,8 @@ export default function Workflow(props: {
   enabled: Record<string, boolean>;
   counts: Record<string, number | undefined>;
   reset: number;
+  positions: Positions;
+  onPositions: (positions: Positions) => void;
 }) {
   return (
     <ReactFlowProvider>
@@ -120,6 +123,8 @@ function Canvas({
   enabled,
   counts,
   reset,
+  positions,
+  onPositions,
 }: {
   job?: Job;
   selected: string;
@@ -127,18 +132,24 @@ function Canvas({
   enabled: Record<string, boolean>;
   counts: Record<string, number | undefined>;
   reset: number;
+  positions: Positions;
+  onPositions: (positions: Positions) => void;
 }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<StageNode>([]);
   useEffect(() => {
-    setNodes(
+    setNodes((current) =>
       definition.map((item) => ({
         id: item.id,
         type: "stage",
-        position: { x: item.x, y: item.y },
-        data: { title: item.title, subtitle: item.subtitle },
+        selected: current.find((node) => node.id === item.id)?.selected,
+        position: positions[item.id] || { x: item.x, y: item.y },
+        data: current.find((node) => node.id === item.id)?.data || {
+          title: item.title,
+          subtitle: item.subtitle,
+        },
       })),
     );
-  }, [reset, setNodes]);
+  }, [reset, positions, setNodes]);
   useEffect(() => {
     const stage = job?.progress?.stage || job?.stage || "";
     let active: string | undefined;
@@ -216,6 +227,16 @@ function Canvas({
         }))}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
+        onNodeDragStop={(_, moved) =>
+          onPositions(
+            Object.fromEntries(
+              nodes.map((node) => [
+                node.id,
+                node.id === moved.id ? moved.position : node.position,
+              ]),
+            ),
+          )
+        }
         onNodeClick={(_, node) => onSelect(node.id)}
         nodesConnectable={false}
         edgesReconnectable={false}

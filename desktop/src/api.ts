@@ -28,6 +28,20 @@ export async function chooseDirectory(): Promise<string | null> {
   });
   return typeof result === "string" ? result : null;
 }
+export async function chooseFile(
+  title: string,
+  extensions: string[] = [],
+): Promise<string | null> {
+  const result = await open({
+    directory: false,
+    multiple: false,
+    title,
+    ...(extensions.length
+      ? { filters: [{ name: extensions.join(" / "), extensions }] }
+      : {}),
+  });
+  return typeof result === "string" ? result : null;
+}
 export const fileUrl = (path: string) => convertFileSrc(path);
 export const reveal = (path: string) => invoke("reveal_path", { path });
 export const openPath = (path: string) => invoke("open_path", { path });
@@ -51,6 +65,12 @@ export interface Library {
   name: string;
   role: Role;
   roots: string[];
+  root_status?: {
+    path: string;
+    available: boolean | number;
+    error: string;
+    scanned_at?: string;
+  }[];
   active_count: number;
   removed_count: number;
 }
@@ -66,8 +86,10 @@ export interface Asset {
   srt_path?: string;
   usage_count: number | null;
   removed: boolean;
+  error?: string;
 }
 export interface Use {
+  details?: { start?: number; offset?: number; duration?: number };
   output_path?: string;
   path?: string;
   name?: string;
@@ -99,6 +121,8 @@ export interface Job {
   outputs?: Output[];
 }
 export interface Output {
+  uses?: Use[];
+  available?: boolean;
   id: string;
   path: string;
   name: string;
@@ -137,6 +161,7 @@ export const kinds: Record<JobKind, string> = {
 };
 export const statusNames: Record<string, string> = {
   queued: "排队中",
+  cancelling: "正在停止",
   running: "运行中",
   completed: "已完成",
   review: "待复查",
@@ -146,11 +171,12 @@ export const statusNames: Record<string, string> = {
   interrupted: "已中断",
 };
 export const terminal = (job: Job) =>
-  !["queued", "running"].includes(job.status);
+  !["queued", "running", "cancelling"].includes(job.status);
 export const statusColor = (status: string) =>
   ({
     completed: "teal",
     running: "cyan",
+    cancelling: "orange",
     queued: "gray",
     review: "yellow",
     partial: "yellow",
@@ -164,3 +190,18 @@ export function duration(seconds: number | null | undefined): string {
 }
 export const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+export function useSummary(use: Use): string {
+  const parts = [
+    use.role === "subtitle"
+      ? "字幕"
+      : roles[use.role as Role] || use.role || "素材",
+  ];
+  if (typeof use.details?.offset === "number")
+    parts.push(`素材起点 ${use.details.offset.toFixed(2)} 秒`);
+  if (typeof use.details?.start === "number")
+    parts.push(`正文位置 ${use.details.start.toFixed(2)} 秒`);
+  if (typeof use.details?.duration === "number")
+    parts.push(`取用 ${use.details.duration.toFixed(2)} 秒`);
+  return parts.join(" · ");
+}

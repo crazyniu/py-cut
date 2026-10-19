@@ -15,7 +15,14 @@ import {
 } from "@mantine/core";
 import { IconFolderOpen, IconRefresh } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
-import { chooseDirectory, message, rpc, type Agent, type Project } from "./api";
+import {
+  chooseDirectory,
+  chooseFile,
+  message,
+  rpc,
+  type Agent,
+  type Project,
+} from "./api";
 import { PageHeading, report } from "./common";
 export default function SettingsPage({
   project,
@@ -80,7 +87,10 @@ export default function SettingsPage({
   async function importLegacy() {
     setImporting(true);
     try {
+      const path = await chooseFile("选择旧版 .env 配置文件");
+      if (!path) return;
       const result = await rpc<unknown>("settings.import_legacy", {
+        path,
         project_id: project.id,
       });
       notifications.show({
@@ -88,7 +98,7 @@ export default function SettingsPage({
         message:
           typeof result === "object" && result !== null && "message" in result
             ? String(result.message)
-            : "目录与识别设置已导入，请到素材库检查关联目录。",
+            : "目录配置已导入，请到素材库检查关联目录。",
         color: "teal",
       });
       onProjectChange();
