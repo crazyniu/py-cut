@@ -67,6 +67,89 @@ class DesktopJobTests(unittest.TestCase):
             row = db.execute("SELECT request_json FROM desktop_jobs WHERE id=?", (identifier,)).fetchone()
         return json.loads(row[0])
 
+    def test_default_montage_merges_configured_role_pools_without_reselecting_libraries(self):
+        extra = self.root / "more-background"
+        extra.mkdir()
+        (extra / "extra.mp4").write_bytes(b"video")
+        library = self.store.create_library(self.project["id"], "Other clips", "background")
+        self.store.add_roots(library["id"], [str(extra), str(Path(self.background["path"]).parent)])
+        LibraryIndexer(self.store).scan(library["id"])
+        pip = self.add_asset("pip", "picture.mp4")
+        intro = self.add_asset("intro", "intro.mp4")
+        request = {"kind": "montage", "project_id": self.project["id"],
+                   "reference_ids": [self.reference["id"]],
+                   "options": {"fission": 2, "intro_enabled": True}}
+        frozen = self.manager._snapshot(request)
+        self.assertEqual(frozen["planned"], 2)
+        self.assertTrue(frozen["options"]["no_sticker"])
+        self.assertEqual(len(frozen["pools"]["background"]), 2)
+        self.assertEqual([row["id"] for row in frozen["pools"]["pip"]], [pip["id"]])
+        self.assertEqual([row["id"] for row in frozen["pools"]["intro"]], [intro["id"]])
+        self.assertEqual(frozen["output_dir"], self.project["output_dir"])
+        del request["options"]["intro_enabled"]
+        self.assertTrue(self.manager._snapshot(request)["options"]["intro_enabled"])
+        self.assertNotIn("intro_enabled", request["options"])
+        request["options"]["intro_enabled"] = False
+        self.assertEqual(self.manager._snapshot(request)["pools"]["intro"], [])
+
+    def test_folder_jobs_recurse_deduplicate_exclude_outputs_and_keep_library_membership(self):
+        root = self.base / "selected"
+        nested = root / "subfolder" / "one" / "two" / "three" / "four"
+        nested.mkdir(parents=True)
+        first, second = root / "first.mp4", nested / "second.MP4"
+        first.write_bytes(b"first")
+        second.write_bytes(b"second")
+        (root / "ignore.mov").write_bytes(b"other")
+        output = root / "去重"
+        output.mkdir()
+        (output / "old.mp4").write_bytes(b"previous")
+        with self.store.connect() as db:
+            before = list(db.execute("SELECT * FROM memberships"))
+        request = {"kind": "dedup", "project_id": self.project["id"],
+                   "input_dirs": [str(root), str(root / "subfolder"), str(root)]}
+        job = self.manager.submit(request)
+        frozen = self.stored_request(job["id"])
+        self.assertEqual(job["planned"], 2)
+        self.assertEqual({row["path"] for row in frozen["inputs"]}, {str(first), str(second)})
+        self.assertEqual(frozen["input_roots"], [str(root), str(root / "subfolder")])
+        self.assertEqual({row["id"] for row in job["items"]}, {row["id"] for row in frozen["inputs"]})
+        with self.store.connect() as db:
+            self.assertEqual(list(db.execute("SELECT * FROM memberships")), before)
+        check_snapshot(frozen)
+        second.write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError, "素材在任务创建后发生变化"):
+            check_snapshot(frozen)
+
+    def test_folder_file_alias_preserves_cli_output_location(self):
+        from pycut.core.output_paths import matching_root, sibling
+        root = self.base / "selected-aliases"
+        root.mkdir()
+        alias = root / "visible.mp4"
+        alias.symlink_to(self.reference["path"])
+        frozen = self.manager._snapshot({"kind": "dedup", "project_id": self.project["id"],
+                                         "input_dirs": [str(root)]})
+        self.assertEqual(frozen["inputs"][0]["path"], str(alias))
+        self.assertEqual(frozen["inputs"][0]["id"], self.reference["id"])
+        self.assertEqual(sibling(matching_root(Path(frozen["inputs"][0]["path"]), frozen["input_roots"]), "去重"),
+                         sibling(root, "去重"))
+        check_snapshot(frozen)
+
+    def test_folder_validation_and_indexing_preserve_existing_subtitle_pair(self):
+        self.add_asset("reference", "话术.srt")
+        before = self.store.asset_detail(self.reference["id"])["srt_path"]
+        request = {"kind": "cover", "project_id": self.project["id"],
+                   "input_dirs": [str(Path(self.reference["path"]).parent)]}
+        frozen = self.manager._snapshot(request)
+        self.assertEqual(frozen["inputs"][0]["id"], self.reference["id"])
+        self.assertEqual(self.store.asset_detail(self.reference["id"])["srt_path"], before)
+        for value in ([], "not-a-list", [""], [123], [str(self.base / "missing")]):
+            with self.subTest(value=value), self.assertRaises((ValueError, OSError)):
+                self.manager._snapshot({**request, "input_dirs": value})
+        alias = self.base / "alias"
+        alias.symlink_to(Path(self.reference["path"]).parent, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "软链接"):
+            self.manager._snapshot({**request, "input_dirs": [str(alias)]})
+
     def test_removed_material_excluded_and_submitted_job_freezes_membership(self):
         removed = self.add_asset("background", "不用.mp4")
         self.store.set_removed(self.libraries["background"]["id"], [removed["id"]], True)

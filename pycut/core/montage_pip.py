@@ -20,6 +20,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack
 
+from .desktop_progress import current_item, report as item_report, activity
 from .. import config
 from .ffmpeg import FFMPEG, probe_video
 from .utils import log, run_cmd
@@ -76,6 +77,8 @@ def _run_with_activity(cmd: list[str], timeout: int, *, interval: float = 10.0,
     progress_file: Path | None = None
     actual_cmd = cmd
     total = int(total_frames or 0)
+    item_id = current_item()
+    item_report(0, total)
     if total > 0 and os.environ.get("PYCUT_PROGRESS") == "1":
         try:
             fd, location = tempfile.mkstemp(prefix="pycut_ffmpeg_", suffix=".progress")
@@ -98,6 +101,7 @@ def _run_with_activity(cmd: list[str], timeout: int, *, interval: float = 10.0,
                 if measured is not None and measured > last_frame:
                     # 100% is only emitted after FFmpeg and the output are verified.
                     last_frame = min(max(0, measured), total - 1)
+                    item_report(last_frame, total, item_id=item_id)
                     progress("画中画编码", last_frame, total,
                              detail=f"已编码 {last_frame}/{total} 帧")
             elapsed = time.monotonic() - started
@@ -130,6 +134,7 @@ def _run_with_activity(cmd: list[str], timeout: int, *, interval: float = 10.0,
                 progress_file.unlink(missing_ok=True)
             except OSError:
                 pass
+        activity("检查中")
         log(f"  [画中画] FFmpeg 调用结束 · 用时 {time.monotonic() - started:.1f}秒")
 
 @dataclass

@@ -133,6 +133,9 @@ def run(args: argparse.Namespace) -> int:
                         staged_marker.replace(marker)
                     else:
                         marker.unlink(missing_ok=True)
+                    published = getattr(args, "on_publication", None)
+                    if published is not None:
+                        published(c, dst)
                 return status
 
         except Exception as e:  # noqa: BLE001 - isolate per-clip failures.

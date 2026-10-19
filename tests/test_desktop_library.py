@@ -263,6 +263,13 @@ class RealMediaTests(unittest.TestCase):
             self.assertTrue(thumbnail.is_file())
             self.assertNotEqual(preview, source)
             self.assertEqual(cache.preview(asset["id"]), str(preview))
+            details = cache.details_path(source)
+            self.assertEqual(details["video_codec"], "ffv1")
+            self.assertEqual(details["fps"], 12)
+            self.assertEqual(details["size"], source.stat().st_size)
+            self.assertEqual(details["audio"][0]["codec"], "pcm_s16le")
+            with patch("pycut.desktop.media.probe_metadata", side_effect=AssertionError("cached details re-probed")):
+                self.assertEqual(cache.details_path(source), details)
             metadata = probe_metadata(preview, "video")
             self.assertEqual(metadata["video_codec"], "h264")
             self.assertEqual(metadata["audio_codecs"], ["aac"])

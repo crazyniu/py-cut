@@ -313,6 +313,7 @@ def run(args: argparse.Namespace) -> int:
         callbacks = {key: value for key, value in {
             "on_start": getattr(args, "on_start", None),
             "on_result": getattr(args, "on_item_result", None),
+            "on_publish": getattr(args, "on_publication", None),
         }.items() if value is not None}
         items.extend(process_batch(sources, replace(opts, out_dir=directory), workers=args.workers, **callbacks))
 

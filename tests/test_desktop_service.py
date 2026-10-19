@@ -72,6 +72,12 @@ class DesktopServiceTests(unittest.TestCase):
             self.assertEqual(self.service.dispatch("media.output_thumbnail", {"output_id": "known"}), {"path": "thumb.jpg"})
             thumbnail.assert_called_once_with(output)
 
+    def test_media_details_reject_arbitrary_output_paths(self):
+        with patch.object(self.service.media, "details_path", return_value={"duration": 1}) as details:
+            with self.assertRaises(ValueError):
+                self.service.dispatch("media.details", {"output_id": "outside", "path": "/arbitrary.mp4"})
+            details.assert_not_called()
+
     def test_legacy_import_is_no_longer_a_desktop_entry(self):
         with self.assertRaisesRegex(ValueError, "未知桌面接口"):
             self.service.dispatch("settings.import_legacy", {})

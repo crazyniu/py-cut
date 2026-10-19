@@ -125,6 +125,19 @@ class LibraryIndexer:
             self.progress({**result, "scanning": False})
             return result
 
+    def index_files(self, paths: list[Path]) -> list[dict]:
+        """Index explicitly selected task inputs without changing library membership."""
+        identity = tool_identity(config.FFPROBE) + str(PROBE_ARGS)
+        assets = []
+        for path in paths:
+            with self.store.connect() as db:
+                prior = db.execute("SELECT srt_path FROM assets WHERE path=?", (canonical(path),)).fetchone()
+            identifier, error = self._index(path, prior[0] if prior else None, identity)
+            if error:
+                raise ValueError(f"无法读取视频 {path.name}：{error}")
+            assets.append({**self.store.asset_detail(identifier), "path": str(path.absolute())})
+        return assets
+
     def _index(self, path: Path, subtitle: str | None, identity: str) -> tuple[str, str]:
         signature, location, kind = stamp(path), canonical(path), media_kind(path)
         with self.store.connect() as db:

@@ -36,9 +36,13 @@ def _run(args: list[str], timeout: int) -> subprocess.CompletedProcess:
     return result
 
 
-def probe_metadata(path: Path, kind: str) -> dict:
+DETAIL_ARGS = [*PROBE_ARGS]
+DETAIL_ARGS[3] = DETAIL_ARGS[3].replace("height,duration", "height,duration,avg_frame_rate,r_frame_rate,sample_rate,channels")
+
+
+def probe_metadata(path: Path, kind: str, *, details: bool = False) -> dict:
     """Probe display metadata only; caller owns validity and catalog persistence."""
-    data = json.loads(_run([config.FFPROBE, *PROBE_ARGS, str(path)], 30).stdout)
+    data = json.loads(_run([config.FFPROBE, *(DETAIL_ARGS if details else PROBE_ARGS), str(path)], 30).stdout)
     video = next((stream for stream in data.get("streams", [])
                   if stream.get("codec_type") == "video"), None)
     if video is None or int(video.get("width", 0)) <= 0 or int(video.get("height", 0)) <= 0:
@@ -58,7 +62,19 @@ def probe_metadata(path: Path, kind: str) -> dict:
             duration = float(data.get("format", {}).get("duration", 0))
         if duration <= 0:
             raise ValueError("无法读取视频时长")
-    return {"duration": duration, "width": width, "height": height,
+    extra = {}
+    if details:
+        rate = str(video.get("avg_frame_rate") or video.get("r_frame_rate") or "")
+        try:
+            numerator, denominator = rate.split("/")
+            fps = float(numerator) / float(denominator)
+        except (ValueError, ZeroDivisionError):
+            fps = None
+        extra = {"fps": fps, "size": path.stat().st_size,
+                 "audio": [{"codec": stream.get("codec_name"), "sample_rate": stream.get("sample_rate"),
+                            "channels": stream.get("channels")} for stream in data.get("streams", [])
+                           if stream.get("codec_type") == "audio"]}
+    return {**extra, "duration": duration, "width": width, "height": height,
             "video_codec": video.get("codec_name"), "pixel_format": video.get("pix_fmt"),
             "audio_codecs": [stream.get("codec_name") for stream in data.get("streams", [])
                              if stream.get("codec_type") == "audio"]}
@@ -79,6 +95,32 @@ class MediaCache:
 
     def _asset(self, asset_id: str) -> dict:
         return self.store.asset_detail(asset_id)
+
+    def details_path(self, path: Path) -> dict:
+        """Probe one requested file; reuse only matching stat/tool/query metadata."""
+        path = Path(path).resolve()
+        with self._lock:
+            before = stamp(path)
+            key = self._key(path, before, "details-v1:" + json.dumps(DETAIL_ARGS), config.FFPROBE)
+            target = self.directory / f"{key}.json"
+            try:
+                cached = json.loads(target.read_text(encoding="utf-8"))
+                value = cached["data"]
+                if cached["key"] == key and value["width"] > 0 and value["height"] > 0 and isinstance(value["audio"], list):
+                    return value
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            result = probe_metadata(path, "image" if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"} else "video", details=True)
+            if stamp(path) != before:
+                raise ValueError("素材已变化，请刷新后重试")
+            temporary = target.with_name(f".{key}-{uuid.uuid4().hex}.json")
+            try:
+                temporary.write_text(json.dumps({"key": key, "data": result}), encoding="utf-8")
+                temporary.replace(target)
+                self._prune(target)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return result
 
     def thumbnail(self, asset_id: str) -> str:
         asset = self._asset(asset_id)

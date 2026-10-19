@@ -21,6 +21,13 @@ from .engine import signature, recover_publications
 ACTIVE = ("queued", "running", "cancelling")
 
 
+def planned_items(request):
+    if request["kind"] == "montage":
+        return [(f"{asset['id']}:{variant}", f"{Path(asset['path']).stem} · 第 {variant} 支", asset["path"])
+                for asset in request["references"] for variant in range(1, request["fission"] + 1)]
+    return [(asset["id"], Path(asset["path"]).name, asset["path"]) for asset in request["inputs"]]
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -51,13 +58,29 @@ class JobManager:
                 );
                 CREATE TABLE IF NOT EXISTS desktop_items (
                     job_id TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,path TEXT NOT NULL,
-                    status TEXT NOT NULL,PRIMARY KEY(job_id,id)
+                    status TEXT NOT NULL,output_id TEXT NOT NULL DEFAULT '',progress_json TEXT NOT NULL DEFAULT '{}',PRIMARY KEY(job_id,id)
                 );
                 CREATE TABLE IF NOT EXISTS desktop_logs (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT,job_id TEXT NOT NULL,line TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS desktop_log_job ON desktop_logs(job_id,seq);
             """)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(desktop_items)")}
+            for name, default in (("output_id", "''"), ("progress_json", "'{}'")):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE desktop_items ADD COLUMN {name} TEXT NOT NULL DEFAULT {default}")
+            for job in db.execute("SELECT id,request_json,status FROM desktop_jobs"):
+                request = json.loads(job["request_json"])
+                state = "queued" if job["status"] in ACTIVE else "unprocessed"
+                db.executemany("INSERT OR IGNORE INTO desktop_items(job_id,id,name,path,status) VALUES (?,?,?,?,?)",
+                               [(job["id"], *item, state) for item in planned_items(request)])
+            # Older montage journals did not carry the item identifier. Recover it
+            # from the exact reference usage and the variant suffix, never row order.
+            for row in db.execute("SELECT o.id,o.job_id,o.path,u.asset_id FROM outputs o JOIN usage u ON u.output_id=o.id WHERE u.role='reference'"):
+                match = re.search(r"_(\d+)\.mp4$", row["path"], re.IGNORECASE)
+                if match:
+                    db.execute("UPDATE desktop_items SET output_id=?,status='completed' WHERE job_id=? AND id=? AND output_id=''",
+                               (row["id"], row["job_id"], f"{row['asset_id']}:{int(match[1])}"))
         recover_publications(store, self.data_dir)
         with store.connect() as db:
             db.execute("UPDATE desktop_jobs SET status='interrupted',finished_at=?,error=? "
@@ -70,6 +93,27 @@ class JobManager:
         self._thread = threading.Thread(target=self._loop, daemon=True, name="desktop-queue")
         if start:
             self._thread.start()
+
+    def _folder_inputs(self, folders, kind, options):
+        from ..core.scan import list_videos_recursive
+        from ..core.output_paths import without_outputs
+        from .library import LibraryIndexer
+        if not isinstance(folders, list) or not folders or any(
+                not isinstance(folder, str) or not folder.strip() for folder in folders):
+            raise ValueError("请选择需要处理的文件夹")
+        roots = []
+        for folder in folders:
+            path = Path(folder).expanduser()
+            if path.is_symlink():
+                raise ValueError("请选择实际文件夹，不使用目录软链接")
+            with os.scandir(path):
+                pass
+            roots.append(str(path.resolve()))
+        roots = list(dict.fromkeys(roots))
+        paths = [path for path in list_videos_recursive(roots, max_depth=None, raise_on_error=True)
+                 if path.suffix.lower() == ".mp4"]
+        paths = without_outputs(paths, roots, "字幕查重" if kind == "cover" else "去重", options.get("out_dir", ""))
+        return LibraryIndexer(self.store).index_files(paths), roots
 
     def _snapshot(self, request):
         project = next((p for p in self.store.projects() if p["id"] == request["project_id"]), None)
@@ -89,14 +133,26 @@ class JobManager:
         def roots(identifier):
             return [item["path"] if isinstance(item, dict) else item
                     for item in libraries[identifier]["roots"]]
+        def role_pool(role, identifier=None):
+            identifiers = ([identifier] if identifier else
+                           [key for key, library in libraries.items() if library["role"] == role])
+            entries, paths = {}, []
+            for key in identifiers:
+                for asset in pool(key):
+                    entries[asset["id"]] = asset
+                paths.extend(roots(key))
+            return list(entries.values()), list(dict.fromkeys(paths))
         options = request.get("options", {})
         if not isinstance(options, dict):
             raise ValueError("任务参数必须为对象")
+        options = dict(options)
         kind = request["kind"]
         if kind not in ("montage", "cover", "dedup"):
             raise ValueError("未知任务类型")
         frozen = {"id": uuid4().hex, "project_id": project["id"], "kind": kind, "options": options}
         if kind == "montage":
+            options.setdefault("intro_enabled", any(library["role"] == "intro" and library["roots"]
+                                                     for library in libraries.values()))
             ids = request.get("reference_ids", [])
             if not isinstance(ids, list) or not ids:
                 raise ValueError("请至少选择一个话术视频")
@@ -124,32 +180,39 @@ class JobManager:
                 if item["subtitle_path"]:
                     all_assets["srt:" + item["subtitle_path"]] = {"path": item["subtitle_path"]}
             background_id = request.get("background_library_id")
-            background = [a for a in pool(background_id) if a["kind"] == "video"]
+            background, background_roots = role_pool("background", background_id)
+            background = [a for a in background if a["kind"] == "video"]
             if not background:
                 raise ValueError("背景素材库没有可用视频")
-            pools, root_paths = {"background": background}, {"background": roots(background_id)}
+            pools, root_paths = {"background": background}, {"background": background_roots}
             for role in ("pip", "intro", "sticker"):
                 identifier = request.get(role + "_library_id")
                 enabled = (options.get("intro_enabled", False) if role == "intro" else
                            not options.get("no_pip", not options.get("use_pip", True)) if role == "pip" else
                            not options.get("no_sticker", not options.get("use_sticker", True)))
-                if identifier and enabled:
-                    entries = pool(identifier)
+                if enabled:
+                    entries, paths = role_pool(role, identifier)
                     entries = [a for a in entries if a["kind"] == ("image" if role == "sticker" else "video")]
-                    pools[role], root_paths[role] = entries, roots(identifier)
+                    pools[role], root_paths[role] = entries, paths
                 else:
                     pools[role], root_paths[role] = [], []
+            options.setdefault("no_sticker", not bool(pools["sticker"]))
             output_dir = options.get("out_dir") or project["output_dir"]
             if not output_dir:
                 raise ValueError("请设置项目的成片输出目录")
             frozen.update(references=selected, fission=count, planned=len(selected) * count,
                           pools=pools, roots=root_paths, output_dir=str(Path(output_dir).expanduser().resolve()),
-                          sticker_library_id=request.get("sticker_library_id"))
+                          sticker_library_id=request.get("sticker_library_id") or
+                          ("configured" if pools.get("sticker") else None))
             used = [*selected, *sum(pools.values(), [])]
             used.extend(a for key, a in all_assets.items() if key.startswith("srt:"))
         else:
             identifier = request.get("library_id")
-            inputs = [a for a in pool(identifier) if a["kind"] == "video" and Path(a["path"]).suffix.lower() == ".mp4"]
+            if "input_dirs" in request:
+                inputs, input_roots = self._folder_inputs(request["input_dirs"], kind, options)
+            else:
+                entries, input_roots = role_pool("background", identifier)
+                inputs = [a for a in entries if a["kind"] == "video" and Path(a["path"]).suffix.lower() == ".mp4"]
             ids = request.get("asset_ids", [])
             if ids:
                 selected_ids = set(ids)
@@ -158,7 +221,7 @@ class JobManager:
                 inputs = [a for a in inputs if a["id"] in selected_ids]
             if not inputs:
                 raise ValueError("所选素材库没有可处理的 MP4 视频")
-            frozen.update(inputs=inputs, input_roots=roots(identifier), planned=len(inputs),
+            frozen.update(inputs=inputs, input_roots=input_roots, planned=len(inputs),
                           agent_settings=self.store.settings())
             used = inputs
         snapshots = {}
@@ -182,12 +245,8 @@ class JobManager:
                 db.execute("INSERT INTO desktop_jobs VALUES (?,?,?,?,?,?,?,?,?)",
                            (frozen["id"], frozen["project_id"], frozen["kind"], "queued",
                             json.dumps(frozen, ensure_ascii=False), json.dumps(stats, ensure_ascii=False), now(), None, ""))
-                items = ([(f"{asset['id']}:{variant}", f"{Path(asset['path']).stem} · 第 {variant} 支", asset["path"])
-                          for asset in frozen["references"] for variant in range(1, frozen["fission"] + 1)]
-                         if frozen["kind"] == "montage" else
-                         [(asset["id"], Path(asset["path"]).name, asset["path"]) for asset in frozen["inputs"]])
-                db.executemany("INSERT INTO desktop_items VALUES (?,?,?,?,?)",
-                               [(frozen["id"], *item, "queued") for item in items])
+                db.executemany("INSERT INTO desktop_items(job_id,id,name,path,status) VALUES (?,?,?,?,?)",
+                               [(frozen["id"], *item, "queued") for item in planned_items(frozen)])
             job = self.detail(frozen["id"])
             self.sink({"event": "job", "job_id": job["id"], "payload": job})
             self._wake.set()
@@ -201,8 +260,12 @@ class JobManager:
             job = dict(row)
             job.update(json.loads(job.pop("stats_json")))
             job.pop("request_json")
-            job["items"] = [dict(item) for item in db.execute(
-                "SELECT id,name,path,status FROM desktop_items WHERE job_id=? ORDER BY rowid", (job_id,))]
+            job["items"] = []
+            for item in db.execute("SELECT * FROM desktop_items WHERE job_id=? ORDER BY rowid", (job_id,)):
+                value = dict(item)
+                value["progress"] = json.loads(value.pop("progress_json"))
+                value.pop("job_id")
+                job["items"].append(value)
             job["logs"] = [r[0] for r in db.execute("SELECT line FROM desktop_logs WHERE job_id=? ORDER BY seq DESC LIMIT 1000", (job_id,))][::-1]
         job["outputs"] = [{**o, "name": Path(o["path"]).name}
                           for o in self.store.outputs(job["project_id"]) if o["job_id"] == job_id]
@@ -270,6 +333,12 @@ class JobManager:
             self.sink({"event": event["event"], "job_id": job_id, "payload": data})
             return
         progress = parse(line)
+        if progress and progress.get("item_progress") and progress.get("item_id"):
+            with self.store.connect() as db:
+                db.execute("UPDATE desktop_items SET progress_json=? WHERE job_id=? AND id=?",
+                           (json.dumps(progress, ensure_ascii=False), job_id, progress["item_id"]))
+            self.sink({"event": "job", "job_id": job_id, "payload": self.detail(job_id)})
+            return
         if progress:
             self._update(job_id, stage=progress["stage"], progress=progress)
             self.sink({"event": "progress", "job_id": job_id, "payload": progress})

@@ -70,6 +70,14 @@ class Service:
                 output = self.store.require(db, "outputs", p["output_id"])
                 render = self.media.thumbnail_path if method == "media.output_thumbnail" else self.media.preview_path
                 return {"path": render(Path(output["path"]))}
+        if method == "media.details":
+            if p.get("output_id"):
+                with self.store.connect() as db:
+                    value = self.store.require(db, "outputs", p["output_id"])
+                    path = value["path"]
+            else:
+                path = self.store.asset_detail(p["asset_id"])["path"]
+            return self.media.details_path(Path(path))
         if method == "jobs.options":
             return option_specs(p["kind"])
         if method == "jobs.submit":

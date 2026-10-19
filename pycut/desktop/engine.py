@@ -14,6 +14,8 @@ import threading
 import time
 from uuid import uuid4
 
+from ..core.desktop_progress import bind_item, activity
+
 
 def command_parser(kind):
     from ..cli import build_parser
@@ -128,8 +130,8 @@ def recover_publications(store, data_dir, job_id=None):
                             record["path"], record["uses"])
         if record.get("item_id"):
             with store.connect() as db:
-                db.execute("UPDATE desktop_items SET status='completed' WHERE job_id=? AND id=?",
-                           (record["job_id"], record["item_id"]))
+                db.execute("UPDATE desktop_items SET status='completed',output_id=? WHERE job_id=? AND id=?",
+                           (record["id"], record["job_id"], record["item_id"]))
         path.unlink()
         recovered.append(record)
     return recovered
@@ -177,6 +179,8 @@ def _montage(request, data_dir, store):
                 output_id = uuid4().hex
                 item_id = f"{reference['id']}:{variant}"
                 emit("item", {"id": item_id, "status": "running"})
+                bind_item(item_id)
+                activity("准备中")
                 def before_publish(final, staged, uses):
                     check_snapshot(request)
                     versions = {item["path"]: item["signature"] for item in request["snapshot"]}
@@ -259,12 +263,23 @@ def run_job(request, data_dir, store):
     lock = threading.Lock()
     identifiers = {str(Path(asset["path"])): asset["id"] for asset in request["inputs"]}
     def started(source):
+        bind_item(identifiers[str(source)])
+        activity("准备中")
         emit("item", {"id": identifiers[str(source)], "status": "running"})
     args.on_start = started
+    published = set()
+    def publication(source, target):
+        identifier = identifiers[str(source)]
+        output_id = store.record_output(uuid4().hex, request["project_id"], request["id"], str(target), [])
+        with store.connect() as db:
+            db.execute("UPDATE desktop_items SET output_id=? WHERE job_id=? AND id=?",
+                       (output_id, request["id"], identifier))
+        published.add(str(source))
+    args.on_publication = publication
     def record(source, target, status):
         nonlocal completed, failed, review, skipped
         with lock:
-            if STOP.flag:
+            if STOP.flag and str(source) not in published:
                 emit("item", {"id": identifiers[str(source)], "status": "cancelled"})
                 return
             if status == "fail":
@@ -275,9 +290,7 @@ def run_job(request, data_dir, store):
                 skipped += 1
             else:
                 completed += 1
-            if status not in ("fail", "skip", "dryrun") and Path(target).is_file() and not STOP.flag:
-                store.record_output(uuid4().hex, request["project_id"], request["id"], str(target), [])
-            item_status = ("cancelled" if STOP.flag else {"fail": "failed", "review": "review", "skip": "skipped"}.get(status, "completed"))
+            item_status = {"fail": "failed", "review": "review", "skip": "skipped"}.get(status, "completed")
             emit("item", {"id": identifiers[str(source)], "status": item_status})
             emit("counts", {"completed": completed, "failed": failed, "review": review, "skipped": skipped})
     if kind == "cover":
@@ -296,7 +309,7 @@ def run_job(request, data_dir, store):
         from ..commands.dedup_cmd import run
         def result(item):
             status = ("skip" if item.get("skipped") else "covered" if item.get("ok")
-                          else "review" if not item.get("error") and Path(item.get("dst", "")).is_file()
+                          else "review" if str(item["src"]) in published
                           else "fail")
             record(item["src"], item.get("dst", ""), status)
         args.on_item_result = result
