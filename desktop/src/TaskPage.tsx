@@ -100,8 +100,14 @@ export default function TaskPage({
         kind,
       }),
     ])
-      .then(([items, saved]) => {
+      .then(async ([items, saved]) => {
+        const selected = Array.isArray(saved.selection)
+          ? saved.selection.filter((value): value is string => typeof value === "string") : [];
+        const restored = await Promise.all(selected.map((asset_id) =>
+          rpc<Asset>("assets.detail", { asset_id, project_id: project.id }).catch(() => null)));
         if (disposed) return;
+        setAssets(restored.filter((item): item is Asset => item !== null));
+        setSelection(selected);
         const existing = (value: unknown) =>
           typeof value === "string" && items.some((item) => item.id === value)
             ? value
@@ -153,6 +159,7 @@ export default function TaskPage({
     }
     saveWorkbench({
       library_id: source,
+      selection,
       background_library_id: background,
       pip_library_id: pip,
       intro_library_id: intro,
@@ -168,6 +175,7 @@ export default function TaskPage({
   }, [
     ready,
     source,
+    selection,
     background,
     pip,
     intro,
@@ -181,12 +189,6 @@ export default function TaskPage({
     positions,
     saveWorkbench,
   ]);
-  useEffect(() => {
-    setSelection([]);
-    setAssets([]);
-    setSearch("");
-    setAssetTotal(0);
-  }, [source]);
   useEffect(() => {
     if (!source) return;
     let disposed = false;
@@ -310,7 +312,13 @@ export default function TaskPage({
         placeholder="请选择素材库"
         data={libraryData(kind === "montage" ? "reference" : undefined)}
         value={source}
-        onChange={setSource}
+        onChange={(value) => {
+          setSource(value);
+          setSelection([]);
+          setAssets([]);
+          setSearch("");
+          setAssetTotal(0);
+        }}
         searchable
         allowDeselect={false}
       />

@@ -162,8 +162,8 @@ textarea {
   overflow-y: auto;
 }
 .video-preview {
-  width: 100%;
-  max-height: 460px;
+  width: min(100%, calc(min(460px, 100dvh - 360px) * 9 / 16));
+  margin-inline: auto;
   aspect-ratio: 9/16;
   background: #090c10;
   display: flex;
