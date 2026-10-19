@@ -203,22 +203,32 @@ def test_real_segment_effects_speed_seek_and_frame_budget(media, tmp_path):
 def test_accelerated_output_seek_starts_at_selected_source_frame(tmp_path):
     if not shutil.which(config.FFMPEG): pytest.skip("requires FFmpeg")
     source = tmp_path / "ramp.mp4"
-    raw = b"".join(np.full((64, 64, 3), 40 + i, np.uint8).tobytes() for i in range(150))
+    # Wide binary stripes identify frames through lossy encoding. A one-level
+    # grey ramp confuses quantization with an actual one/two-frame seek error.
+    frames = []
+    for number in range(150):
+        frame = np.empty((64, 64, 3), np.uint8)
+        for bit in range(8):
+            frame[:, bit * 8:(bit + 1) * 8] = 220 if number & (1 << bit) else 30
+        frames.append(frame)
+    raw = b"".join(frame.tobytes() for frame in frames)
     command = [config.FFMPEG, "-v", "error", "-y", "-f", "rawvideo", "-pixel_format", "bgr24",
                "-video_size", "64x64", "-framerate", "30", "-i", "pipe:0", "-c:v", "libx264",
                "-crf", "0", str(source)]
     result = subprocess.run(command, input=raw, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stderr
-    original = decode(source)
     out = tmp_path / "cut.mp4"
     item = clips._probe_one(source)
     report = clips.concat_clips([dict(item=item, offset=2.2, take=1., speed=1.5)],
                                  out, canvas=(64, 64), fps=30)
     assert report["ok"], report["error"]
     actual = decode(out)
-    mean = float(actual[0].mean())
-    nearest = min(range(150), key=lambda i: abs(float(original[i].mean()) - mean))
-    assert abs(nearest - 66) <= 1  # not frame 81 from applying unscaled output seek
+    numbers = [sum(1 << bit for bit in range(8)
+                   if frame[16:48, bit * 8 + 2:(bit + 1) * 8 - 2].mean() > 125)
+               for frame in actual]
+    assert numbers[0] == 66  # not frame 81 from applying unscaled output seek
+    assert numbers[-1] == 110
+    assert all(right - left in (1, 2) for left, right in zip(numbers, numbers[1:]))
     assert len(actual) == 30
 
 

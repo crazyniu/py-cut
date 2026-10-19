@@ -23,7 +23,7 @@ class SliceScopeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self._touch("a.mp4")
         self._touch("d1/d2/d3/b.MP4")
         self._touch("d1/d2/d3/d4/too-deep.mp4")

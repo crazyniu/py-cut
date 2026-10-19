@@ -124,7 +124,7 @@ class UnicodeEditorTests(unittest.TestCase):
 
     def test_real_filename_search_matches_unicode_and_ignores_nonmatch(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             target = root / "婚礼片段01.mp4"
             target.write_bytes(b"placeholder")
             (root / "other.mp4").write_bytes(b"placeholder")

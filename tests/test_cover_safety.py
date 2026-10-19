@@ -57,7 +57,7 @@ class CoverSafetyTests(unittest.TestCase):
 
     def test_cover_selection_only_includes_existing_mp4(self):
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
+            root = Path(td).resolve()
             mp4 = root / "clip.mp4"
             mov = root / "different.mov"
             mp4.write_bytes(b"a")

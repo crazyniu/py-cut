@@ -272,7 +272,7 @@ class CoreSafetyTests(unittest.TestCase):
     def test_montage_landscape_flag_changes_actual_scan_results(self):
         from pycut.core import montage_clips
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
+            root = Path(td).resolve()
             portrait = root / "portrait.mp4"
             landscape = root / "landscape.mp4"
             portrait.write_bytes(b"p" * 1200)

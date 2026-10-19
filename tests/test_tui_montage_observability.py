@@ -103,7 +103,8 @@ def test_montage_dashboard_displays_scrollable_logs_and_finished_directory(tmp_p
     video = str(tmp_path / "子目录" / "1_1.mp4")
     batch.update(current_planned=1, log_path=str(tmp_path / "session.log"),
                  files=[video], completed=1)
-    screen = Screen(size=(30, 125))
+    width = max(125, tui._disp_width(str(tmp_path)) + 40)
+    screen = Screen(size=(30, width))
     with mock.patch.object(tui, "_attr", return_value=0):
         tui_runner._draw(screen, jobs[0], 1, 1,
                          deque(["[画中画] FFmpeg 正在合成画面 · 已等待 10秒", "其他详细日志"]),
@@ -111,7 +112,7 @@ def test_montage_dashboard_displays_scrollable_logs_and_finished_directory(tmp_p
     running = "\n".join(t for _, _, t in screen.printed)
     assert "实时日志" in running and "其他详细日志" in running
     assert "日志文件：" in running and "session.log" in running
-    screen = Screen(size=(30, 125))
+    screen = Screen(size=(30, width))
     with mock.patch.object(tui, "_attr", return_value=0):
         tui_runner._draw(screen, jobs[0], 1, 1, deque(), 0,
                          "success", batch=batch, results=[{}])
@@ -173,7 +174,7 @@ def test_montage_failure_without_published_file_has_no_output_directory(tmp_path
     jobs = _jobs(tmp_path)
     batch = tui_runner._montage_plan(jobs)
     batch.update(completed=0, files=[], log_path=str(tmp_path / "run.log"))
-    screen = Screen(size=(28, 120))
+    screen = Screen(size=(28, max(120, tui._disp_width(str(tmp_path)) + 30)))
     with mock.patch.object(tui, "_attr", return_value=0):
         tui_runner._draw(screen, jobs[0], 1, 1, deque(["[失败] 没有完成成片"]),
                          0, "error", batch=batch, results=[{}])

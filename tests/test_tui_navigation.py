@@ -5,6 +5,7 @@ All tests use fake curses + temporary folders; no user media, ffmpeg or API key.
 from __future__ import annotations
 
 import curses
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -179,8 +180,8 @@ class NavigationTests(unittest.TestCase):
              mock.patch.object(tui, "_confirm", return_value=True):
             commands = tui._wizard_montage(Screen([]), 100)
         picker.assert_not_called()
-        self.assertIn('"/tmp/clips"', commands[0][commands[0].index("--clip-dir") + 1])
-        self.assertIn('"/tmp/pip"', commands[0][commands[0].index("--dedup-dir") + 1])
+        self.assertEqual(json.loads(commands[0][commands[0].index("--clip-dir") + 1]), [str(Path('/tmp/clips').resolve())])
+        self.assertEqual(json.loads(commands[0][commands[0].index("--dedup-dir") + 1]), [str(Path('/tmp/pip').resolve())])
         self.assertIn("--intro-dir", commands[0])
 
     def test_multi_select_preserves_existing_selection_when_backtracking(self):

@@ -121,7 +121,7 @@ class TUIRegression(unittest.TestCase):
 
     def test_scan_max_depth_ignores_deep_and_hidden_files(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             (root / "Volumes").mkdir()
             (root / "System").mkdir()
             (root / ".hidden").mkdir()
