@@ -321,6 +321,55 @@ class DesktopJobTests(unittest.TestCase):
         self.assertEqual(self.store.assets(self.libraries["background"]["id"])["items"][0]["usage_count"], 1)
         self.assertEqual(len(self.store.outputs(self.project["id"])), 1)
 
+    def test_restart_recovery_reconciles_actual_published_count(self):
+        job = self.manager.submit(self.request())
+        self.manager._update(job["id"], status="running")
+        output = self.base / "recovered.mp4"
+        output.write_bytes(b"published-before-crash")
+        journal, record = self.publication("recovered-output", output)
+        record["job_id"] = job["id"]
+        journal.write_text(json.dumps(record))
+        restarted = JobManager(self.store, self.events.append, start=False)
+        try:
+            detail = restarted.detail(job["id"])
+            self.assertEqual(detail["status"], "interrupted")
+            self.assertEqual(len(detail["outputs"]), 1)
+            self.assertEqual(detail["completed"], 1)
+            self.assertEqual(detail["planned"], 1)
+        finally:
+            restarted.shutdown()
+
+    def test_worker_failure_after_publication_reconciles_output_count(self):
+        job = self.manager.submit(self.request())
+        output = self.base / "published-before-worker-error.mp4"
+        output.write_bytes(b"published-complete")
+        journal, record = self.publication("worker-error-output", output)
+        record["job_id"] = job["id"]
+        journal.write_text(json.dumps(record))
+        class Child:
+            stdin = io.StringIO()
+            stdout = iter(['@pycut-desktop ' + json.dumps({"event": "result", "payload": {
+                "status": "failed", "error": "worker failed after publication"}}) + '\n'])
+            def wait(self, timeout=None):
+                return 2
+            def poll(self):
+                return 2
+        with patch("pycut.desktop.jobs.subprocess.Popen", return_value=Child()):
+            self.manager._thread.start()
+            try:
+                deadline = time.monotonic() + 2
+                while len(self.manager.detail(job["id"])["outputs"]) != 1 and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.manager._closed.set()
+                self.manager._wake.set()
+                self.manager._thread.join(timeout=2)
+                detail = self.manager.detail(job["id"])
+                self.assertEqual(detail["status"], "failed")
+                self.assertEqual(len(detail["outputs"]), 1)
+                self.assertEqual(detail["completed"], 1)
+            finally:
+                self.manager.shutdown()
+
     def test_unrelated_or_missing_files_never_recover_and_job_filter_applies(self):
         output = self.base / "unrelated.mp4"
         output.write_bytes(b"old-content")
