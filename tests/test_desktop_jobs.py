@@ -107,6 +107,18 @@ class DesktopJobTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "当前项目"):
             self.manager.submit(self.request(pip_library_id="missing", options={"use_pip": True}))
 
+    def test_enabled_optional_pool_missing_root_surfaces_error(self):
+        for role, options, filename in (("pip", {"no_pip": False}, "picture.mp4"),
+                                        ("intro", {"intro_enabled": True}, "intro.mp4"),
+                                        ("sticker", {"no_sticker": False}, "sticker.png")):
+            with self.subTest(role=role):
+                asset = self.add_asset(role, filename)
+                Path(asset["path"]).unlink()
+                Path(asset["path"]).parent.rmdir()
+                with self.assertRaises((OSError, ValueError)):
+                    self.manager.submit(self.request(**{role + "_library_id": self.libraries[role]["id"]},
+                        options={"no_pip": True, "no_sticker": True, **options}))
+
     def test_removed_same_stem_subtitle_is_not_auto_selected(self):
         subtitle = self.add_asset("reference", "话术.srt")
         self.store.set_removed(self.libraries["reference"]["id"], [subtitle["id"]], True)
