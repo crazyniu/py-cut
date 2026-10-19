@@ -171,6 +171,8 @@ def pick_font() -> str:
 
     libass can silently substitute fonts without CJK glyphs. Font file paths are not
     a reliable availability check, especially for on-demand macOS fonts."""
+    if os.environ.get("PYCUT_FONT_DIR"):
+        return "Noto Sans SC"
     exe = shutil.which("fc-list")
     if exe:
         from .utils import run_cmd
@@ -362,6 +364,15 @@ def subtitle_tmp_path(out: Path) -> Path:
     return out.with_name(f"{out.stem}.{os.getpid()}{SUB_TMP_SUFFIX}{out.suffix}")
 
 
+def subtitle_filter(ass_path) -> str:
+    """Use the bundled OFL font directory only in packaged desktop runtimes."""
+    result = f"subtitles=filename='{_escape_filter_path(ass_path)}'"
+    fonts = os.environ.get("PYCUT_FONT_DIR")
+    if fonts:
+        result += f":fontsdir='{_escape_filter_path(fonts)}'"
+    return result
+
+
 def build_subtitle_cmd(video: Path, ass_path: Path, out: Path,
                        crf: str = "20", fps: int | None = None) -> list[str]:
     """Return argv to burn ASS into a silent temporary video; do not execute it.
@@ -379,7 +390,7 @@ def build_subtitle_cmd(video: Path, ass_path: Path, out: Path,
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = subtitle_tmp_path(out)
 
-    vf = f"subtitles=filename='{_escape_filter_path(ass_path)}'"
+    vf = subtitle_filter(ass_path)
     cmd = [
         FFMPEG, "-y", "-loglevel", "error", "-nostdin",
         "-i", str(video),

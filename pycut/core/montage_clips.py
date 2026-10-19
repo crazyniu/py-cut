@@ -240,7 +240,7 @@ def _drop_duplicates(items: list[ClipItem]) -> tuple[list[ClipItem], int]:
 
 def scan_library(root=None, min_dur=None, max_dur=None,
                  workers=None, allow_landscape: bool = False,
-                 stats: dict | None = None) -> list[ClipItem]:
+                 stats: dict | None = None, *, files=None) -> list[ClipItem]:
     """Return valid clips with stable ordering, metadata, and content deduplication.
 
     Filter w/h above MONTAGE_MAX_SIDE_RATIO unless allow_landscape is explicit.
@@ -252,7 +252,8 @@ def scan_library(root=None, min_dur=None, max_dur=None,
     nw = int(workers) if workers else max(4, int(config.MONTAGE_WORKERS))
     ratio_max = float(config.MONTAGE_MAX_SIDE_RATIO)
 
-    files = _collect_files(root)
+    files = (_collect_files(root) if files is None else
+             sorted({Path(p).resolve() for p in files}, key=str))
     if not files:
         if stats is not None:
             stats.update(files=0, portrait=0, landscape=0, bad=0, short=0, duplicates=0)

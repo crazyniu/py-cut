@@ -154,7 +154,7 @@ def _probe_duration(path: Path) -> float:
     return item.duration if item is not None else 0.0
 
 
-def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
+def scan_dedup_pool(root=None, min_dur=None, *, files=None) -> list[PipItem]:
     """Return valid pool items sorted by path for seeded reproducibility.
 
     Skip individual probe failures and clips below min_dur; surface directory errors."""
@@ -165,7 +165,8 @@ def scan_dedup_pool(root=None, min_dur=None) -> list[PipItem]:
     skipped = 0
     import time
     started = time.monotonic()
-    paths = sorted(_iter_mp4(base), key=lambda p: str(p))
+    paths = sorted(_iter_mp4(base) if files is None else
+                   {Path(p).resolve() for p in files}, key=str)
     log(f"  [画中画素材] 读取 {len(paths)} 个视频的元数据（未改动文件复用缓存）")
     progress("画中画素材扫描", 0, len(paths), detail="读取画中画时长与规格")
     durations = {}
@@ -444,10 +445,10 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
 
     subtitle_filter = "null"
     if ass_path is not None:
-        from .montage_subtitles import _escape_filter_path
+        from .montage_subtitles import subtitle_filter as build_subtitle_filter
         if not Path(ass_path).is_file():
             raise ValueError(f"字幕文件不存在: {ass_path}")
-        subtitle_filter = f"subtitles=filename='{_escape_filter_path(ass_path)}'"
+        subtitle_filter = build_subtitle_filter(ass_path)
     entries = _clamp_entries(timeline)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = _tmp_path(out)
