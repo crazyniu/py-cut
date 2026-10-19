@@ -85,6 +85,32 @@ def bundle_macos_libraries(binary, library_dir, copied, *, source=None, executab
     run(["codesign", "--force", "--sign", "-", binary], capture_output=True)
 
 
+def macos_compatibility(resources, target):
+    """Inspect every bundled Mach-O, including Python extensions and media libraries."""
+    binaries = {}
+    magic = {bytes.fromhex(value) for value in
+             ("feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca")}
+    for path in resources.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        with path.open("rb") as stream:
+            if stream.read(4) not in magic:
+                continue
+        listing = run(["otool", "-l", path], capture_output=True, text=True).stdout
+        versions = re.findall(r"\bminos\s+(\d+(?:\.\d+)*)", listing)
+        versions += re.findall(r"cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version (\d+(?:\.\d+)*)", listing)
+        if not versions:
+            raise SystemExit(f"Cannot determine minimum macOS version: {path}")
+        binaries[str(path.relative_to(resources))] = max(versions, key=version_tuple)
+    required = max(binaries.values(), key=version_tuple, default=target)
+    return {"target": target, "required": required, "compatible": version_tuple(required) <= version_tuple(target),
+            "binaries": binaries}
+
+
+def version_tuple(value):
+    return tuple((list(map(int, value.split("."))) + [0, 0])[:3])
+
+
 def prepare(args):
     if sys.platform not in {"darwin", "win32"}:
         raise SystemExit("Desktop distributions support macOS and Windows only")
@@ -133,12 +159,19 @@ def prepare(args):
             with urllib.request.urlopen(url, timeout=120) as response:
                 destination.write_bytes(response.read())
     version = run([ffmpeg, "-version"], capture_output=True, text=True).stdout
-    (RESOURCES / "runtime-manifest.json").write_text(json.dumps({
+    manifest = {
         "platform": sys.platform, "architecture": platform.machine(),
         "python": platform.python_version(), "ffmpeg": version,
         "sources": {"ffmpeg": "https://ffmpeg.org", "font": FONT_BASE},
         "license_note": "FFmpeg build configuration determines LGPL/GPL obligations. Preserve dependency licenses and provide corresponding source for released binaries."
-    }, indent=2), encoding="utf-8")
+    }
+    if sys.platform == "darwin":
+        config = json.loads((ROOT / "desktop/src-tauri/tauri.conf.json").read_text())
+        manifest["macos"] = macos_compatibility(RESOURCES, config["bundle"]["macOS"]["minimumSystemVersion"])
+    (RESOURCES / "runtime-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    if args.build and manifest.get("macos", {}).get("compatible") is False:
+        raise SystemExit(f"Bundled runtime requires macOS {manifest['macos']['required']}; "
+                         f"target is {manifest['macos']['target']}. Supply compatible Python, FFmpeg and dependencies.")
     env = dict(os.environ, PYCUT_FFMPEG=str(media / ffmpeg.name), PYCUT_FFPROBE=str(media / ffprobe.name))
     run([media / ffmpeg.name, "-version"], env=env, stdout=subprocess.DEVNULL, timeout=60)
     run([media / ffprobe.name, "-version"], env=env, stdout=subprocess.DEVNULL, timeout=60)

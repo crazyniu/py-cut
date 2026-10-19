@@ -169,6 +169,10 @@ def _montage(request, data_dir, store):
                 output_id = uuid4().hex
                 def before_publish(final, staged, uses):
                     check_snapshot(request)
+                    versions = {item["path"]: item["signature"] for item in request["snapshot"]}
+                    uses = [{**use, "signature": json.dumps(
+                        versions[use["path"]] if use["path"] in versions else signature(use["path"]))}
+                        for use in uses]
                     _atomic_json(Path(data_dir) / "publications" / (output_id + ".json"),
                                  {"id": output_id, "job_id": request["id"],
                                   "project_id": request["project_id"], "path": str(final.resolve()),

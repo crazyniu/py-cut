@@ -5,6 +5,18 @@ and montage generation. Users prepare the clips; there is no public slicing comm
 Developer documentation and source annotations use English. The product UI, logs,
 CLI help, and established output-directory names remain Chinese.
 
+## Desktop
+
+The native Tauri workbench organizes product projects, material libraries, montage
+nodes, cover/dedup tasks, published videos and material usage history. It reads
+media from the original directories and can import directory settings from the TUI
+.env file. Desktop subtitle recognition reuses a locally logged-in Codex installation.
+The CLI/TUI remains available during desktop compatibility acceptance.
+
+See [Desktop workbench](docs/DESKTOP.md) for development, packaging, data boundaries
+and native verification requirements. macOS 13.0 and Windows are packaging targets;
+compatibility depends on the bundled runtime and requires platform execution.
+
 ## Commands and output
 
 | Command | Purpose | Default output |

@@ -14,6 +14,7 @@ concurrency:
 jobs:
   tui:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       docs-only: ${{ steps.scope.outputs.docs-only }}
     steps:
@@ -39,11 +40,14 @@ jobs:
               print(f"docs-only={str(docs_only).lower()}", file=output)
           PYCODE
       - uses: actions/setup-python@v5
+        if: steps.scope.outputs.docs-only != 'true'
         with:
           python-version: '3.13'
       - name: Install runtime imports
         if: steps.scope.outputs.docs-only != 'true'
-        run: python -m pip install -r requirements.txt
+        run: >-
+          python -m pip install 'numpy>=1.26' 'opencv-python-headless>=4.8,<5'
+          'textual-fspicker==1.0.1' pytest
       - name: Install FFmpeg for synthetic audio integration (test only)
         if: github.event_name == 'workflow_dispatch'
         run: |
@@ -51,9 +55,6 @@ jobs:
           sudo apt-get install -y -qq ffmpeg
           command -v ffmpeg
           command -v ffprobe
-      - name: Install test runner (development only)
-        if: steps.scope.outputs.docs-only != 'true'
-        run: python -m pip install pytest
       - name: Syntax check
         run: python -m compileall -q pycut tests
       - name: Bash launcher syntax check
@@ -75,23 +76,34 @@ jobs:
                       continue
                   assert (doc.parent / unquote(url.path)).exists(), f'{doc}: missing {target}'
           PYCODE
-      - name: Lightweight TUI and core regression tests
+      - name: Lightweight desktop, TUI and core regression tests
         if: github.event_name == 'pull_request' && steps.scope.outputs.docs-only != 'true'
         run: >-
-          python -m pytest tests/test_tui*.py tests/test_task_progress.py
-          tests/test_output_layout.py tests/test_scene_safety.py tests/test_slice_scope.py
-          tests/test_scan*.py tests/test_llm_safety.py tests/test_launcher_install.py
-          tests/test_pip_resources.py tests/test_pip_single_pass.py tests/test_pip_cleanup.py
-          tests/test_montage_combined_subtitles.py tests/test_probe_cache.py
-          tests/test_montage_segment_fusion.py tests/test_montage_transitions.py -q
-          --ignore=tests/test_tui_textual_picker.py
+          python -m pytest tests/test_task_progress.py tests/test_slice_scope.py
+          tests/test_scan_dirs.py tests/test_scan_unicode_search.py
+          tests/test_llm_safety.py tests/test_probe_cache.py -q
+          tests/test_desktop_jobs.py tests/test_desktop_service.py
+          tests/test_desktop_library.py tests/test_desktop_build.py tests/test_local_vision.py
+      - uses: actions/setup-node@v4
+        if: steps.scope.outputs.docs-only != 'true'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Desktop frontend checks
+        if: steps.scope.outputs.docs-only != 'true'
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run build
+          node --test src/api.test.mjs
       - name: Full suite (synthetic media only; user media opt-in)
         if: github.event_name == 'workflow_dispatch'
         run: python -m pytest tests/ -q
 
   cross-platform-picker:
     needs: tui
-    if: always()
+    if: github.event_name == 'workflow_dispatch' && needs.tui.result == 'success'
     name: Folder picker (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:

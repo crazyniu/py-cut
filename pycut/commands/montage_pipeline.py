@@ -442,7 +442,9 @@ def _material_uses(opts, picked, timeline, target, intro_report):
         if shot.get("item") is None or shot.get("take", 0) <= 0:
             continue
         uses.append({"path": str(shot["item"].path.resolve()), "role": "background",
-                     "offset": shot["offset"], "duration": shot["take"]})
+                     "offset": shot["offset"], "duration": shot["take"],
+                     "speed": shot.get("speed", 1.0),
+                     "source_duration": shot["take"] * shot.get("speed", 1.0)})
         if shot.get("sticker_applied") and shot.get("sticker"):
             uses.append({"path": str(Path(shot["sticker"]).resolve()), "role": "sticker"})
     for shot in timeline:

@@ -249,7 +249,8 @@ async fn rpc(
         state.pending.lock().unwrap().remove(&id);
         return Err(error);
     }
-    let result = match tokio::time::timeout(Duration::from_secs(120), receiver).await {
+    let timeout = if method == "libraries.scan" { 3600 } else { 120 };
+    let result = match tokio::time::timeout(Duration::from_secs(timeout), receiver).await {
         Ok(Ok(result)) => result,
         _ => {
             state.pending.lock().unwrap().remove(&id);

@@ -43,6 +43,10 @@ export default function SettingsPage({
   const [detecting, setDetecting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
+  useEffect(() => {
+    setName(project.name);
+    setOutput(project.output_dir || "");
+  }, [project.name, project.output_dir]);
   function detect() {
     setDetecting(true);
     rpc<Agent[]>("agents.detect")

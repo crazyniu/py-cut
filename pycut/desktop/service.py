@@ -19,7 +19,7 @@ from .store import Store
 class Service:
     def __init__(self, data_dir, sink=lambda event: None, *, start_jobs=True):
         self.store = Store(Path(data_dir))
-        self.indexer = LibraryIndexer(self.store)
+        self.indexer = LibraryIndexer(self.store, lambda value: sink({"event": "library", "payload": value}))
         self.media = MediaCache(self.store)
         self.jobs = JobManager(self.store, sink, start=start_jobs)
         self.closing = threading.Event()

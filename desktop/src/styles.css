@@ -29,6 +29,9 @@ textarea {
 }
 .main-content {
   min-height: 100%;
+  padding: 24px !important;
+  max-width: 1920px;
+  margin-inline: auto;
 }
 .mantine-AppShell-navbar {
   background: var(--mantine-color-dark-7);
@@ -37,8 +40,8 @@ textarea {
   background: var(--mantine-color-dark-8);
 }
 .empty {
-  min-height: 340px;
-  padding: 40px;
+  min-height: 240px;
+  padding: 32px 24px;
 }
 .project-grid {
   display: grid;
@@ -61,15 +64,18 @@ textarea {
 }
 .library-layout {
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
-  gap: 20px;
+  grid-template-columns: 176px minmax(0, 1fr);
+  gap: 16px;
   align-items: start;
 }
 .library-layout.with-detail {
-  grid-template-columns: 160px minmax(0, 1fr) 260px;
+  grid-template-columns: 176px minmax(0, 1fr) 272px;
 }
 .library-sidebar {
-  min-height: 560px;
+  position: sticky;
+  top: 0;
+  max-height: calc(100dvh - 144px);
+  overflow-y: auto;
 }
 .library-item {
   appearance: none;
@@ -89,6 +95,13 @@ textarea {
 }
 .library-item:hover {
   background: var(--mantine-color-dark-6);
+}
+.library-item:disabled { cursor: wait; }
+.library-item > span { min-width: 0; overflow-wrap: anywhere; }
+.asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+  gap: 12px;
 }
 .library-item.active {
   background: var(--mantine-color-cyan-light);
@@ -145,6 +158,8 @@ textarea {
 .asset-detail {
   position: sticky;
   top: 0;
+  max-height: calc(100dvh - 144px);
+  overflow-y: auto;
 }
 .video-preview {
   width: 100%;
@@ -176,7 +191,8 @@ textarea {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 310px;
   gap: 16px;
-  min-height: 610px;
+  min-height: 0;
+  align-items: start;
 }
 .workflow-column {
   min-width: 0;
@@ -184,8 +200,8 @@ textarea {
   flex-direction: column;
 }
 .workflow-canvas {
-  height: 520px;
-  min-height: 440px;
+  height: calc(100dvh - 260px);
+  min-height: 400px;
   flex: 1;
   border: 1px solid var(--mantine-color-dark-4);
   border-radius: var(--mantine-radius-sm);
@@ -214,7 +230,27 @@ textarea {
   margin-top: 12px;
 }
 .inspector > .mantine-Stack-root {
-  min-height: 100%;
+  min-height: min(560px, calc(100dvh - 184px));
+}
+.inspector {
+  max-height: calc(100dvh - 144px);
+  overflow-y: auto;
+  position: sticky;
+  top: 0;
+}
+.task-submit {
+  position: sticky;
+  bottom: -16px;
+  background: var(--mantine-color-dark-7);
+  padding-block: 12px;
+  border-top: 1px solid var(--mantine-color-dark-4);
+}
+.mantine-Table-th { white-space: nowrap; }
+.mantine-Table-td { font-variant-numeric: tabular-nums; }
+.mantine-NavLink-label { font-weight: 500; }
+.mantine-Input-input { text-overflow: ellipsis; }
+@media (min-width: 1600px) {
+  .workbench { grid-template-columns: minmax(0, 1fr) 340px; }
 }
 .log-output {
   white-space: pre-wrap;
@@ -241,12 +277,12 @@ textarea {
     padding: 20px !important;
   }
   .library-layout.with-detail {
-    grid-template-columns: 140px minmax(0, 1fr) 230px;
+    grid-template-columns: 156px minmax(0, 1fr) 240px;
     gap: 12px;
   }
   .library-layout {
     gap: 14px;
-    grid-template-columns: 160px minmax(0, 1fr);
+    grid-template-columns: 156px minmax(0, 1fr);
   }
   .workbench {
     grid-template-columns: minmax(0, 1fr) 285px;

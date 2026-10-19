@@ -58,6 +58,15 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.update_project(other["id"], unknown=True)
 
+    def test_scan_reports_real_incremental_counts_and_final_state(self):
+        events = []
+        for number in range(26):
+            self.file(f"{number}.mp4")
+        result = LibraryIndexer(self.store, events.append).scan(self.library["id"])
+        self.assertEqual([(e["indexed"], e["scanning"]) for e in events],
+                         [(0, True), (25, True), (26, False)])
+        self.assertEqual(events[-1]["available"], result["available"])
+
     def test_recursive_overlapping_roots_no_directory_symlinks(self):
         nested = self.file("a/b/c/d/竖屏.MP4")
         self.store.add_roots(self.library["id"], [str(nested.parent), str(self.root)])

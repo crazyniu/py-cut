@@ -102,9 +102,9 @@ export default function App() {
   }
   return (
     <>
-      <AppShell navbar={{ width: 210, breakpoint: 0 }} padding={0}>
+      <AppShell navbar={{ width: 192, breakpoint: 0 }} padding={0}>
         <AppShell.Navbar p="md">
-          <Group gap="xs" mb="xl">
+          <Group gap="xs" mb="lg">
             <IconMovie size={25} color="var(--mantine-color-cyan-5)" />
             <Title order={1} size="h3">
               pycut

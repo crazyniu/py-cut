@@ -29,8 +29,9 @@ def media_kind(path: Path) -> str | None:
 class LibraryIndexer:
     """Update UI metadata; offline media and errors remain visible in the catalog."""
 
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, progress=lambda value: None):
         self.store = store
+        self.progress = progress
         self._lock = threading.Lock()
 
     @staticmethod
@@ -63,6 +64,7 @@ class LibraryIndexer:
                 self.store.require(db, "libraries", library_id)
                 roots = [dict(row) for row in db.execute("SELECT * FROM roots WHERE library_id=?", (library_id,))]
             errors, indexed = [], set()
+            self.progress({"library_id": library_id, "indexed": 0, "scanning": True})
             try:
                 probe_identity = tool_identity(config.FFPROBE) + str(PROBE_ARGS)
             except OSError as error:
@@ -92,6 +94,8 @@ class LibraryIndexer:
                                            (library_id, identifier))
                                 db.execute("INSERT OR IGNORE INTO asset_roots VALUES (?,?)", (root["id"], identifier))
                             indexed.add(identifier)
+                            if len(indexed) % 25 == 0:
+                                self.progress({"library_id": library_id, "indexed": len(indexed), "scanning": True})
                             if error:
                                 root_errors.append({"path": str(path), "error": error})
                         except OSError as error:
@@ -116,8 +120,10 @@ class LibraryIndexer:
                             errors.append({"path": row["path"], "error": str(error)})
                     db.execute("UPDATE assets SET available=? WHERE id=?", (int(present), row["id"]))
                     offline += not present
-            return {"library_id": library_id, "indexed": len(indexed),
-                    "available": len(rows) - offline, "offline": offline, "errors": errors}
+            result = {"library_id": library_id, "indexed": len(indexed),
+                      "available": len(rows) - offline, "offline": offline, "errors": errors}
+            self.progress({**result, "scanning": False})
+            return result
 
     def _index(self, path: Path, subtitle: str | None, identity: str) -> tuple[str, str]:
         signature, location, kind = stamp(path), canonical(path), media_kind(path)

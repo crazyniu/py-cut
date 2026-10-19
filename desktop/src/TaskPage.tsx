@@ -323,7 +323,7 @@ export default function TaskPage({
           )
           .map((item) => ({
             value: item.id,
-            label: `${item.name}${!item.available ? " · 离线" : ""}`,
+            label: `${item.path.split(/[\\/]/).slice(-2).join(" / ")}${!item.available ? " · 离线" : ""}`,
             disabled: !item.available,
           }))}
         value={selection}
@@ -457,17 +457,11 @@ export default function TaskPage({
           </Box>
           <Paper withBorder p="md" className="inspector">
             <Stack gap="md">
-              <Text fw={600}>
-                {{
-                  reference: "话术与数量",
-                  background: "背景素材",
-                  pip: "画中画设置",
-                  compose: "正文合成",
-                  intro: "前贴设置",
-                  sticker: "贴纸设置",
-                  output: "成片输出",
-                }[selectedNode] || "任务参数"}
-              </Text>
+              <Select label="任务参数" aria-label="切换参数区域" value={selectedNode}
+                allowDeselect={false} onChange={(value) => value && setSelectedNode(value)}
+                data={Object.entries({reference: "话术与数量", background: "背景素材", pip: "画中画设置",
+                  compose: "正文合成", intro: "前贴设置", sticker: "贴纸设置", output: "成片输出"})
+                  .map(([value, label]) => ({value, label}))} />
               <Divider />
               {selectedNode === "reference" && sourceControl}
               {selectedNode === "background" && (
@@ -597,7 +591,7 @@ export default function TaskPage({
                 values={options}
                 onChange={setOptions}
               />
-              <Box mt="auto">
+              <Box mt="auto" className="task-submit">
                 <Text size="xs" c="dimmed" mb="sm">
                   {!source
                     ? "先添加话术素材库"

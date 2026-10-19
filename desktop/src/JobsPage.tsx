@@ -23,6 +23,7 @@ import {
 } from "@tabler/icons-react";
 import {
   kinds,
+  dateTime,
   message,
   openPath,
   reveal,
@@ -175,7 +176,7 @@ export default function JobsPage({
                       </Table.Td>
                       <Table.Td>
                         <Text size="xs" c="dimmed">
-                          {job.created_at}
+                          {dateTime(job.created_at)}
                         </Text>
                       </Table.Td>
                       <Table.Td>
@@ -223,6 +224,7 @@ export default function JobsPage({
                 <Button
                   variant="light"
                   size="xs"
+                  disabled={!output.available}
                   onClick={() => setPreview(output)}
                 >
                   预览成片
@@ -232,7 +234,7 @@ export default function JobsPage({
                 {output.name}
               </Text>
               <Text size="xs" c="dimmed" mt={5}>
-                {output.created_at}
+                {dateTime(output.created_at)}
               </Text>
               <Button
                 mt="sm"

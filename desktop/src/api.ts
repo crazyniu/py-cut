@@ -46,7 +46,7 @@ export const fileUrl = (path: string) => convertFileSrc(path);
 export const reveal = (path: string) => invoke("reveal_path", { path });
 export const openPath = (path: string) => invoke("open_path", { path });
 export interface DesktopEvent {
-  event: "job" | "progress" | "log";
+  event: "job" | "progress" | "log" | "library";
   job_id?: string;
   payload: unknown;
 }
@@ -190,6 +190,8 @@ export function duration(seconds: number | null | undefined): string {
 }
 export const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+export const dateTime = (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false });
 
 export function useSummary(use: Use): string {
   const parts = [

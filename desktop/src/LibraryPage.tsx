@@ -7,13 +7,13 @@ import {
   Checkbox,
   Divider,
   Group,
+  Loader,
   Modal,
   Pagination,
   Paper,
   ScrollArea,
   SegmentedControl,
   Select,
-  SimpleGrid,
   Stack,
   Table,
   Text,
@@ -44,6 +44,7 @@ import {
   chooseDirectories,
   duration,
   message,
+  onEvent,
   reveal,
   roles,
   rpc,
@@ -70,6 +71,7 @@ export default function LibraryPage({ project }: { project: Project }) {
   const [detail, setDetail] = useState<(Asset & { uses: Use[] }) | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [scanned, setScanned] = useState<number | null>(null);
   const [revision, setRevision] = useState(0);
   const [create, setCreate] = useState(false);
   const [name, setName] = useState("");
@@ -92,6 +94,19 @@ export default function LibraryPage({ project }: { project: Project }) {
   useEffect(() => {
     void loadLibraries();
   }, [loadLibraries]);
+  useEffect(() => {
+    let closed = false;
+    let dispose: (() => void) | undefined;
+    onEvent((event) => {
+      if (event.event !== "library") return;
+      const value = event.payload as { library_id: string; indexed: number; scanning: boolean };
+      if (value.library_id === libraryId) setScanned(value.scanning ? value.indexed : null);
+    }).then((unlisten) => {
+      if (closed) unlisten();
+      else dispose = unlisten;
+    }).catch(report);
+    return () => { closed = true; dispose?.(); };
+  }, [libraryId]);
   useEffect(() => {
     setPage(1);
     setSelected([]);
@@ -180,6 +195,7 @@ export default function LibraryPage({ project }: { project: Project }) {
       report(error);
     } finally {
       setBusy(false);
+      setScanned(null);
     }
   }
   async function addRoots() {
@@ -240,14 +256,16 @@ export default function LibraryPage({ project }: { project: Project }) {
               key={item.id}
               className={`library-item ${item.id === libraryId ? "active" : ""}`}
               onClick={() => setLibraryId(item.id)}
+              disabled={busy}
+              aria-pressed={item.id === libraryId}
             >
               <span>
                 <Text size="sm" fw={500}>
                   {item.name}
                 </Text>
-                <Text size="xs" c="dimmed">
+                {item.name !== roles[item.role] && <Text size="xs" c="dimmed">
                   {roles[item.role]}
-                </Text>
+                </Text>}
               </span>
               <Badge variant="light" color="gray" size="sm">
                 {item.active_count}
@@ -291,7 +309,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                       lineClamp={2}
                       style={{ overflowWrap: "anywhere", flex: 1 }}
                     >
-                      {path}
+                      {path.split(/[\\/]/).filter(Boolean).slice(-2).join(" / ")}
                       {library.root_status?.find((item) => item.path === path)
                         ?.scanned_at &&
                         !library.root_status?.find((item) => item.path === path)
@@ -311,7 +329,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                     </Text>
                   </Tooltip>
                   <ActionIcon
-                    size="xs"
+                    size="sm"
                     color="gray"
                     variant="subtle"
                     aria-label={`移除目录 ${path}`}
@@ -391,11 +409,27 @@ export default function LibraryPage({ project }: { project: Project }) {
                   value={layout}
                   onChange={setLayout}
                   data={[
-                    { value: "grid", label: <IconLayoutGrid size={16} /> },
-                    { value: "list", label: <IconList size={16} /> },
+                    { value: "grid", label: <IconLayoutGrid size={16} aria-label="缩略图视图" /> },
+                    { value: "list", label: <IconList size={16} aria-label="列表视图" /> },
                   ]}
                 />
               </Group>
+              {busy && (
+                <Group gap="xs" py="sm" role="status" aria-live="polite">
+                  <Loader size="xs" />
+                  <Text size="sm" c="dimmed">{scanned === null ? "正在更新素材库…" : `正在扫描，已读取 ${scanned} 个素材…`}</Text>
+                </Group>
+              )}
+              {assets.length > 0 && (
+                <Group justify="space-between" mb="sm">
+                  <Checkbox size="xs" label="选择本页" checked={assets.every((a) => selected.includes(a.id))}
+                    indeterminate={assets.some((a) => selected.includes(a.id)) && !assets.every((a) => selected.includes(a.id))}
+                    onChange={(event) => setSelected(event.currentTarget.checked
+                      ? [...new Set([...selected, ...assets.map((a) => a.id)])]
+                      : selected.filter((id) => !assets.some((a) => a.id === id)))} />
+                  <Text size="xs" c="dimmed">第 {(page - 1) * 24 + 1}–{Math.min(page * 24, total)} 项，共 {total} 项</Text>
+                </Group>
+              )}
               <Group justify="space-between" mb="md">
                 <SegmentedControl
                   size="xs"
@@ -464,7 +498,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                   retry={() => setRevision((value) => value + 1)}
                 />
               )}
-              {!assets.length && !error ? (
+              {!assets.length && !error && !busy ? (
                 <Empty
                   title={
                     removed === "removed" ? "没有已移除素材" : "素材库为空"
@@ -483,10 +517,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                   }
                 />
               ) : layout === "grid" ? (
-                <SimpleGrid
-                  cols={{ base: 2, md: detailId ? 3 : 4, xl: detailId ? 4 : 5 }}
-                  spacing="sm"
-                >
+                <div className="asset-grid">
                   {assets.map((asset) => (
                     <Paper
                       withBorder
@@ -529,7 +560,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                       </button>
                     </Paper>
                   ))}
-                </SimpleGrid>
+                </div>
               ) : (
                 <Table.ScrollContainer minWidth={520}>
                   <Table highlightOnHover verticalSpacing="sm">

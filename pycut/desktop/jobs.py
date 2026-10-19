@@ -58,6 +58,9 @@ class JobManager:
         with store.connect() as db:
             db.execute("UPDATE desktop_jobs SET status='interrupted',finished_at=?,error=? "
                        "WHERE status IN ('running','cancelling')", (now(), "程序上次退出时任务未完成"))
+            montage_ids = [row[0] for row in db.execute("SELECT id FROM desktop_jobs WHERE kind='montage'")]
+        for job_id in montage_ids:
+            self._update(job_id, completed=len(self.detail(job_id)["outputs"]))
         self._thread = threading.Thread(target=self._loop, daemon=True, name="desktop-queue")
         if start:
             self._thread.start()
@@ -71,6 +74,9 @@ class JobManager:
         def pool(identifier):
             if identifier not in libraries:
                 raise ValueError("请选择当前项目的素材库")
+            for root in roots(identifier):
+                with os.scandir(root):
+                    pass
             items = self.store.snapshot(identifier)
             all_assets.update((a["id"], a) for a in items)
             return items
@@ -287,6 +293,8 @@ class JobManager:
                     state = "cancelled" if job["status"] == "cancelling" else "failed"
                     self._update(row[0], status=state, completed=completed,
                                  error=job["error"] or (f"处理进程退出，未返回完整结果（{code}）" if state == "failed" else ""))
+                elif job["kind"] == "montage":
+                    self._update(row[0], completed=completed)
             except Exception as exc:
                 self._update(row[0], status="failed", error=sanitize(str(exc)))
             finally:
