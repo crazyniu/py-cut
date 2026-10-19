@@ -23,7 +23,12 @@ for line in sys.stdin:
     if method == 'initialized': continue
     result = {}
     if method == 'account/read': result = {'account': {'type':'chatgpt'}}
-    if method == 'thread/start': result = {'thread':{'id':'thread-1'}}
+    if method == 'config/read': result = {'config':{'mcp_servers':{'inherited':{'enabled':True}}}}
+    if method == 'mcpServerStatus/list':
+        result = {'data':[{'tools':{'unexpected':{}}}]} if mode == 'exposed' else {'data':[]}
+    if method == 'thread/start':
+        assert req['params']['config']['mcp_servers.inherited.enabled'] is False
+        result = {'thread':{'id':'thread-1'}}
     print(json.dumps({'id':req['id'],'result':result}), flush=True)
     if method == 'turn/start':
         assert len(req['params']['input']) == 3
@@ -72,7 +77,7 @@ class LocalVisionTests(unittest.TestCase):
             self.assertFalse(Path(directory).exists())
 
     def test_failed_invalid_and_tool_requests_never_return_detection(self):
-        for mode in ('failed', 'malformed', 'tool'):
+        for mode in ('failed', 'malformed', 'tool', 'exposed'):
             with self.subTest(mode=mode), self.client(mode):
                 client = CodexVision('codex')
                 self.assertIsNone(client.ask_vision(self.frames, 'detect', deadline=time.monotonic()+2))
