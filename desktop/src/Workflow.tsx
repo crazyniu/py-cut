@@ -168,7 +168,7 @@ function Canvas({
             title: item.title,
             subtitle:
               counts[node.id] != null
-                ? `${counts[node.id]} 个已选素材`
+                ? `${counts[node.id]} 个${node.id === "reference" ? "已选话术" : "库内素材"}`
                 : item.subtitle,
             state: disabled
               ? "已跳过"
@@ -201,7 +201,16 @@ function Canvas({
           target,
           type: "smoothstep",
           style: {
-            stroke: enabled[source] === false ? "#35404c" : "#557484",
+            stroke:
+              enabled[source] === false
+                ? "#35404c"
+                : nodes.some(
+                      (node) =>
+                        (node.id === source || node.id === target) &&
+                        node.data.state === "运行中",
+                    )
+                  ? "var(--mantine-color-cyan-6)"
+                  : "#557484",
             strokeWidth: 1.5,
           },
         }))}
