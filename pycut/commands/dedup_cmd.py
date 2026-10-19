@@ -234,8 +234,9 @@ def run(args: argparse.Namespace) -> int:
     except ProfileError as exc:
         log(f"[账号预设错误] {exc}")
         return 2
-    install_signal_handlers()
-    reset_stop()
+    if not getattr(args, "runtime_initialized", False):
+        install_signal_handlers()
+        reset_stop()
     self_check(require_src=False)
 
     if audio_mix.enabled:

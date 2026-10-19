@@ -106,7 +106,8 @@ class JobManager:
             active_paths = {a["path"] for a in references}
             for item in selected:
                 custom = options.get("srt", "auto")
-                subtitle = item.get("srt_path") if custom == "auto" else custom
+                disabled = options.get("no_sub", not options.get("use_sub", True))
+                subtitle = "" if disabled else item.get("srt_path") if custom == "auto" else custom
                 item["subtitle_path"] = subtitle if subtitle and (custom != "auto" or subtitle in active_paths) else ""
                 if item["subtitle_path"]:
                     all_assets["srt:" + item["subtitle_path"]] = {"path": item["subtitle_path"]}

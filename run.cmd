@@ -60,11 +60,11 @@ echo [pycut] FFmpeg and ffprobe ready.
 if errorlevel 1 exit /b 1
 if /i "%~1"=="desktop-server" (
     "%PYCUT_PY%" -m pycut.desktop
-    exit /b %errorlevel%
+    exit /b
 )
 if /i "%~1"=="desktop-worker" (
     "%PYCUT_PY%" -m pycut.desktop --worker "%~2"
-    exit /b %errorlevel%
+    exit /b
 )
 "%PYCUT_PY%" pycut.py %*
 exit /b %errorlevel%

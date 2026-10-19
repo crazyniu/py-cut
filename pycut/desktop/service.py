@@ -86,6 +86,17 @@ class Service:
             return detect_agents()
         if method == "settings.get":
             return {"vision_provider": "codex", "agent_path": "", "vision_model": "", **self.store.settings()}
+        if method == "workbench.get":
+            if p["kind"] not in ("montage", "cover", "dedup"):
+                raise ValueError("未知任务类型")
+            return self.store.settings(p["project_id"]).get("workbench", {}).get(p["kind"], {})
+        if method == "workbench.save":
+            if p["kind"] not in ("montage", "cover", "dedup") or not isinstance(p["values"], dict):
+                raise ValueError("工作台设置无效")
+            with self.jobs._lock:
+                current = self.store.settings(p["project_id"]).get("workbench", {})
+                self.store.save_settings({"workbench": {**current, p["kind"]: p["values"]}}, p["project_id"])
+            return p["values"]
         if method == "settings.save":
             values = p["values"]
             if set(values) - {"vision_provider", "agent_path", "vision_model"}:

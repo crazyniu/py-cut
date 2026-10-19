@@ -92,8 +92,9 @@ def run(args: argparse.Namespace) -> int:
         log(f"[错误] {exc}")
         return 2
 
-    install_signal_handlers()
-    reset_stop()
+    if not getattr(args, "runtime_initialized", False):
+        install_signal_handlers()
+        reset_stop()
     self_check(require_src=False)
     llm = getattr(args, "vision_client", None) or make_llm(
         args.gateway, args.llm_url, args.llm_key, args.llm_model,

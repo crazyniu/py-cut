@@ -64,6 +64,8 @@ def parse_options(kind, values):
                 raise ValueError(f"{name} 必须是布尔值")
             if value:
                 argv.append(flag)
+            elif isinstance(action, argparse.BooleanOptionalAction):
+                argv.append(next(option for option in action.option_strings if option.startswith("--no-")))
         else:
             argv.extend([flag, str(value)])
     try:
@@ -233,6 +235,7 @@ def run_job(request, data_dir, store):
         return _montage(request, data_dir, store)
     kind = request["kind"]
     args = parse_options(kind, request["options"])
+    args.runtime_initialized = True
     args.file = [a["path"] for a in request["inputs"]]
     args.src_dir = None
     args.input_roots = request["input_roots"]
