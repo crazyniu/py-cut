@@ -84,10 +84,12 @@ export function PageHeading({
   title,
   description,
   actions,
+  status,
 }: {
   title: string;
   description?: string;
   actions?: ReactNode;
+  status?: string;
 }) {
   return (
     <Group
@@ -98,9 +100,12 @@ export function PageHeading({
       className="page-heading"
     >
       <Box miw={0}>
-        <Title order={2} size="h3">
-          {title}
-        </Title>
+        <Group gap="sm">
+          <Title order={2} size="h3">
+            {title}
+          </Title>
+          {status && <Status value={status} />}
+        </Group>
         {description && (
           <Text size="sm" c="dimmed" mt={4}>
             {description}
@@ -188,12 +193,12 @@ export function MediaCard({
             </Box>
           )}
           {overlay}
-        </Box>
-        <Box className="media-card-caption">
-          <Text size="sm" fw={600} lineClamp={2} title={title}>
-            {title}
-          </Text>
-          {children}
+          <Box className="media-card-caption">
+            <Text size="sm" fw={600} lineClamp={2} title={title}>
+              {title}
+            </Text>
+            {children}
+          </Box>
         </Box>
       </button>
       {selection && <Box className="thumb-select">{selection}</Box>}

@@ -168,17 +168,21 @@ textarea {
   object-fit: contain;
 }
 .media-card-caption {
+  position: absolute;
+  inset: auto 0 0;
+  z-index: 2;
+  background: rgb(7 14 24 / 90%);
+  color: #edf5ff;
   display: flex;
   flex-direction: column;
   gap: 5px;
   padding: 12px;
-  min-height: 92px;
 }
 .media-card-caption .mantine-Text-root {
   overflow-wrap: anywhere;
 }
 .media-card-caption > :not(:first-child) {
-  color: var(--mantine-color-dimmed);
+  color: #c4cfde;
 }
 .thumbnail-status,
 .thumb-badge {
@@ -232,9 +236,6 @@ textarea {
 .mantine-Table-td {
   font-variant-numeric: tabular-nums;
 }
-.batch-summary {
-  background: var(--mantine-color-dark-7);
-}
 .task-form-options {
   margin-top: -4px;
 }
@@ -270,20 +271,20 @@ textarea {
   border-color: var(--mantine-color-cyan-5);
   color: white;
 }
+.settings-panel {
+  max-width: 920px;
+}
 .settings-form-row {
   display: grid;
-  grid-template-columns: 180px minmax(220px, 1fr);
-  gap: 20px;
+  grid-template-columns: 180px minmax(220px, 1fr) 140px;
+  gap: 16px;
   align-items: end;
-  max-width: 700px;
 }
 .settings-form-row > * {
   width: 100% !important;
 }
 .settings-form-row > .mantine-Button-root {
-  grid-column: 2;
-  justify-self: start;
-  width: auto !important;
+  height: 36px;
 }
 .preview-layout {
   display: grid;
@@ -372,9 +373,6 @@ textarea {
   .preview-layout,
   .settings-form-row {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .settings-form-row > .mantine-Button-root {
-    grid-column: 1;
   }
   .directory-row {
     flex-wrap: wrap;

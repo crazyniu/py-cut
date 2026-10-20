@@ -118,7 +118,7 @@ export default function SettingsPage() {
         </Alert>
       )}
       <Stack gap="lg">
-        <Paper withBorder p="lg">
+        <Paper withBorder p="lg" className="settings-panel">
           <Stack>
             <Group gap="md">
               <Title order={3} size="h5">

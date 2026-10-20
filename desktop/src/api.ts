@@ -175,7 +175,7 @@ export const statusNames: Record<string, string> = {
   offline: "离线",
   queued: "排队中",
   cancelling: "正在停止",
-  running: "运行中",
+  running: "处理中",
   completed: "已完成",
   review: "待复查",
   partial: "部分完成",

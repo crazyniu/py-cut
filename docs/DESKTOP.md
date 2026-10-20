@@ -15,8 +15,8 @@ MP4 files without per-video selection or changing library membership.
 Each job opens its own read-only
 batch view, using a single thumbnail state card for each stable input/variant identifier.
 Cards follow actual worker events and link published outputs by exact output ID;
-encoding percentages use measured FFmpeg media time or frame counts, and unknown
-work remains indeterminate. Waiting, completed, review, failure and cancellation
+the batch status sits beside the page title, and running previews show an in-image
+processing indicator. Task detail has no separate aggregate progress panel or bar. Waiting, completed, review, failure and cancellation
 remain distinct. Internal stages never increase final-video counts. The finished-video
 library groups published outputs by batch and shows thumbnail previews without
 processing progress. Folder actions target the actual batch directories.
@@ -32,7 +32,7 @@ directory management share the page header with matching control heights. Direct
 management and media details open in dialogs. Internal processing graphs, technical
 parameters and routine logs stay out of the interface; failures offer copyable logs. Native window controls and dialogs remain
 system-owned. Libraries, task items and outputs share one 9:16 thumbnail card
-with contained pictures, a top status tag and captions below the image. Library
+with contained pictures, a top status tag and captions over the bottom of the image. Library
 captions include the source folder to distinguish repeated filenames.
 Creation actions align to the right edge of their toolbar. Choice sets with at most two options
 use bordered button groups; larger sets use Select inputs.

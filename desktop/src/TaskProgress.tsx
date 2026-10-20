@@ -8,8 +8,6 @@ import {
   Loader,
   Modal,
   Pagination,
-  Paper,
-  Progress,
   Select,
   Stack,
   Text,
@@ -23,13 +21,7 @@ import {
   openPath,
   rpc,
 } from "./api";
-import {
-  Status,
-  MediaCard,
-  VideoThumbnail,
-  PreviewDetails,
-  report,
-} from "./common";
+import { MediaCard, VideoThumbnail, PreviewDetails, report } from "./common";
 const names: Record<string, string> = {
   queued: "等待处理",
   running: "正在处理",
@@ -122,57 +114,9 @@ export default function TaskProgress({ job }: { job: Job }) {
   );
   const pages = Math.max(1, Math.ceil(filtered.length / 24));
   const shownPage = Math.min(page, pages);
-  const processed =
-    job.completed + job.failed + job.review + (job.skipped || 0);
   const hasError = !!job.error || job.failed > 0 || job.status === "failed";
   return (
     <Stack gap="md">
-      <Paper withBorder p="lg" className="batch-summary">
-        <Group justify="space-between" align="flex-start" gap="md">
-          <Stack gap={8}>
-            <Group gap="sm">
-              <Status value={job.status} />
-              <Text size="sm" fw={500}>
-                {job.status === "queued"
-                  ? "任务已加入队列，将按顺序处理"
-                  : job.status === "cancelling"
-                    ? "正在停止，请等待当前处理退出"
-                    : !terminal(job)
-                      ? job.stage || "正在准备素材…"
-                      : `本批任务已结束 · 已处理 ${processed} / ${job.planned} 个视频`}
-              </Text>
-            </Group>
-            <Text size="sm" c="dimmed">
-              完成 {job.completed} · 待复查 {job.review} · 失败 {job.failed}
-              {!!job.skipped && ` · 跳过 ${job.skipped}`}
-              {terminal(job) &&
-                processed < job.planned &&
-                ` · 未完成 ${job.planned - processed}`}
-            </Text>
-          </Stack>
-          {!terminal(job) && (
-            <Group gap="xs">
-              <Loader size="xs" />
-              <Text size="sm">
-                已处理 {processed} / {job.planned}
-              </Text>
-            </Group>
-          )}
-        </Group>
-        <Progress
-          mt="md"
-          value={job.planned ? (processed / job.planned) * 100 : 0}
-          color={
-            job.status === "failed"
-              ? "red"
-              : job.status === "completed"
-                ? "teal"
-                : "cyan"
-          }
-          animated={job.status === "running"}
-          aria-label="整批视频进度"
-        />
-      </Paper>
       {job.review > 0 && (
         <Alert color="yellow" title="有视频需要复查">
           待复查结果需要检查后再使用，请查看对应视频与处理提示。
@@ -227,24 +171,12 @@ export default function TaskProgress({ job }: { job: Job }) {
       <div className="asset-grid">
         {filtered.slice((shownPage - 1) * 24, shownPage * 24).map((item) => {
           const output = outputs.find((value) => value.id === item.output_id);
-          const current = item.progress;
-          const percentage =
-            item.status === "completed" && output
-              ? 100
-              : item.status === "running" && current?.total
-                ? Math.min(
-                    99,
-                    Math.floor(
-                      ((current.completed || 0) / current.total) * 100,
-                    ),
-                  )
-                : null;
           return (
             <MediaCard
               key={item.id}
               title={item.name}
               label={`${item.name} ${names[item.status] || item.status}`}
-              status={item.status}
+              status={item.status === "running" ? undefined : item.status}
               disabled={!output || output.available === false}
               onOpen={() => output && setPreview(output)}
               thumbnail={
@@ -258,16 +190,13 @@ export default function TaskProgress({ job }: { job: Job }) {
                 item.status === "running" && (
                   <Box className="thumbnail-progress">
                     <Loader size={28} />
-                    <Text fw={600}>
-                      {current?.stage || "处理中"}
-                      {percentage !== null ? ` ${percentage}%` : "…"}
-                    </Text>
+                    <Text fw={600}>处理中</Text>
                   </Box>
                 )
               }
             >
               <Text size="xs">
-                {output ? "点击预览" : names[item.status] || item.status}
+                {output ? output.name : names[item.status] || item.status}
               </Text>
             </MediaCard>
           );

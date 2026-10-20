@@ -85,6 +85,7 @@ export default function ProcessingPage({
     <>
       <PageHeading
         title={selected ? `${kinds[selected.kind]}任务` : "视频处理"}
+        status={selected?.status}
         description={
           selected
             ? dateTime(selected.created_at)
