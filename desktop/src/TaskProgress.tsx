@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Alert,
   Box,
@@ -92,7 +92,7 @@ export function TaskActions({ job }: { job: Job }) {
     </Group>
   );
 }
-export default function TaskProgress({ job }: { job: Job }) {
+export default function TaskProgress({ job, actions }: { job: Job; actions?: ReactNode }) {
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [preview, setPreview] = useState<Output>();
@@ -117,6 +117,24 @@ export default function TaskProgress({ job }: { job: Job }) {
   const hasError = !!job.error || job.failed > 0 || job.status === "failed";
   return (
     <Stack gap="md">
+      <Group gap="xs" align="center" className="page-toolbar">
+        {actions}
+        <Select
+          aria-label="筛选处理状态"
+          w={160}
+          value={filter}
+          allowDeselect={false}
+          onChange={(value) => value && setFilter(value)}
+          data={[
+            { value: "all", label: "全部状态" },
+            ...Object.entries(names).map(([value, label]) => ({
+              value,
+              label,
+            })),
+          ]}
+        />
+      </Group>
+
       {job.review > 0 && (
         <Alert color="yellow" title="有视频需要复查">
           待复查结果需要检查后再使用，请查看对应视频与处理提示。
@@ -149,34 +167,14 @@ export default function TaskProgress({ job }: { job: Job }) {
           </CopyButton>
         </Alert>
       )}
-      <Group gap="md" align="center">
-        <Text size="sm" fw={500}>
-          本批视频 · {items.length} 个
-        </Text>
-        <Select
-          aria-label="筛选处理状态"
-          w={160}
-          value={filter}
-          allowDeselect={false}
-          onChange={(value) => value && setFilter(value)}
-          data={[
-            { value: "all", label: "全部状态" },
-            ...Object.entries(names).map(([value, label]) => ({
-              value,
-              label,
-            })),
-          ]}
-        />
-      </Group>
       <div className="asset-grid">
         {filtered.slice((shownPage - 1) * 24, shownPage * 24).map((item) => {
           const output = outputs.find((value) => value.id === item.output_id);
           return (
             <MediaCard
               key={item.id}
-              title={item.name}
+              title={output?.name || item.name}
               label={`${item.name} ${names[item.status] || item.status}`}
-              status={item.status === "running" ? undefined : item.status}
               disabled={!output || output.available === false}
               onOpen={() => output && setPreview(output)}
               thumbnail={
@@ -187,18 +185,14 @@ export default function TaskProgress({ job }: { job: Job }) {
                 />
               }
               overlay={
-                item.status === "running" && (
+                item.status !== "completed" && (
                   <Box className="thumbnail-progress">
-                    <Loader size={28} />
-                    <Text fw={600}>处理中</Text>
+                    {item.status === "running" && <Loader size={28} />}
+                    <Text fw={600}>{item.status === "running" ? "处理中" : names[item.status] || item.status}</Text>
                   </Box>
                 )
               }
-            >
-              <Text size="xs">
-                {output ? output.name : names[item.status] || item.status}
-              </Text>
-            </MediaCard>
+            />
           );
         })}
       </div>

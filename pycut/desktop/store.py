@@ -105,6 +105,9 @@ class Store:
                 CREATE INDEX IF NOT EXISTS usage_asset ON usage(asset_id, output_id);
                 CREATE INDEX IF NOT EXISTS asset_roots_asset ON asset_roots(asset_id);
             """)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(memberships)")}
+            if "excluded" not in columns:
+                db.execute("ALTER TABLE memberships ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0")
             self._fixed_libraries(db)
 
     @staticmethod
@@ -123,9 +126,10 @@ class Store:
                 for row in rows:
                     if row["id"] == target["id"]:
                         continue
-                    db.execute("""INSERT INTO memberships(library_id,asset_id,removed)
-                        SELECT ?,asset_id,removed FROM memberships WHERE library_id=?
-                        ON CONFLICT(library_id,asset_id) DO UPDATE SET removed=MAX(memberships.removed,excluded.removed)
+                    db.execute("""INSERT INTO memberships(library_id,asset_id,removed,excluded)
+                        SELECT ?,asset_id,removed,excluded FROM memberships WHERE library_id=?
+                        ON CONFLICT(library_id,asset_id) DO UPDATE SET removed=MAX(memberships.removed,excluded.removed),
+                            excluded=MAX(memberships.excluded,excluded.excluded)
                         """, (target["id"], row["id"]))
                     for root in db.execute("SELECT * FROM roots WHERE library_id=?", (row["id"],)).fetchall():
                         prior = db.execute("SELECT id FROM roots WHERE library_id=? AND path=?",
@@ -209,6 +213,13 @@ class Store:
                 item.update(active_count=0, removed_count=0)
                 for count in counts:
                     item["removed_count" if count["removed"] else "active_count"] = count["total"]
+                video_counts = db.execute("""
+                    SELECT COUNT(*), COALESCE(SUM(m.excluded=0),0) FROM memberships m JOIN assets a ON a.id=m.asset_id
+                    WHERE m.library_id=? AND m.removed=0 AND a.kind='video' AND EXISTS (
+                        SELECT 1 FROM asset_roots ar JOIN roots r ON r.id=ar.root_id
+                        WHERE ar.asset_id=a.id AND r.library_id=m.library_id)
+                """, (row["id"],)).fetchone()
+                item["video_count"], item["included_video_count"] = video_counts
                 result.append(item)
             order = {role: index for index, (_, role) in enumerate(DEFAULT_LIBRARIES)}
             return sorted(result, key=lambda item: order[item["role"]])
@@ -268,7 +279,7 @@ class Store:
             total = db.execute(f"SELECT COUNT(*) FROM assets a JOIN memberships m ON m.asset_id=a.id WHERE {condition}",
                                args).fetchone()[0]
             rows = db.execute(f"""
-                SELECT a.*,m.removed,(SELECT COUNT(DISTINCT u.output_id) FROM usage u
+                SELECT a.*,m.removed,m.excluded,(SELECT COUNT(DISTINCT u.output_id) FROM usage u
                     JOIN outputs o ON o.id=u.output_id WHERE u.asset_id=a.id AND o.project_id=?) AS usage_count
                 FROM assets a JOIN memberships m ON m.asset_id=a.id
                 WHERE {condition} ORDER BY {ordering[sort]} LIMIT ? OFFSET ?
@@ -281,6 +292,8 @@ class Store:
         item["available"] = bool(item["available"])
         if "removed" in item:
             item["removed"] = bool(item["removed"])
+        if "excluded" in item:
+            item["excluded"] = bool(item["excluded"])
         item.setdefault("usage_count", 0)
         return item
 
@@ -293,6 +306,20 @@ class Store:
                     raise ValueError("素材不属于此素材库")
                 db.execute("UPDATE memberships SET removed=? WHERE library_id=? AND asset_id=?",
                            (int(removed), library_id, asset_id))
+
+    def set_excluded(self, library_id: str, asset_id: str, excluded: bool) -> None:
+        """Persist the reference inclusion choice without hiding or deleting media."""
+        if type(excluded) is not bool:
+            raise ValueError("排除状态必须为布尔值")
+        with self.connect() as db:
+            library = self.require(db, "libraries", library_id)
+            asset = self.require(db, "assets", asset_id)
+            if library["role"] != "reference" or asset["kind"] != "video":
+                raise ValueError("仅话术视频支持混剪排除")
+            changed = db.execute("UPDATE memberships SET excluded=? WHERE library_id=? AND asset_id=?",
+                                 (int(excluded), library_id, asset_id)).rowcount
+            if not changed:
+                raise ValueError("素材不属于此素材库")
 
     def asset_detail(self, asset_id: str, project_id: str | None = None) -> dict:
         with self.connect() as db:

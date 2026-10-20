@@ -74,6 +74,8 @@ export interface Library {
   }[];
   active_count: number;
   removed_count: number;
+  video_count: number;
+  included_video_count: number;
 }
 export interface Asset {
   id: string;
@@ -88,6 +90,7 @@ export interface Asset {
   active_library_ids?: string[];
   usage_count: number | null;
   removed: boolean;
+  excluded: boolean;
   error?: string;
 }
 export interface Use {
@@ -110,6 +113,7 @@ export interface TaskItem {
 }
 export interface Job {
   items?: TaskItem[];
+  batch_dir?: string;
   skipped?: number;
   id: string;
   project_id: string;

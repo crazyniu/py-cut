@@ -67,6 +67,50 @@ class DesktopJobTests(unittest.TestCase):
             row = db.execute("SELECT request_json FROM desktop_jobs WHERE id=?", (identifier,)).fetchone()
         return json.loads(row[0])
 
+    def test_default_references_follow_inclusion_and_freeze_at_submission(self):
+        second = self.add_asset("reference", "second.mp4")
+        request = {"kind": "montage", "project_id": self.project["id"], "options": {"fission": 2}}
+        frozen = self.manager._snapshot(request)
+        self.assertEqual(frozen["planned"], 4)
+        self.store.set_excluded(self.libraries["reference"]["id"], self.reference["id"], True)
+        job = self.manager.submit(request)
+        frozen = self.stored_request(job["id"])
+        self.assertEqual(frozen["planned"], 2)
+        self.assertEqual([row["id"] for row in frozen["references"]], [second["id"]])
+        with self.assertRaisesRegex(ValueError, "已排除"):
+            self.manager._snapshot(self.request())
+        self.store.set_excluded(self.libraries["reference"]["id"], second["id"], True)
+        self.assertEqual(self.stored_request(job["id"]), frozen)
+        with self.assertRaisesRegex(ValueError, "没有未排除"):
+            self.manager._snapshot(request)
+        self.store.set_excluded(self.libraries["reference"]["id"], second["id"], False)
+        self.assertEqual(self.manager._snapshot(request)["planned"], 2)
+
+    def test_default_reference_pool_is_not_limited_by_gallery_pagination(self):
+        root = Path(self.reference["path"]).parent
+        for index in range(100):
+            (root / f"script-{index}.mp4").write_bytes(b"source")
+        LibraryIndexer(self.store).scan(self.libraries["reference"]["id"])
+        self.assertEqual(self.store.assets(self.libraries["reference"]["id"], limit=24)["total"], 101)
+        frozen = self.manager._snapshot({"kind": "montage", "project_id": self.project["id"]})
+        self.assertEqual(len(frozen["references"]), 101)
+        self.assertEqual(frozen["planned"], 101)
+
+    def test_desktop_batches_have_unique_folders_and_preserve_requested_output_roots(self):
+        for kind in ("montage", "dedup", "cover"):
+            request = {"kind": kind, "project_id": self.project["id"],
+                       "input_dirs": [str(Path(self.background["path"]).parent)],
+                       "options": {"out_dir": str(self.base / "finished")}}
+            first = self.manager.submit(request)
+            second = self.manager.submit(request)
+            self.assertNotEqual(first["batch_dir"], second["batch_dir"])
+            self.assertEqual(Path(first["batch_dir"]).parent, self.base / "finished")
+            self.assertFalse(Path(first["batch_dir"]).exists())
+            self.assertEqual(self.stored_request(first["id"])["batch_dir"], first["batch_dir"])
+        default = self.manager._snapshot({"kind": "dedup", "project_id": self.project["id"],
+                                          "input_dirs": [str(Path(self.background["path"]).parent)]})
+        self.assertEqual(Path(default["batch_dir"]).parent, self.root / "去重")
+
     def test_default_montage_merges_configured_directories_without_reselecting_libraries(self):
         extra = self.root / "more-background"
         extra.mkdir()
@@ -174,7 +218,7 @@ class DesktopJobTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "当前项目"):
             self.manager.submit(self.request(background_library_id=libraries["background"]["id"]))
         self.store.set_removed(self.libraries["reference"]["id"], [self.reference["id"]], True)
-        with self.assertRaisesRegex(ValueError, "话术已移除"):
+        with self.assertRaisesRegex(ValueError, "话术已排除、移除"):
             self.manager.submit(self.request())
         with self.assertRaisesRegex(ValueError, "当前项目"):
             self.manager.submit({"kind": "cover", "project_id": self.project["id"],

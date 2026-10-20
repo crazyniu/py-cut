@@ -6,20 +6,25 @@ Mantine own the ordinary-user forms. Users select materials, quantity and output
 start processing and view results. The video-processing entry lists montage, cover and dedup jobs together, with type
 and activity filters. A compact task table shows type, status, final-video counts
 and results, with twelve batches per page. New jobs select their type and restore
-that type's saved form. Saved reference selections are checked against active library
-associations; removed roots or memberships cannot reappear as runnable selections. Montage asks only
-for reference videos, a shared per-video quantity and an output directory;
+that type's saved quantity and output fields. Montage uses every non-excluded reference
+video in the current project's reference library without a second picker. Inclusion is
+stored per library membership and can be toggled on each reference thumbnail; excluded
+videos stay visible and can be included again. Submission freezes the complete current
+set independently of gallery pagination, search or old saved selections. Montage asks
+for a shared per-video quantity and an output directory;
 material pools merge the project's configured libraries by role. Configured
 optional pools are used automatically; absent pools are skipped. Cover and dedup select folders and recursively process their
 MP4 files without per-video selection or changing library membership.
 Each job opens its own read-only
 batch view, using a single thumbnail state card for each stable input/variant identifier.
 Cards follow actual worker events and link published outputs by exact output ID;
-the batch status sits beside the page title, and running previews show an in-image
-processing indicator. Task detail has no separate aggregate progress panel or bar. Waiting, completed, review, failure and cancellation
-remain distinct. Internal stages never increase final-video counts. The finished-video
-library groups published outputs by batch and shows thumbnail previews without
-processing progress. Folder actions target the actual batch directories.
+running previews show an in-image processing indicator. Completed previews have no
+completion badge. State filters share the top action toolbar. Task detail has no separate aggregate progress panel or bar. Waiting, completed, review, failure and cancellation
+remain distinct. Internal stages never increase final-video counts. Each new desktop task creates its own output subfolder under the chosen root (or the
+command's sibling output root when omitted). CLI output contracts are unchanged.
+The finished-video library presents task folders first; opening a folder shows that
+job's published videos with shared thumbnail previews. Folder actions target actual
+output directories. Historical jobs retain their existing file locations.
 The five system material types (reference, background, PiP, intro and sticker) are
 fixed, with one catalog per type in each project. Users associate multiple recursive
 roots per type instead of creating custom groups. Legacy groups of the same role
@@ -32,8 +37,9 @@ directory management share the page header with matching control heights. Direct
 management and media details open in dialogs. Internal processing graphs, technical
 parameters and routine logs stay out of the interface; failures offer copyable logs. Native window controls and dialogs remain
 system-owned. Libraries, task items and outputs share one 9:16 thumbnail card
-with contained pictures, a top status tag and captions over the bottom of the image. Library
-captions include the source folder to distinguish repeated filenames.
+with contained pictures and captions over the bottom of the image. Unfinished task
+states are shown inside previews. Library captions include source folders only when
+the folder name adds information beyond the filename stem.
 Creation actions align to the right edge of their toolbar. Choice sets with at most two options
 use bordered button groups; larger sets use Select inputs.
 All application modals share a dimmed, blurred backdrop; system pickers stay native.

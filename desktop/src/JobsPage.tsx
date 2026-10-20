@@ -12,6 +12,7 @@ import {
 import {
   IconArrowLeft,
   IconFolderOpen,
+  IconFolder,
   IconRefresh,
   IconSearch,
 } from "@tabler/icons-react";
@@ -80,12 +81,16 @@ export default function JobsPage({
     setDirectory(null);
   }, [selectedId, search, filter]);
   const detail = jobs.find((job) => job.id === selectedId);
+  function folderName(job: Job) {
+    const paths = [...new Set((job.outputs || []).map((output) => output.path.replace(/[\\/][^\\/]+$/, "")))];
+    return (job.batch_dir || (paths.length === 1 ? paths[0] : "")).split(/[\\/]/).pop() || `${kinds[job.kind]} · ${dateTime(job.created_at)}`;
+  }
   const query = search.trim().toLocaleLowerCase();
   const batches = jobs.filter(
     (job) =>
       job.outputs?.length &&
       (filter === "all" || job.kind === filter) &&
-      (!query ||
+      (!query || folderName(job).toLocaleLowerCase().includes(query) ||
         job.outputs.some((output) =>
           output.name.toLocaleLowerCase().includes(query),
         )),
@@ -112,11 +117,11 @@ export default function JobsPage({
   return (
     <>
       <PageHeading
-        title="成片库"
+        title={detail ? folderName(detail) : "成片库"}
         description={
           detail
             ? `${kinds[detail.kind]} · ${dateTime(detail.created_at)}`
-            : "按处理批次查看已生成的视频。"
+            : "每个任务一个文件夹，打开查看本次生成的视频。"
         }
       />
       <Group gap="xs" mb="md" className="page-toolbar">
@@ -149,7 +154,7 @@ export default function JobsPage({
         )}
         <TextInput
           aria-label="搜索成片"
-          placeholder="搜索成片名称"
+          placeholder={selectedId ? "搜索成片名称" : "搜索文件夹或成片"}
           w={180}
           value={search}
           onChange={(event) => setSearch(event.currentTarget.value)}
@@ -185,7 +190,7 @@ export default function JobsPage({
           刷新
         </Button>
         <Text size="sm" c="dimmed">
-          {selectedId ? `${count} 支成片` : `${count} 个批次`}
+          {selectedId ? `${count} 支成片` : `${count} 个文件夹`}
         </Text>
       </Group>
       {error && (
@@ -224,29 +229,15 @@ export default function JobsPage({
           ))}
         </div>
       ) : (
-        <div className="task-grid">
-          {batches.slice((shownPage - 1) * 24, shownPage * 24).map((job) => {
-            const output =
-              job.outputs?.find((item) => item.available !== false) ||
-              job.outputs?.[0];
-            return (
-              <MediaCard
-                key={job.id}
-                title={`${kinds[job.kind]} · ${job.outputs?.length} 支成片`}
-                label={`查看${kinds[job.kind]}成片 ${dateTime(job.created_at)}`}
-                onOpen={() => openBatch(job)}
-                thumbnail={
-                  <VideoThumbnail
-                    id={output?.id}
-                    output
-                    available={output?.available !== false}
-                  />
-                }
-              >
-                <Text size="xs">{dateTime(job.created_at)}</Text>
-              </MediaCard>
-            );
-          })}
+        <div className="batch-grid">
+          {batches.slice((shownPage - 1) * 24, shownPage * 24).map((job) => (
+            <button className="batch-folder" key={job.id} onClick={() => openBatch(job)} aria-label={`打开文件夹 ${folderName(job)}`}>
+              <IconFolder size={46} stroke={1.4} aria-hidden="true" />
+              <Text component="span" size="sm" fw={600} lineClamp={2}>{folderName(job)}</Text>
+              <Text component="span" size="xs" c="dimmed">{kinds[job.kind]} · {job.outputs?.length} 支成片</Text>
+              <Text component="span" size="xs" c="dimmed">{dateTime(job.created_at)}</Text>
+            </button>
+          ))}
         </div>
       )}
       {pages > 1 && (

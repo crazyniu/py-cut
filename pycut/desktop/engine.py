@@ -154,7 +154,7 @@ def _montage(request, data_dir, store):
     args = parse_options("montage", options)
     self_check(require_src=False)
     root = Path(request["output_dir"])
-    batch = montage_batch(root)
+    batch = Path(request["batch_dir"]) if request.get("batch_dir") else montage_batch(root)
     batch.mkdir(parents=True, exist_ok=False)
     pools = request["pools"]
     material_files = {role: [Path(a["path"]) for a in items]
@@ -255,6 +255,10 @@ def run_job(request, data_dir, store):
         return _montage(request, data_dir, store)
     kind = request["kind"]
     args = parse_options(kind, request["options"])
+    if request.get("batch_dir"):
+        batch = Path(request["batch_dir"])
+        batch.mkdir(parents=True, exist_ok=False)
+        args.out_dir = str(batch)
     args.runtime_initialized = True
     args.file = [a["path"] for a in request["inputs"]]
     args.src_dir = None

@@ -85,7 +85,6 @@ export default function ProcessingPage({
     <>
       <PageHeading
         title={selected ? `${kinds[selected.kind]}任务` : "视频处理"}
-        status={selected?.status}
         description={
           selected
             ? dateTime(selected.created_at)
@@ -100,7 +99,7 @@ export default function ProcessingPage({
           </Button>
         }
       />
-      <Group gap="xs" mb="md" className="page-toolbar">
+      {!selected && <Group gap="xs" mb="md" className="page-toolbar">
         {selectedId ? (
           <Button
             variant="default"
@@ -140,7 +139,6 @@ export default function ProcessingPage({
           </>
         )}
 
-        {selected && <TaskActions key={selected.id} job={selected} />}
         <Button
           variant="default"
           leftSection={<IconRefresh size={16} />}
@@ -153,7 +151,7 @@ export default function ProcessingPage({
             {visible.length} 个任务{active ? ` · ${active} 个处理中或排队` : ""}
           </Text>
         )}
-      </Group>
+      </Group>}
       {error && (
         <Alert color="red" mb="md">
           {error}
@@ -162,7 +160,11 @@ export default function ProcessingPage({
       {!loaded ? (
         <LoadingPage />
       ) : selected ? (
-        <TaskProgress key={selected.id} job={selected} />
+        <TaskProgress key={selected.id} job={selected} actions={<>
+          <Button variant="default" leftSection={<IconArrowLeft size={16} />} onClick={() => setSelectedId(undefined)}>全部任务</Button>
+          <TaskActions job={selected} />
+          <Button variant="default" leftSection={<IconRefresh size={16} />} onClick={load}>刷新</Button>
+        </>} />
       ) : !visible.length ? (
         <Empty
           title={jobs.length ? "暂无符合条件的任务" : "还没有处理任务"}

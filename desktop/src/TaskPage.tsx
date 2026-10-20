@@ -4,7 +4,6 @@ import {
   Alert,
   Button,
   Group,
-  Loader,
   MultiSelect,
   NumberInput,
   TextInput,
@@ -18,7 +17,6 @@ import {
   kinds,
   message,
   rpc,
-  type Asset,
   type Job,
   type JobKind,
   type Library,
@@ -45,11 +43,6 @@ export default function TaskPage({
   onBusyChange: (busy: boolean) => void;
 }) {
   const [libraries, setLibraries] = useState<Library[]>([]);
-  const [assets, setAssets] = useState<Asset[]>([]);
-  const [selection, setSelection] = useState<string[]>([]);
-  const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [totalAssets, setTotalAssets] = useState(0);
   const [count, setCount] = useState<number | string>(1);
   const [output, setOutput] = useState("");
   const [folders, setFolders] = useState<string[]>([]);
@@ -58,7 +51,6 @@ export default function TaskPage({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
-  const [staleCount, setStaleCount] = useState(0);
   const skipFirstSave = useRef(true);
   const save = useDebouncedCallback(
     (values: Record<string, unknown>) => {
@@ -86,20 +78,7 @@ export default function TaskPage({
           ])
         : Promise.resolve(null),
     ])
-      .then(async ([items, saved, settings]) => {
-        const selected = Array.isArray(saved.selection)
-          ? saved.selection.filter(
-              (value): value is string => typeof value === "string",
-            )
-          : [];
-        const restored = await Promise.all(
-          selected.map((asset_id) =>
-            rpc<Asset>("assets.detail", {
-              asset_id,
-              project_id: project.id,
-            }).catch(() => null),
-          ),
-        );
+      .then(([items, saved, settings]) => {
         if (disposed) return;
         setLibraries(items);
         setFolders(
@@ -115,19 +94,6 @@ export default function TaskPage({
                 ),
               ],
         );
-        const references = new Set(
-          items
-            .filter((item) => item.role === "reference")
-            .map((item) => item.id),
-        );
-        const valid = restored.filter(
-          (item): item is Asset =>
-            item !== null &&
-            Boolean(item.active_library_ids?.some((id) => references.has(id))),
-        );
-        setAssets(valid);
-        setSelection(valid.map((item) => item.id));
-        setStaleCount(selected.length - valid.length);
         if (typeof saved.fission === "number") setCount(saved.fission);
         if (typeof saved.out_dir === "string") setOutput(saved.out_dir);
         if (settings)
@@ -153,87 +119,28 @@ export default function TaskPage({
       return;
     }
     save({
-      selection,
       fission: Number(count) || 1,
       out_dir: output,
       input_dirs: folders,
     });
-  }, [ready, selection, count, output, folders, save]);
-  useEffect(() => {
-    if (!ready || kind !== "montage") return;
-    let disposed = false;
-    const timeout = window.setTimeout(() => {
-      setLoading(true);
-      const sources = libraries.filter(
-        (item) =>
-          item.role === (kind === "montage" ? "reference" : "background"),
-      );
-      Promise.all(
-        sources.map((library) =>
-          rpc<{ items: Asset[]; total: number }>("assets.list", {
-            library_id: library.id,
-            query: search,
-            removed: false,
-            sort: "name",
-            offset: 0,
-            limit: 100,
-            kind: "video",
-          }),
-        ),
-      )
-        .then((results) => {
-          if (disposed) return;
-          const found = [
-            ...new Map(
-              results
-                .flatMap((result) => result.items)
-                .map((asset) => [asset.id, asset]),
-            ).values(),
-          ];
-          setAssets((previous) => [
-            ...previous.filter(
-              (asset) =>
-                selection.includes(asset.id) &&
-                !found.some((next) => next.id === asset.id),
-            ),
-            ...found,
-          ]);
-          setTotalAssets(
-            results.reduce((total, result) => total + result.total, 0),
-          );
-        })
-        .catch((reason) => {
-          if (!disposed) setError(message(reason));
-        })
-        .finally(() => {
-          if (!disposed) setLoading(false);
-        });
-    }, 250);
-    return () => {
-      disposed = true;
-      window.clearTimeout(timeout);
-    };
-  }, [ready, libraries, kind, search, selection]);
-  const total = selection.length * Number(count || 0);
-  const offline =
-    kind === "montage" &&
-    assets.some((asset) => selection.includes(asset.id) && !asset.available);
+  }, [ready, count, output, folders, save]);
+  const referenceCount = libraries.reduce(
+    (total, library) => total + (library.role === "reference" ? library.included_video_count : 0), 0,
+  );
+  const total = referenceCount * Number(count || 0);
   const backgroundReady = libraries.some(
     (library) => library.role === "background" && library.active_count > 0,
   );
-  const referenceReady = libraries.some(
-    (library) => library.role === "reference" && library.active_count > 0,
-  );
+  const referenceReady = referenceCount > 0;
   const configured =
     visionReady && (kind !== "montage" || (backgroundReady && referenceReady));
   const canSubmit =
     ready &&
     configured &&
     !submitting &&
-    !offline &&
     (kind === "montage"
       ? Boolean(output.trim()) &&
-        selection.length > 0 &&
+        referenceCount > 0 &&
         Number.isInteger(Number(count)) &&
         Number(count) >= 1 &&
         Number(count) <= 99
@@ -249,7 +156,6 @@ export default function TaskPage({
         kind,
         ...(kind === "montage"
           ? {
-              reference_ids: selection,
               options: { fission: Number(count), out_dir: output.trim() },
             }
           : {
@@ -286,9 +192,7 @@ export default function TaskPage({
           {!visionReady
             ? "字幕擦除需要已登录的 Codex 和已保存的识别模型。"
             : !referenceReady
-              ? staleCount
-                ? `原先选择的 ${staleCount} 个话术已不在当前素材库，请先添加话术目录。`
-                : "先在素材库添加话术视频目录。"
+              ? "话术库没有未排除的视频，请先在素材库选中话术。"
               : "先在素材库配置背景切片目录。"}
           <Button
             variant="subtle"
@@ -301,39 +205,17 @@ export default function TaskPage({
       )}
       {ready && (
         <>
-          {kind === "montage" && referenceReady && staleCount > 0 && (
-            <Alert color="yellow">
-              原先选择的 {staleCount} 个话术已不在当前素材库，请重新选择。
-            </Alert>
-          )}
           <Text size="sm" c="dimmed">
             {kind === "montage"
-              ? "选择话术视频，设置每支话术的生成数量，再选择成片保存位置。"
+              ? "自动使用话术库中全部未排除的视频，设置每支话术的生成数量和保存位置。"
               : "选择处理文件夹，自动包含所有子文件夹中的 MP4。源视频会保留。"}
           </Text>
           {kind === "montage" ? (
             <>
-              <MultiSelect
-                label="话术视频"
-                disabled={submitting}
-                nothingFoundMessage="未找到视频，请调整搜索或前往素材库添加话术目录。"
-                placeholder="搜索并多选话术视频"
-                data={assets
-                  .filter((asset) => asset.kind === "video")
-                  .map((asset) => ({
-                    value: asset.id,
-                    label: asset.path.split(/[\\/]/).slice(-2).join(" / "),
-                    disabled: !asset.available,
-                  }))}
-                value={selection}
-                onChange={setSelection}
-                searchable
-                searchValue={search}
-                onSearchChange={setSearch}
-                hidePickedOptions
-                maxDropdownHeight={220}
-                rightSection={loading ? <Loader size={14} /> : undefined}
-              />
+              <Group justify="space-between">
+                <Text size="sm">已选 {referenceCount} 个话术</Text>
+                <Button variant="subtle" size="xs" onClick={onLibrary} disabled={submitting}>管理话术</Button>
+              </Group>
               <NumberInput
                 label="每个视频生成数量"
                 description="每支所选话术生成 1–99 支独立成片。"
@@ -345,11 +227,6 @@ export default function TaskPage({
                 value={count}
                 onChange={setCount}
               />
-              {totalAssets > 100 && (
-                <Text size="xs" c="dimmed">
-                  输入名称查找更多视频。
-                </Text>
-              )}
               <Text size="xs" c="dimmed">
                 自动使用项目中的背景切片
                 {libraries.some(
@@ -405,8 +282,8 @@ export default function TaskPage({
               </Group>
               <Text size="xs" c="dimmed">
                 {output.trim()
-                  ? "结果保存到下方指定目录。"
-                  : `结果保存到各输入目录同级的“${kind === "cover" ? "字幕查重" : "去重"}”目录。`}
+                  ? "每次任务在下方目录内创建独立文件夹。"
+                  : `每次任务在首个输入目录同级的“${kind === "cover" ? "字幕查重" : "去重"}”目录内创建独立文件夹。`}
               </Text>
             </>
           )}
@@ -416,7 +293,7 @@ export default function TaskPage({
             description={
               kind === "montage"
                 ? "本次任务会在此目录内创建独立批次文件夹。"
-                : "可选；留空使用上述默认目录。"
+                : "每次任务创建独立文件夹；留空使用源目录同级位置。"
             }
             placeholder={
               kind === "montage" ? "选择成片保存位置" : "留空时保存到源目录同级"
@@ -442,11 +319,6 @@ export default function TaskPage({
               </Button>
             }
           />
-          {offline && (
-            <Text c="red" size="sm">
-              所选视频已离线，请重新选择。
-            </Text>
-          )}
         </>
       )}
       <Group justify="flex-end" gap="sm" mt="sm" className="task-form-footer">
@@ -455,7 +327,7 @@ export default function TaskPage({
             {" "}
             <Text size="sm" c="dimmed" mr="auto">
               {kind === "montage"
-                ? `已选 ${selection.length} 个视频 · 共生成 ${total} 支`
+                ? `已选 ${referenceCount} 个话术 · 共生成 ${total} 支`
                 : `已选 ${folders.length} 个文件夹`}
             </Text>
           </>

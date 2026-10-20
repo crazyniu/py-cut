@@ -54,6 +54,8 @@ class Service:
             return self.indexer.scan(p["library_id"], p.get("roots"))
         if method == "assets.list":
             return self.store.assets(**p)
+        if method == "assets.set_excluded":
+            return self.store.set_excluded(p["library_id"], p["asset_id"], p["excluded"])
         if method in ("assets.remove", "assets.restore"):
             return self.store.set_removed(p["library_id"], p["asset_ids"], method == "assets.remove")
         if method == "assets.detail":

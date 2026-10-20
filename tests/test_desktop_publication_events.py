@@ -71,9 +71,11 @@ class DesktopPublicationTests(unittest.TestCase):
         self.manager._update(job["id"], status="running")
         return job
 
-    def run_job(self, job):
+    def run_job(self, job, *, legacy=False):
         with self.store.connect() as db:
             request = json.loads(db.execute("SELECT request_json FROM desktop_jobs WHERE id=?", (job["id"],)).fetchone()[0])
+        if legacy:
+            request.pop("batch_dir", None)
         def consume(event, payload):
             self.manager._line(job["id"], "@pycut-desktop " + json.dumps({"event": event, "payload": payload}))
         with patch.dict(os.environ), patch("sys.stdin", io.StringIO()), patch(
@@ -118,13 +120,24 @@ class DesktopPublicationTests(unittest.TestCase):
         identity = engine.signature(target)
         job = self.submit("cover")
         with self.cover_responses("review"):
-            detail = self.run_job(job)
+            detail = self.run_job(job, legacy=True)
         self.assertEqual(engine.signature(target), identity)
         self.assertEqual(detail["status"], "review")
         self.assertEqual(detail["review"], 1)
         self.assertEqual(detail["outputs"], [])
         self.assertEqual(detail["items"][0]["status"], "review")
         self.assertFalse(detail["items"][0]["output_id"])
+
+    def test_uncertain_cover_in_new_batch_is_linked_for_review_without_false_completion(self):
+        job = self.submit("cover")
+        with self.cover_responses("review"):
+            detail = self.run_job(job)
+        self.assertEqual(detail["status"], "review")
+        self.assertEqual(detail["completed"], 0)
+        self.assertEqual(detail["items"][0]["status"], "review")
+        self.assertEqual(len(detail["outputs"]), 1)
+        self.assertEqual(Path(detail["outputs"][0]["path"]).parent, Path(job["batch_dir"]))
+        self.assertEqual(Path(detail["outputs"][0]["path"]).read_bytes(), Path(self.asset["path"]).read_bytes())
 
     def test_published_below_gate_dedup_is_registered_for_review_and_linked_to_its_item(self):
         job = self.submit("dedup", no_report=True)
@@ -133,6 +146,7 @@ class DesktopPublicationTests(unittest.TestCase):
         self.assertEqual((detail["status"],detail["review"],detail["failed"]), ("review",1,0))
         self.assertEqual(len(detail["outputs"]), 1)
         output, item = detail["outputs"][0], detail["items"][0]
+        self.assertEqual(Path(output["path"]).parent, Path(job["batch_dir"]))
         self.assertEqual((item["id"],item["status"],item["output_id"]), (self.asset["id"],"review",output["id"]))
         self.assertEqual(Path(output["path"]).read_bytes(), b"new below-gate output" * 100)
         self.assertEqual(self.manager.detail(job["id"])["items"][0]["output_id"], output["id"])

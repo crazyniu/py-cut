@@ -37,14 +37,20 @@ try {
     assert.match(html, /aria-label="Preview video"/);
   });
 
-  test('batch state belongs in the heading and processing stays in the preview', () => {
-    const header = render(PageHeading, { title: '视频去重任务', status: 'cancelled' });
-    assert.match(header, /已取消/);
+  test('processing stays in the preview without decorative completion labels', () => {
+    const header = render(PageHeading, { title: '视频去重任务' });
+    assert.doesNotMatch(header, /status-tag/);
     const html = render(TaskProgress, { job: { id: 'running', status: 'running', kind: 'dedup', planned: 1, completed: 0, failed: 0, review: 0,
       items: [{ id: 'clip', name: 'clip.mp4', path: '/clip.mp4', status: 'running', progress: { stage: '编码', completed: 25, total: 100 } }] } });
     assert.match(html, /thumbnail-progress/);
     assert.match(html, /处理中/);
-    assert.doesNotMatch(html, /batch-summary|整批视频进度|已处理|25%|编码/);
+    assert.doesNotMatch(html, /batch-summary|本批视频|整批视频进度|已处理|25%|编码/);
+    const completed = render(TaskProgress, { job: { id: 'completed', status: 'completed', planned: 1, completed: 1, failed: 0, review: 0,
+      items: [{ id: 'clip', name: 'clip.mp4', output_id: 'out', status: 'completed' }],
+      outputs: [{ id: 'out', name: 'clip_1.mp4', path: '/clip_1.mp4' }] } });
+    assert.doesNotMatch(completed, /status-tag|thumbnail-progress/);
+    assert.match(completed, /title="clip_1.mp4"/);
+    assert.doesNotMatch(completed, /title="clip.mp4"/);
   });
 
 } finally {

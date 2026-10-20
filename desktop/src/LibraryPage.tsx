@@ -211,7 +211,9 @@ export default function LibraryPage({ project }: { project: Project }) {
       if (method === "libraries.remove_root" && root === params.path)
         setRoot(null);
       await loadLibraries();
-      setRevision((value) => value + 1);
+      if (method === "assets.set_excluded") {
+        setAssets((items) => items.map((asset) => asset.id === params.asset_id ? { ...asset, excluded: Boolean(params.excluded) } : asset));
+      } else setRevision((value) => value + 1);
     } catch (error) {
       if (method.startsWith("libraries.")) showDirectoryError(message(error));
       else report(error);
@@ -219,6 +221,17 @@ export default function LibraryPage({ project }: { project: Project }) {
       setBusy(false);
       setScanned(null);
     }
+  }
+  function referenceToggle(asset: Asset) {
+    if (library?.role !== "reference" || asset.kind !== "video" || removed !== "active") return null;
+    return (
+      <Button size="compact-xs" variant="filled" color={asset.excluded ? "dark" : "teal"}
+        disabled={busy} aria-pressed={!asset.excluded}
+        aria-label={`${asset.excluded ? "选中" : "排除"} ${asset.name}`}
+        onClick={() => mutate("assets.set_excluded", { library_id: library.id, asset_id: asset.id, excluded: !asset.excluded })}>
+        {asset.excluded ? "已排除" : "已选中"}
+      </Button>
+    );
   }
   async function addRoots() {
     if (!library) return;
@@ -280,7 +293,7 @@ export default function LibraryPage({ project }: { project: Project }) {
           w={170}
           data={libraries.map((item) => ({
             value: item.id,
-            label: `${roles[item.role]} · ${item.active_count} 个`,
+            label: `${roles[item.role]} · ${item.role === "reference" ? item.video_count : item.active_count} 个`,
           }))}
           value={libraryId}
           onChange={setLibraryId}
@@ -414,7 +427,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                   <Group gap="md">
                     <Checkbox
                       size="xs"
-                      label="选择本页"
+                      label="批量选择本页"
                       checked={assets.every((a) => selected.includes(a.id))}
                       indeterminate={
                         assets.some((a) => selected.includes(a.id)) &&
@@ -442,6 +455,9 @@ export default function LibraryPage({ project }: { project: Project }) {
                   </Group>
                 )}
               </Group>
+              {library.role === "reference" && removed === "active" && (
+                <Text size="xs" c="dimmed" mb="md">混剪使用全部未排除话术 · 已选 {library.included_video_count} 个</Text>
+              )}
               {selected.length > 0 && (
                 <Paper withBorder p="xs" mb="md">
                   <Group justify="space-between">
@@ -531,21 +547,25 @@ export default function LibraryPage({ project }: { project: Project }) {
                     <MediaCard
                       key={asset.id}
                       active={detailId === asset.id}
+                      action={referenceToggle(asset)}
+                      excluded={asset.excluded}
                       title={asset.name}
                       label={`查看 ${asset.name}`}
                       onOpen={() => setDetailId(asset.id)}
                       thumbnail={<AssetThumb asset={asset} />}
                       selection={
                         <Checkbox
-                          aria-label={`选择 ${asset.name}`}
+                          aria-label={`批量选择 ${asset.name}`}
                           checked={selected.includes(asset.id)}
                           onChange={() => toggle(asset.id)}
                         />
                       }
                     >
-                      <Text size="xs" lineClamp={1} title={asset.path}>
-                        {asset.path.split(/[\\/]/).slice(-2, -1)[0]}
-                      </Text>
+                      {asset.path.split(/[\\/]/).slice(-2, -1)[0] !== asset.name.replace(/\.[^.]+$/, "") && (
+                        <Text size="xs" lineClamp={1} title={asset.path}>
+                          {asset.path.split(/[\\/]/).slice(-2, -1)[0]}
+                        </Text>
+                      )}
                       <Text size="xs">
                         {asset.width && asset.height
                           ? `${asset.width}×${asset.height}`
@@ -579,7 +599,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                         <Table.Tr key={asset.id}>
                           <Table.Td>
                             <Checkbox
-                              aria-label={`选择 ${asset.name}`}
+                              aria-label={`批量选择 ${asset.name}`}
                               checked={selected.includes(asset.id)}
                               onChange={() => toggle(asset.id)}
                             />
@@ -599,6 +619,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                             >
                               {asset.path}
                             </Text>
+                            {referenceToggle(asset)}
                             {!asset.available && <Status value="offline" />}
                           </Table.Td>
                           <Table.Td>{duration(asset.duration)}</Table.Td>

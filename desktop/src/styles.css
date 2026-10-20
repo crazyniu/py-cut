@@ -406,3 +406,13 @@ textarea {
 .page-toolbar .mantine-Input-input {
   height: 36px;
 }
+
+.thumb-action { position: absolute; top: 8px; left: 8px; z-index: 4; }
+.asset-card.excluded .asset-thumb { opacity: .4; }
+.asset-card:has(.thumb-action) .thumb-badge { top: 36px; }
+
+.batch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.batch-folder { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 20px; border: 1px solid var(--mantine-color-default-border); border-radius: 4px; background: var(--mantine-color-body); color: inherit; text-align: left; font: inherit; cursor: pointer; }
+.batch-folder > svg { color: var(--mantine-color-cyan-5); margin-bottom: 4px; }
+.batch-folder:hover { background: var(--mantine-color-default-hover); }
+.batch-folder:focus-visible { outline: 2px solid var(--mantine-color-cyan-5); outline-offset: 2px; }

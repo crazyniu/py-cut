@@ -58,6 +58,46 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.update_project(other["id"], unknown=True)
 
+    def test_reference_exclusion_is_visible_persistent_and_project_scoped(self):
+        path = self.file()
+        self.scan()
+        asset = self.assets()["items"][0]
+        reference = self.store.libraries(self.project["id"])[0]
+        self.store.add_roots(reference["id"], [str(self.root)])
+        self.indexer.scan(reference["id"])
+        self.store.set_excluded(reference["id"], asset["id"], True)
+        self.indexer.scan(reference["id"])
+        reopened = Store(self.base / "app")
+        self.assertTrue(reopened.assets(reference["id"])["items"][0]["excluded"])
+        self.assertEqual(reopened.libraries(self.project["id"])[0]["included_video_count"], 0)
+        self.assertTrue(path.exists())
+        other = reopened.create_project("Other")
+        other_reference = reopened.libraries(other["id"])[0]
+        reopened.add_roots(other_reference["id"], [str(self.root)])
+        LibraryIndexer(reopened).scan(other_reference["id"])
+        self.assertFalse(reopened.assets(other_reference["id"])["items"][0]["excluded"])
+        self.assertEqual(reopened.libraries(other["id"])[0]["included_video_count"], 1)
+        reopened.set_excluded(reference["id"], asset["id"], False)
+        self.assertEqual(reopened.libraries(self.project["id"])[0]["included_video_count"], 1)
+        with self.assertRaises(ValueError):
+            reopened.set_excluded(self.library["id"], asset["id"], True)
+        with self.assertRaises(ValueError):
+            reopened.set_excluded(reference["id"], asset["id"], "false")
+        reopened.remove_root(reference["id"], str(self.root))
+        self.assertEqual(reopened.libraries(self.project["id"])[0]["included_video_count"], 0)
+
+    def test_legacy_memberships_migrate_to_included_without_changing_removals(self):
+        self.file()
+        self.scan()
+        asset = self.assets()["items"][0]
+        self.store.set_removed(self.library["id"], [asset["id"]], True)
+        with self.store.connect() as db:
+            db.execute("ALTER TABLE memberships DROP COLUMN excluded")
+        migrated = Store(self.base / "app")
+        row = migrated.assets(self.library["id"], removed=True)["items"][0]
+        self.assertTrue(row["removed"])
+        self.assertFalse(row["excluded"])
+
     def test_detail_reports_only_current_active_library_associations(self):
         self.file()
         self.scan()

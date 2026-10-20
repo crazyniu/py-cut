@@ -101,7 +101,7 @@ class LibraryIndexer:
                                 # A root removed during scanning must stay removed.
                                 if not db.execute("SELECT 1 FROM roots WHERE id=?", (root["id"],)).fetchone():
                                     break
-                                db.execute("INSERT OR IGNORE INTO memberships VALUES (?,?,0)",
+                                db.execute("INSERT OR IGNORE INTO memberships(library_id,asset_id,removed) VALUES (?,?,0)",
                                            (library_id, identifier))
                                 db.execute("INSERT OR IGNORE INTO asset_roots VALUES (?,?)", (root["id"], identifier))
                             indexed.add(identifier)

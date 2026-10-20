@@ -84,12 +84,10 @@ export function PageHeading({
   title,
   description,
   actions,
-  status,
 }: {
   title: string;
   description?: string;
   actions?: ReactNode;
-  status?: string;
 }) {
   return (
     <Group
@@ -104,7 +102,6 @@ export function PageHeading({
           <Title order={2} size="h3">
             {title}
           </Title>
-          {status && <Status value={status} />}
         </Group>
         {description && (
           <Text size="sm" c="dimmed" mt={4}>
@@ -162,6 +159,8 @@ export function MediaCard({
   status,
   overlay,
   selection,
+  action,
+  excluded,
   active,
   disabled,
   onOpen,
@@ -173,12 +172,14 @@ export function MediaCard({
   status?: string;
   overlay?: ReactNode;
   selection?: ReactNode;
+  action?: ReactNode;
+  excluded?: boolean;
   active?: boolean;
   disabled?: boolean;
   onOpen: () => void;
 }) {
   return (
-    <Paper withBorder className={`asset-card ${active ? "active" : ""}`}>
+    <Paper withBorder className={`asset-card ${active ? "active" : ""} ${excluded ? "excluded" : ""}`}>
       <button
         className="asset-open"
         onClick={onOpen}
@@ -201,6 +202,7 @@ export function MediaCard({
           </Box>
         </Box>
       </button>
+      {action && <Box className="thumb-action">{action}</Box>}
       {selection && <Box className="thumb-select">{selection}</Box>}
     </Paper>
   );

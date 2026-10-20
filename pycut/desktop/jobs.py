@@ -153,20 +153,24 @@ class JobManager:
         if kind == "montage":
             options.setdefault("intro_enabled", any(library["role"] == "intro" and library["roots"]
                                                      for library in libraries.values()))
-            ids = request.get("reference_ids", [])
-            if not isinstance(ids, list) or not ids:
+            ids = request.get("reference_ids")
+            if "reference_ids" in request and (not isinstance(ids, list) or not ids):
                 raise ValueError("请至少选择一个话术视频")
             with self.store.connect() as db:
                 references = [dict(row) for row in db.execute("""
                     SELECT DISTINCT a.* FROM assets a JOIN memberships m ON m.asset_id=a.id
                     JOIN libraries l ON l.id=m.library_id WHERE l.project_id=?
-                    AND l.role='reference' AND m.removed=0 AND EXISTS (
+                    AND l.role='reference' AND m.removed=0 AND m.excluded=0 AND EXISTS (
                         SELECT 1 FROM asset_roots ar JOIN roots r ON r.id=ar.root_id
                         WHERE ar.asset_id=a.id AND r.library_id=l.id)
                 """, (project["id"],))]
             by_id = {a["id"]: a for a in references if a["kind"] == "video"}
+            if ids is None:
+                ids = list(by_id)
+            if not ids:
+                raise ValueError("话术库没有未排除的视频，请先在素材库选中话术")
             if any(identifier not in by_id for identifier in ids):
-                raise ValueError("话术已移除、离线或不属于当前项目")
+                raise ValueError("话术已排除、移除、离线或不属于当前项目")
             count = options.get("fission", 1)
             if type(count) is not int or not 1 <= count <= 99:
                 raise ValueError("每个话术生成数量必须为 1～99")
@@ -224,6 +228,13 @@ class JobManager:
             frozen.update(inputs=inputs, input_roots=input_roots, planned=len(inputs),
                           agent_settings=self.store.settings())
             used = inputs
+        # Desktop batches own separate folders; CLI sibling output behavior stays in the commands.
+        from ..core.output_paths import sibling
+        output_root = (Path(frozen["output_dir"]) if kind == "montage" else
+                       Path(options["out_dir"]).expanduser().resolve() if options.get("out_dir") else
+                       sibling(Path(frozen["input_roots"][0]), "字幕查重" if kind == "cover" else "去重"))
+        label = {"montage": "混剪", "cover": "字幕擦除", "dedup": "视频去重"}[kind]
+        frozen["batch_dir"] = str(output_root / (label + "-" + datetime.now().strftime("%Y%m%d-%H%M%S-") + frozen["id"][:8]))
         snapshots = {}
         for asset in used:
             with Path(asset["path"]).open("rb"):
@@ -259,7 +270,8 @@ class JobManager:
                 raise ValueError("任务不存在")
             job = dict(row)
             job.update(json.loads(job.pop("stats_json")))
-            job.pop("request_json")
+            frozen = json.loads(job.pop("request_json"))
+            job["batch_dir"] = frozen.get("batch_dir", "")
             job["items"] = []
             for item in db.execute("SELECT * FROM desktop_items WHERE job_id=? ORDER BY rowid", (job_id,)):
                 value = dict(item)
