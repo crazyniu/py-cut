@@ -183,4 +183,12 @@ if not config.key_ready():
 " 2>/dev/null || echo "[pycut] 警告: 无法读取网关配置，请检查 .env"
 
 # 6. Delegate to the unified CLI/TUI entry point and preserve its exit status.
+if [ "${1:-}" = desktop-server ]; then
+  shift
+  exec "$PY" -m pycut.desktop "$@"
+fi
+if [ "${1:-}" = desktop-worker ]; then
+  shift
+  exec "$PY" -m pycut.desktop --worker "$@"
+fi
 exec "$PY" pycut.py "$@"

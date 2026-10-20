@@ -5,6 +5,25 @@ and montage generation. Users prepare the clips; there is no public slicing comm
 Developer documentation and source annotations use English. The product UI, logs,
 CLI help, and established output-directory names remain Chinese.
 
+## Desktop
+
+The native Tauri workbench organizes product projects, material libraries, processing
+tasks, published videos and material usage history. It reads media from the original
+directories. Simple forms select inputs; read-only animations show each video's
+actual processing state. The desktop requires an installed, logged-in Codex and reads its actual model
+catalog for the shared AI settings.
+The CLI/TUI remains available during desktop compatibility acceptance.
+
+On macOS, run `./run-desktop.sh` to build and open the source workbench.
+Node.js, Rust and the Tauri macOS build prerequisites must already be installed.
+Project data persists in this checkout's ignored `work/desktop/app`, with disposable
+media cache in `work/desktop/cache`. Existing `PYCUT_DATA_DIR` and `PYCUT_CACHE_DIR`
+environment overrides take precedence.
+
+See [Desktop workbench](docs/DESKTOP.md) for development, packaging, data boundaries
+and native verification requirements. macOS 13.0 and Windows are packaging targets;
+compatibility depends on the bundled runtime and requires platform execution.
+
 ## Commands and output
 
 | Command | Purpose | Default output |

@@ -111,9 +111,10 @@ def _video_copy_cmd(concat_file: Path, body: Path, intro_source: Path,
 
 
 def prepend(video: Path, folder: Path, *, seed: int, canvas: tuple[int, int],
-            stickers: list[Path], crf: str, keep_audio: bool) -> dict | None:
+            stickers: list[Path], crf: str, keep_audio: bool, files=None) -> dict | None:
     check_stop()
-    files = list_videos_recursive(folder, max_depth=None, raise_on_error=True)
+    files = (list_videos_recursive(folder, max_depth=None, raise_on_error=True)
+             if files is None else list(files))
     if not files:
         log(f"[跳过] 前贴目录没有视频，直接输出正文：{folder}")
         return None

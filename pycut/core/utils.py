@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import subprocess
+import os
+import time
 
 
 def log(msg: str) -> None:
@@ -35,6 +37,8 @@ def run_cmd(args: list[str], timeout: int) -> tuple[int, str, str]:
     """Return (returncode, stdout, stderr) using argument lists, never shell=True.
 
     Preserve paths containing spaces, Unicode, or shell metacharacters."""
+    if os.environ.get("PYCUT_DESKTOP_JOB") == "1":
+        return _desktop_command(args, timeout)
     try:
         p = subprocess.run(
             args,
@@ -56,3 +60,30 @@ def run_cmd(args: list[str], timeout: int) -> tuple[int, str, str]:
     out = p.stdout.decode("utf-8", "replace")
     err = p.stderr.decode("utf-8", "replace")
     return p.returncode, out, err
+
+
+def _desktop_command(args, timeout):
+    """Keep desktop cancellation responsive while retaining subprocess diagnostics."""
+    from .runtime import STOP
+    started = time.monotonic()
+    try:
+        process = subprocess.Popen(args, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError as exc:
+        return -1, "", f"cannot execute command: {exc}"
+    while True:
+        try:
+            out, err = process.communicate(timeout=0.25)
+            return process.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+        except subprocess.TimeoutExpired:
+            stopped = STOP.flag
+            if not stopped and time.monotonic() - started < timeout:
+                continue
+            process.terminate()
+            try:
+                out, err = process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                out, err = process.communicate()
+            reason = "已中断" if stopped else f"timeout after {timeout}s"
+            return -130 if stopped else -1, out.decode("utf-8", "replace"), reason + "\n" + err.decode("utf-8", "replace")

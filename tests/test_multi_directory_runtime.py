@@ -52,7 +52,7 @@ def test_same_parent_roots_collision_is_rejected_before_processing(tmp_path):
         validate_targets(pairs)
 
 
-def test_montage_preserves_reference_subdirectory_and_repeated_roots(tmp_path):
+def test_montage_flattens_reference_batch_and_preserves_repeated_roots(tmp_path):
     reference = tmp_path / 'reference'
     source = reference / 'a' / '1.mp4'
     source.parent.mkdir(parents=True); source.touch()
@@ -71,7 +71,8 @@ def test_montage_preserves_reference_subdirectory_and_repeated_roots(tmp_path):
     assert opts.clip_dir == background
     assert not opts.use_pip
     assert opts.intro_dir is None
-    assert opts.out_dir == tmp_path/'out'/'a'
+    assert opts.out_dir.parent == tmp_path / 'out'
+    assert opts.out_dir.name.startswith('混剪-')
     assert opts.out_name == '1_1.mp4'
 
 

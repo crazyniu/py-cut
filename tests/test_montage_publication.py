@@ -13,6 +13,16 @@ from pycut.core import montage_clips, montage_source, montage_subtitles
 
 
 class MontagePublicationTests(unittest.TestCase):
+    def test_usage_retains_output_and_consumed_source_intervals(self):
+        opts = montage_pipeline.MontageOptions(source=Path("reference.mp4"))
+        uses = montage_pipeline._material_uses(opts, [{
+            "item": SimpleNamespace(path=Path("background.mp4")),
+            "take": 2, "offset": 3, "speed": 1.5}], [], 2, None)
+        self.assertEqual(uses[1]["duration"], 2)
+        self.assertEqual(uses[1]["source_duration"], 3)
+        self.assertEqual(uses[1]["offset"], 3)
+        self.assertEqual(uses[1]["speed"], 1.5)
+
     def _exercise(self, fail_at: str | None):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

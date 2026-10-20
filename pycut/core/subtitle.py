@@ -13,6 +13,7 @@ from pathlib import Path
 
 import cv2
 
+from .desktop_progress import encoding_progress, activity
 from .. import config
 from .ffmpeg import FFMPEG, probe_scalar
 from .llm import LLMClient
@@ -201,8 +202,8 @@ def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
            "-c:a", "copy", "-movflags", "+faststart", str(tmp)]
     proc = None
     try:
-        with tempfile.TemporaryFile() as errors:
-            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+        with tempfile.TemporaryFile() as errors, encoding_progress(cmd, info.duration) as measured_cmd:
+            proc = subprocess.Popen(measured_cmd, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.DEVNULL, stderr=errors)
             deadline = time.monotonic() + max(300, info.duration * 20)
             while proc.poll() is None:
@@ -219,6 +220,7 @@ def cover_clip(clip: Path, region: tuple[int, int, int, int]) -> bool:
                 log(f"  [遮盖失败] {clip.name}: FFmpeg rc={proc.returncode} "
                     + (detail[-1] if detail else "无有效输出"))
                 return False
+        activity("检查中")
         output = _probe_one(tmp)
         if (STOP.flag or output is None or (output.width, output.height) != (info.width, info.height)
                 or abs(output.duration - info.duration) > 0.15
@@ -263,6 +265,7 @@ def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
     if not dry_run:
         mk.unlink(missing_ok=True)
     try:
+        activity("识别中")
         region = detect_region(llm, clip, samples)
     except (SubtitleReviewNeeded, TimeoutError, subprocess.TimeoutExpired) as exc:
         log(f"  [待复查] {clip.name}: {exc}；继续处理后续片段")
@@ -290,6 +293,7 @@ def process_clip(llm: LLMClient, clip: Path, *, force: bool = False,
         return "fail"
     mk.unlink(missing_ok=True)
     try:
+        activity("检查中")
         residual = detect_region(llm, clip, min(samples, 3))
     except (RuntimeError, ValueError, OSError, TimeoutError, subprocess.TimeoutExpired) as exc:
         log(f"  [待复查] {clip.name}: 复检不确定（{exc}）；继续处理")

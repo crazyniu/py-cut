@@ -81,7 +81,7 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     from ..core.output_paths import flat_output, sibling, validate_targets, matching_root
-    roots = args.src_dir or (config.CLIP_DIRS if not args.file else [])
+    roots = getattr(args, "input_roots", None) or args.src_dir or (config.CLIP_DIRS if not args.file else [])
     def destination(c: Path) -> Path:
         root = (Path(args.out_dir).expanduser() if args.out_dir else
                 sibling(matching_root(c, roots), "字幕查重"))
@@ -92,11 +92,13 @@ def run(args: argparse.Namespace) -> int:
         log(f"[错误] {exc}")
         return 2
 
-    install_signal_handlers()
-    reset_stop()
+    if not getattr(args, "runtime_initialized", False):
+        install_signal_handlers()
+        reset_stop()
     self_check(require_src=False)
-    llm = make_llm(args.gateway, args.llm_url, args.llm_key, args.llm_model,
-                   use_fallback=not args.no_fallback)
+    llm = getattr(args, "vision_client", None) or make_llm(
+        args.gateway, args.llm_url, args.llm_key, args.llm_model,
+        use_fallback=not args.no_fallback)
     log(f"[范围] {len(clips)} 个切片")
 
     t0 = time.time()
@@ -131,6 +133,9 @@ def run(args: argparse.Namespace) -> int:
                         staged_marker.replace(marker)
                     else:
                         marker.unlink(missing_ok=True)
+                    published = getattr(args, "on_publication", None)
+                    if published is not None:
+                        published(c, dst)
                 return status
 
         except Exception as e:  # noqa: BLE001 - isolate per-clip failures.
@@ -145,8 +150,17 @@ def run(args: argparse.Namespace) -> int:
                          f"复检通过 {stat['covered']} · 未检出字幕 {stat['nosub']} · 待复查 {stat['review']}")),
                  output=str(destination(clips[0]).parent))
     report()
+    def tracked(c):
+        callback = getattr(args, "on_start", None)
+        if callback is not None and not STOP.flag:
+            callback(c)
+        status = _do(c)
+        callback = getattr(args, "on_result", None)
+        if callback is not None:
+            callback(c, destination(c), status)
+        return status
     with futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
-        for future in completed_futures([ex.submit(_do, c) for c in clips], lambda: report(True)):
+        for future in completed_futures([ex.submit(tracked, c) for c in clips], lambda: report(True)):
             s = future.result()
             stat[s] = stat.get(s, 0) + 1
             report()

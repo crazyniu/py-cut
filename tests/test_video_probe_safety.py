@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from pycut.core import ffmpeg, montage_source
+from pycut.core import ffmpeg, montage_clips, montage_source
 
 
 class VideoProbeSafetyTests(unittest.TestCase):
@@ -37,13 +37,14 @@ class VideoProbeSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             src = Path(td) / "damaged.mp4"
             src.write_bytes(b"not a real video")
-            data = {"format=duration": "12.0", "stream=width": "720",
-                    "stream=height": "0"}
-            with mock.patch.object(montage_source, "probe_scalar",
-                                   side_effect=lambda _p, key: data[key]), \
+            data = json.dumps({"streams": [{"codec_type": "video", "width": 720,
+                               "height": 0, "duration": "12.0"}, {"codec_type": "audio"}],
+                               "format": {"duration": "12.0"}})
+            with mock.patch.object(montage_clips, "run_cmd", return_value=(0, data, "")) as probe, \
                  mock.patch.object(montage_source, "run_cmd") as runner, \
                  mock.patch.object(montage_source, "log"):
                 self.assertIsNone(montage_source.probe_source(src))
+            probe.assert_called_once()
             runner.assert_not_called()
 
 

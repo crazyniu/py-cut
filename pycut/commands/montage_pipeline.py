@@ -9,9 +9,11 @@ import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from .. import config
 from ..core.progress import progress
+from ..core.desktop_progress import activity
 from ..core.utils import log
 from ..core.runtime import check_stop
 
@@ -19,6 +21,8 @@ from ..core.runtime import check_stop
 @dataclass
 class MontageOptions:
     prepared: dict | None = field(default=None, repr=False)  # Preparation is shared only within this batch of variants.
+    material_files: dict | None = field(default=None, repr=False)
+    before_publish: Callable | None = field(default=None, repr=False)
     step: str = "all"
     source: Path = field(default_factory=lambda: config.MONTAGE_SRC)
     clip_dir: Path | list[Path] = field(default_factory=lambda: config.CLIP_DIRS)
@@ -195,7 +199,9 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
     if "background" not in prepared:
         prepared["background"] = scan_library(opts.clip_dir, min_dur=opts.min_clip,
                                                max_dur=opts.max_clip, workers=opts.workers,
-                                               allow_landscape=opts.allow_landscape)
+                                               allow_landscape=opts.allow_landscape,
+                                               **({"files": opts.material_files.get("background", [])}
+                                                  if opts.material_files is not None else {}))
     items = prepared["background"]
     check_stop()
     if opts.allow_landscape:
@@ -228,7 +234,9 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
     timeline = []
     if opts.use_pip and opts.step != "b":
         if "pip" not in prepared:
-            prepared["pip"] = scan_dedup_pool(opts.dedup_dir, min_dur=opts.min_clip)
+            prepared["pip"] = scan_dedup_pool(opts.dedup_dir, min_dur=opts.min_clip,
+                                            **({"files": opts.material_files.get("pip", [])}
+                                               if opts.material_files is not None else {}))
         if not prepared["pip"]:
             result["error"] = f"画中画素材目录没有可用 MP4/MOV/M4V：{opts.dedup_dir}"
             log(f"  [失败] {result['error']}（请检查素材长度/路径或显式使用 --no-pip）")
@@ -329,6 +337,7 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
             result["error"] = "成片未生成或文件异常"
             return result
 
+        activity("检查中")
         # Burn subtitles before audio attachment because subtitle intermediates use -an.
         if subtitles_combined:
             progress("混剪合成", 3, 5, detail="字幕已与画中画合并编码")
@@ -348,6 +357,7 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
         check_stop()
         # Attach reference audio after all silent picture operations.
         if opts.keep_audio and prof.has_audio:
+            activity("整理成片")
             progress("混剪合成", 4, 5, detail="恢复爆款原声")
             log("--- 步骤E：贴回基准视频音轨（最后一步）---")
             if _attach_audio(working, opts.source, opts.crf):
@@ -381,11 +391,22 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
             try:
                 intro_report = prepend(working, opts.intro_dir, seed=seed, canvas=canvas,
                                        stickers=stickers, crf=opts.crf,
-                                       keep_audio=bool(result.get("audio")))
+                                       keep_audio=bool(result.get("audio")),
+                                       **({"files": opts.material_files.get("intro", [])}
+                                          if opts.material_files is not None else {}))
                 duration = _duration(working)
             except (RuntimeError, ValueError, OSError) as exc:
                 result["error"] = f"前贴处理失败：{exc}"
                 log(f"  [失败] {result['error']}；未发布成片")
+                return result
+        check_stop()
+        uses = (_material_uses(opts, picked, timeline, target, intro_report)
+                if opts.before_publish is not None else [])
+        if opts.before_publish is not None:
+            try:
+                opts.before_publish(final, working, uses)
+            except (OSError, ValueError, RuntimeError) as exc:
+                result["error"] = f"成片发布记录失败：{exc}"
                 return result
         check_stop()
         try:
@@ -396,6 +417,7 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
             return result
         result["final"] = str(final)
         result["final_duration"] = duration
+        result["uses"] = uses
         # Only the verified video is published here. No sidecar JSON is written.
         # Diagnostics, including the actual seed, remain in the TUI run log.
         progress("混剪合成", 5, 5, success=1, detail="成片规格检查与发布完成",
@@ -408,6 +430,36 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
         _unlink(working)
         _unlink(staged)
         result["base"] = ""
+
+
+def _material_uses(opts, picked, timeline, target, intro_report):
+    """Describe actual visible inputs, without changing selection or rendering.
+
+    The desktop persists this only at successful publication. PiP planning may
+    extend beyond the body, so exclude invisible surplus from usage accounting.
+    """
+    uses = [{"path": str(opts.source.resolve()), "role": "reference", "start": 0, "duration": target}]
+    if opts.srt and Path(opts.srt).is_file():
+        uses.append({"path": str(Path(opts.srt).resolve()), "role": "subtitle"})
+    for shot in picked:
+        if shot.get("item") is None or shot.get("take", 0) <= 0:
+            continue
+        uses.append({"path": str(shot["item"].path.resolve()), "role": "background",
+                     "offset": shot["offset"], "duration": shot["take"],
+                     "speed": shot.get("speed", 1.0),
+                     "source_duration": shot["take"] * shot.get("speed", 1.0)})
+        if shot.get("sticker_applied") and shot.get("sticker"):
+            uses.append({"path": str(Path(shot["sticker"]).resolve()), "role": "sticker"})
+    for shot in timeline:
+        visible = min(shot["duration"], max(0, target - shot["start"]))
+        if visible > 0:
+            uses.append({"path": str(shot["item"].path.resolve()), "role": "pip",
+                         "start": shot["start"], "offset": shot["offset"], "duration": visible})
+    if intro_report:
+        uses.append({"path": intro_report["source"], "role": "intro", "duration": intro_report["duration"]})
+        if intro_report.get("sticker_applied") and intro_report.get("sticker"):
+            uses.append({"path": intro_report["sticker"], "role": "sticker"})
+    return uses
 
 def _prepare_subtitles(srt, canvas: tuple[int, int], duration: float) -> Path:
     """Build ASS with original speech timing; the caller owns cleanup."""

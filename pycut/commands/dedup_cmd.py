@@ -234,8 +234,9 @@ def run(args: argparse.Namespace) -> int:
     except ProfileError as exc:
         log(f"[账号预设错误] {exc}")
         return 2
-    install_signal_handlers()
-    reset_stop()
+    if not getattr(args, "runtime_initialized", False):
+        install_signal_handlers()
+        reset_stop()
     self_check(require_src=False)
 
     if audio_mix.enabled:
@@ -251,7 +252,7 @@ def run(args: argparse.Namespace) -> int:
         log(f"[错误] {exc}")
         return 2
     from ..core.output_paths import sibling, validate_targets, matching_root, flat_output
-    roots = args.src_dir or (config.CLIP_DIRS if not args.file else [])
+    roots = getattr(args, "input_roots", None) or args.src_dir or (config.CLIP_DIRS if not args.file else [])
     def output_directory(p):
         return Path(args.out_dir).expanduser() if args.out_dir else sibling(matching_root(p, roots), "去重")
     def output_for(p):
@@ -309,7 +310,12 @@ def run(args: argparse.Namespace) -> int:
     for directory, sources in groups.items():
         if STOP.flag:
             break
-        items.extend(process_batch(sources, replace(opts, out_dir=directory), workers=args.workers))
+        callbacks = {key: value for key, value in {
+            "on_start": getattr(args, "on_start", None),
+            "on_result": getattr(args, "on_item_result", None),
+            "on_publish": getattr(args, "on_publication", None),
+        }.items() if value is not None}
+        items.extend(process_batch(sources, replace(opts, out_dir=directory), workers=args.workers, **callbacks))
 
     ok = sum(1 for i in items if i.get("ok"))
     bad = sum(1 for i in items if not i.get("ok") and not i.get("skipped"))
@@ -349,6 +355,9 @@ def run(args: argparse.Namespace) -> int:
     if not args.no_report:
         path = write_report(items, report_dir=Path(args.out_dir) if args.out_dir else None)
         log(f"{'报告':<12}{path}")
+    callback = getattr(args, "on_results", None)
+    if callback is not None:
+        callback(items)
     log("=" * 62)
     if STOP.flag:
         log("[中断] 去重未完整完成（退出码 130）")
