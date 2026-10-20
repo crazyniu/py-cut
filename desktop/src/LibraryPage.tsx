@@ -24,6 +24,7 @@ import {
   IconRefresh,
   IconSearch,
   IconTrash,
+  IconFilter,
 } from "@tabler/icons-react";
 import { useDebouncedValue } from "@mantine/hooks";
 import {
@@ -35,6 +36,7 @@ import {
   MediaCard,
   Status,
   report,
+  LoadingPage,
 } from "./common";
 import {
   chooseDirectories,
@@ -69,6 +71,8 @@ export default function LibraryPage({ project }: { project: Project }) {
   const [busy, setBusy] = useState(false);
   const [scanned, setScanned] = useState<number | null>(null);
   const [revision, setRevision] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = useState(false);
   const [directories, setDirectories] = useState(false);
   const [directoryError, setDirectoryError] = useState("");
   const [directoryNotice, setDirectoryNotice] = useState("");
@@ -84,7 +88,10 @@ export default function LibraryPage({ project }: { project: Project }) {
               : items[0]?.id || null,
           );
         })
-        .catch((error) => setError(message(error))),
+        .catch((error) => {
+          setError(message(error));
+          setLoading(false);
+        }),
     [project.id],
   );
   useEffect(() => {
@@ -132,6 +139,7 @@ export default function LibraryPage({ project }: { project: Project }) {
     if (!libraryId) return;
     let current = true;
     setError("");
+    setLoading(true);
     rpc<{ items: Asset[]; total: number }>("assets.list", {
       library_id: libraryId,
       query: debouncedQuery,
@@ -150,6 +158,9 @@ export default function LibraryPage({ project }: { project: Project }) {
       })
       .catch((error) => {
         if (current) setError(message(error));
+      })
+      .finally(() => {
+        if (current) setLoading(false);
       });
     return () => {
       current = false;
@@ -233,9 +244,36 @@ export default function LibraryPage({ project }: { project: Project }) {
     <>
       <PageHeading
         title="素材库"
-        description="关联本地目录，统一查找和管理素材。移除素材仅影响当前素材库。"
+        description="按用途管理本地素材。原文件保留在所关联的目录中。"
+        actions={
+          <Group gap="xs">
+            <Button
+              variant="default"
+              leftSection={<IconRefresh size={16} />}
+              onClick={() =>
+                library && mutate("libraries.scan", { library_id: library.id })
+              }
+              disabled={!library}
+              loading={busy}
+            >
+              刷新目录
+            </Button>
+            <Button
+              variant="default"
+              leftSection={<IconFolderOpen size={16} />}
+              disabled={!library}
+              onClick={() => {
+                setDirectoryError("");
+                setDirectoryNotice("");
+                setDirectories(true);
+              }}
+            >
+              管理目录
+            </Button>
+          </Group>
+        }
       />
-      <Group mb="md" align="flex-end" gap="xs" className="page-toolbar">
+      <Group mb="md" align="center" gap="xs" className="page-toolbar">
         <Select
           aria-label="素材库"
           placeholder="请选择素材库"
@@ -249,37 +287,13 @@ export default function LibraryPage({ project }: { project: Project }) {
           allowDeselect={false}
           disabled={busy}
         />
-        <Button
-          variant="default"
-          onClick={() => {
-            setDirectoryError("");
-            setDirectoryNotice("");
-            setDirectories(true);
-          }}
-          disabled={!library}
-        >
-          管理目录
-        </Button>
         <TextInput
           placeholder="搜索素材名称"
           aria-label="搜索素材"
           leftSection={<IconSearch size={16} />}
           value={query}
           onChange={(event) => setQuery(event.currentTarget.value)}
-          w={160}
-        />
-        <Select
-          allowDeselect={false}
-          w={104}
-          aria-label="素材类型"
-          value={kind}
-          onChange={(value) => value !== null && setKind(value)}
-          data={[
-            { value: "", label: "全部" },
-            { value: "video", label: "视频" },
-            { value: "image", label: "图片" },
-            { value: "subtitle", label: "字幕" },
-          ]}
+          className="toolbar-search"
         />
         <Select
           allowDeselect={false}
@@ -323,18 +337,25 @@ export default function LibraryPage({ project }: { project: Project }) {
           </Button>
         </Group>
         <Button
-          size="xs"
-          variant="default"
-          leftSection={<IconRefresh size={14} />}
-          onClick={() =>
-            library && mutate("libraries.scan", { library_id: library.id })
-          }
-          disabled={!library}
-          loading={busy}
+          variant={filters ? "light" : "default"}
+          leftSection={<IconFilter size={16} />}
+          aria-expanded={filters}
+          onClick={() => setFilters((value) => !value)}
         >
-          刷新目录
+          筛选
+          {root ||
+          removed !== "active" ||
+          kind !== (library?.role === "sticker" ? "image" : "video")
+            ? " · 已设置"
+            : ""}
         </Button>
       </Group>
+      {!library &&
+        (error ? (
+          <ErrorNotice error={error} retry={loadLibraries} />
+        ) : (
+          <LoadingPage label="正在读取素材库…" />
+        ))}
       <div>
         <Box className="library-main">
           {library && (
@@ -349,29 +370,46 @@ export default function LibraryPage({ project }: { project: Project }) {
                   </Text>
                 </Group>
               )}
-              <Group gap="md" mb="md">
-                <SegmentedControl
-                  className="choice-group"
-                  aria-label="素材状态"
-                  value={removed}
-                  onChange={(value) => value && setRemoved(value)}
-                  data={[
-                    { value: "active", label: "全部素材" },
-                    { value: "removed", label: "已移除" },
-                  ]}
-                />
-                <Select
-                  clearable
-                  placeholder="全部来源目录"
-                  aria-label="筛选来源目录"
-                  w={220}
-                  data={library.roots.map((path) => ({
-                    value: path,
-                    label: path,
-                  }))}
-                  value={root}
-                  onChange={setRoot}
-                />
+              {filters && (
+                <Group gap="sm" mb="md" className="library-filters">
+                  <Select
+                    allowDeselect={false}
+                    w={104}
+                    aria-label="素材类型"
+                    value={kind}
+                    onChange={(value) => value !== null && setKind(value)}
+                    data={[
+                      { value: "", label: "全部" },
+                      { value: "video", label: "视频" },
+                      { value: "image", label: "图片" },
+                      { value: "subtitle", label: "字幕" },
+                    ]}
+                  />
+                  <SegmentedControl
+                    className="choice-group"
+                    aria-label="素材状态"
+                    value={removed}
+                    onChange={(value) => value && setRemoved(value)}
+                    data={[
+                      { value: "active", label: "全部素材" },
+                      { value: "removed", label: "已移除" },
+                    ]}
+                  />
+                  <Select
+                    clearable
+                    placeholder="全部来源目录"
+                    aria-label="筛选来源目录"
+                    w={220}
+                    data={library.roots.map((path) => ({
+                      value: path,
+                      label: path,
+                    }))}
+                    value={root}
+                    onChange={setRoot}
+                  />
+                </Group>
+              )}
+              <Group gap="md" mb="md" className="library-selection">
                 {assets.length > 0 && (
                   <Group gap="md">
                     <Checkbox
@@ -449,14 +487,20 @@ export default function LibraryPage({ project }: { project: Project }) {
                   retry={() => setRevision((value) => value + 1)}
                 />
               )}
-              {!assets.length && !error && !busy ? (
+              {loading ? (
+                <LoadingPage label="正在读取素材…" />
+              ) : !assets.length && !error && !busy ? (
                 <Empty
                   title={
-                    removed === "removed" ? "没有已移除素材" : "素材库为空"
+                    removed === "removed"
+                      ? "没有已移除素材"
+                      : library.roots.length
+                        ? "未找到符合条件的素材"
+                        : "尚未关联素材目录"
                   }
                   description={
                     library.roots.length
-                      ? "尝试刷新目录或调整搜索条件。"
+                      ? "调整搜索或筛选条件，也可以刷新目录重新读取。"
                       : "添加一个或多个目录，素材将从原位置读取。"
                   }
                   action={
@@ -464,7 +508,21 @@ export default function LibraryPage({ project }: { project: Project }) {
                       <Button onClick={addRoots} variant="light">
                         添加目录
                       </Button>
-                    ) : undefined
+                    ) : (
+                      <Button
+                        variant="default"
+                        onClick={() => {
+                          setQuery("");
+                          setRoot(null);
+                          setRemoved("active");
+                          setKind(
+                            library.role === "sticker" ? "image" : "video",
+                          );
+                        }}
+                      >
+                        重置筛选
+                      </Button>
+                    )
                   }
                 />
               ) : layout === "grid" ? (
@@ -485,6 +543,9 @@ export default function LibraryPage({ project }: { project: Project }) {
                         />
                       }
                     >
+                      <Text size="xs" lineClamp={1} title={asset.path}>
+                        {asset.path.split(/[\\/]/).slice(-2, -1)[0]}
+                      </Text>
                       <Text size="xs">
                         {asset.width && asset.height
                           ? `${asset.width}×${asset.height}`
@@ -530,6 +591,14 @@ export default function LibraryPage({ project }: { project: Project }) {
                             >
                               {asset.name}
                             </button>
+                            <Text
+                              size="xs"
+                              c="dimmed"
+                              lineClamp={1}
+                              title={asset.path}
+                            >
+                              {asset.path}
+                            </Text>
                             {!asset.available && <Status value="offline" />}
                           </Table.Td>
                           <Table.Td>{duration(asset.duration)}</Table.Td>
@@ -565,7 +634,9 @@ export default function LibraryPage({ project }: { project: Project }) {
             centered
             size={720}
           >
-            {detail && (
+            {!detail ? (
+              <LoadingPage label="正在读取素材详情…" />
+            ) : (
               <PreviewDetails
                 id={detail.id}
                 path={detail.path}
@@ -582,7 +653,7 @@ export default function LibraryPage({ project }: { project: Project }) {
       <Modal
         opened={directories}
         onClose={() => setDirectories(false)}
-        title="管理素材目录"
+        title={`管理目录 · ${library ? roles[library.role] : "素材"}`}
         size={720}
         centered
       >

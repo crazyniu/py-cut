@@ -97,7 +97,7 @@ jobs:
         run: |
           npm ci
           npm run build
-          node --test src/api.test.mjs
+          npm test
       - name: Full suite (synthetic media only; user media opt-in)
         if: github.event_name == 'workflow_dispatch'
         run: python -m pytest tests/ -q

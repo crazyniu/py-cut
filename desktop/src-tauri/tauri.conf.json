@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{"label":"main","title":"pycut","width":1440,"height":900,"minWidth":1280,"minHeight":800}],
+    "windows": [{"label":"main","title":"pycut","width":1440,"height":900,"minWidth":1024,"minHeight":680}],
     "security": {
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; media-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'",
       "assetProtocol": {"enable": true,"scope": []}

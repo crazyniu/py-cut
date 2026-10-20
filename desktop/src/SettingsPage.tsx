@@ -88,7 +88,7 @@ export default function SettingsPage() {
     };
   }, [provider, saved, revision]);
   async function saveAgent() {
-    if (!provider || !model) return;
+    if (!provider || !model || saving) return;
     setSaving(true);
     try {
       const values = {
@@ -108,7 +108,10 @@ export default function SettingsPage() {
   const agent = agents.find((item) => item.id === provider);
   return (
     <>
-      <PageHeading title="设置" description="Codex 设置对所有项目生效。" />
+      <PageHeading
+        title="全局设置"
+        description="识别模型对所有项目生效，素材目录在各项目的素材库管理。"
+      />
       {error && (
         <Alert color="red" mb="md">
           {error}
@@ -132,7 +135,7 @@ export default function SettingsPage() {
               </Button>
             </Group>
             <Text size="sm" c="dimmed">
-              Codex 为本机智能功能提供服务。请选择要使用的模型。
+              字幕擦除通过本机 Codex 识别字幕。选择已登录账号可用的模型后保存。
             </Text>
             <Group align="flex-end" gap="md" className="settings-form-row">
               <TextInput
@@ -159,15 +162,26 @@ export default function SettingsPage() {
                 onChange={setModel}
                 allowDeselect={false}
                 searchable
-                disabled={loadingModels || !provider}
+                disabled={loadingModels || detecting || saving || !provider}
                 rightSection={loadingModels ? <Loader size={14} /> : undefined}
               />
               <Button
                 onClick={saveAgent}
-                disabled={!model || !agent?.available}
+                disabled={
+                  loadingModels ||
+                  detecting ||
+                  !model ||
+                  !agent?.available ||
+                  (model === saved.vision_model &&
+                    provider === saved.vision_provider)
+                }
                 loading={saving}
               >
-                保存 Codex 设置
+                {model &&
+                model === saved.vision_model &&
+                provider === saved.vision_provider
+                  ? "已保存"
+                  : "保存设置"}
               </Button>
             </Group>
             {modelError && <Alert color="orange">{modelError}</Alert>}

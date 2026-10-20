@@ -16,7 +16,7 @@ import {
   Title,
 } from "@mantine/core";
 import {
-  IconAdjustments,
+  IconFolder,
   IconArrowLeft,
   IconCards,
   IconFolderPlus,
@@ -44,8 +44,15 @@ const pages = [
 ];
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState<string | null>(null);
-  const [page, setPage] = useState("library");
+  const [projectId, setProjectId] = useState<string | null>(() =>
+    localStorage.getItem("pycut.project"),
+  );
+  const [page, setPage] = useState(() => {
+    const saved = localStorage.getItem("pycut.page");
+    return pages.some((item) => item.id === saved) ? saved! : "library";
+  });
+  const [returnPage, setReturnPage] = useState("library");
+  const [loaded, setLoaded] = useState(!connected);
   const [create, setCreate] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -72,9 +79,19 @@ export default function App() {
   const [connectionError, setConnectionError] = useState("");
   const refresh = useCallback(() => {
     rpc<Project[]>("projects.list")
-      .then(setProjects)
-      .catch((error) => setError(message(error)));
+      .then((items) => {
+        setProjects(items);
+        setError("");
+      })
+      .catch((error) => setError(message(error)))
+      .finally(() => setLoaded(true));
   }, []);
+  useEffect(() => {
+    if (projectId) localStorage.setItem("pycut.project", projectId);
+    else localStorage.removeItem("pycut.project");
+    if (pages.some((item) => item.id === page))
+      localStorage.setItem("pycut.page", page);
+  }, [projectId, page]);
   useEffect(() => {
     if (connected) refresh();
   }, [refresh]);
@@ -103,7 +120,7 @@ export default function App() {
   }, []);
   const project = projects.find((item) => item.id === projectId);
   async function createProject() {
-    if (!name.trim()) return;
+    if (!name.trim() || busy) return;
     setBusy(true);
     try {
       const value = await rpc<Project>("projects.create", {
@@ -111,6 +128,7 @@ export default function App() {
       });
       setProjects((items) => [...items, value]);
       setProjectId(value.id);
+      setPage("library");
       setCreate(false);
       setName("");
     } catch (error) {
@@ -121,7 +139,7 @@ export default function App() {
   }
   return (
     <>
-      <AppShell navbar={{ width: 192, breakpoint: 0 }} padding={0}>
+      <AppShell navbar={{ width: 208, breakpoint: 0 }} padding={0}>
         <AppShell.Navbar p="md">
           <Group gap="xs" mb="lg">
             <IconMovie size={25} color="var(--mantine-color-cyan-5)" />
@@ -132,6 +150,7 @@ export default function App() {
           {project ? (
             <>
               <NavLink
+                component="button"
                 label="所有项目"
                 leftSection={<IconArrowLeft size={18} stroke={1.6} />}
                 onClick={() => {
@@ -155,6 +174,7 @@ export default function App() {
               />
               {pages.map((item) => (
                 <NavLink
+                  component="button"
                   key={item.id}
                   label={item.label}
                   leftSection={<item.icon size={18} stroke={1.6} />}
@@ -166,17 +186,23 @@ export default function App() {
             </>
           ) : (
             <NavLink
-              active
+              component="button"
+              active={page !== "settings"}
               label="项目"
               leftSection={<IconCards size={18} />}
+              onClick={() => setPage("projects")}
             />
           )}
           <Box mt="auto">
             <NavLink
-              label="设置"
+              component="button"
+              label="全局设置"
               leftSection={<IconSettings size={18} stroke={1.6} />}
               active={page === "settings"}
-              onClick={() => setPage("settings")}
+              onClick={() => {
+                if (page !== "settings") setReturnPage(page);
+                setPage("settings");
+              }}
             />
             <Divider my="md" />
             <Text size="xs" c="dimmed">
@@ -201,21 +227,40 @@ export default function App() {
           )}
           <ScrollArea className="main-scroll" type="auto">
             <Box p="xl" className="main-content">
+              {connected && codex === "missing" && page !== "settings" && (
+                <Alert color="yellow" mb="lg" title="字幕擦除需要 Codex">
+                  安装并登录本机 Codex
+                  后即可使用字幕识别。素材管理、混剪和视频去重可继续使用。
+                  <Button variant="subtle" size="xs" onClick={checkCodex}>
+                    重新检测
+                  </Button>
+                  <Button
+                    variant="subtle"
+                    size="xs"
+                    onClick={() => {
+                      setReturnPage(page);
+                      setPage("settings");
+                    }}
+                  >
+                    前往设置
+                  </Button>
+                </Alert>
+              )}
               <Suspense fallback={<LoadingPage label="页面加载中" />}>
-                {connected && codex !== "ready" ? (
-                  codex === "loading" ? (
-                    <LoadingPage label="正在检查本机 Codex…" />
-                  ) : (
-                    <Empty
-                      title="请先安装并登录 Codex"
-                      description="pycut 使用本机 Codex 提供智能功能。安装并登录后，点击重新检测即可开始。"
-                      action={
-                        <Button onClick={checkCodex}>重新检测 Codex</Button>
-                      }
-                    />
-                  )
-                ) : page === "settings" ? (
-                  <SettingsPage />
+                {page === "settings" ? (
+                  <>
+                    <Button
+                      variant="subtle"
+                      mb="md"
+                      leftSection={<IconArrowLeft size={16} />}
+                      onClick={() => setPage(returnPage)}
+                    >
+                      返回工作台
+                    </Button>
+                    <SettingsPage />
+                  </>
+                ) : !loaded ? (
+                  <LoadingPage label="正在读取项目…" />
                 ) : !project ? (
                   <>
                     <PageHeading
@@ -251,7 +296,7 @@ export default function App() {
                               setPage("library");
                             }}
                           >
-                            <IconAdjustments size={24} stroke={1.4} />
+                            <IconFolder size={24} stroke={1.4} />
                             <Text fw={600} mt="md">
                               {item.name}
                             </Text>
@@ -261,7 +306,7 @@ export default function App() {
                           </button>
                         ))}
                       </div>
-                    ) : (
+                    ) : !error ? (
                       <Empty
                         title={
                           connected ? "新建第一个产品项目" : "从桌面应用开始"
@@ -276,7 +321,7 @@ export default function App() {
                           </Button>
                         }
                       />
-                    )}
+                    ) : null}
                   </>
                 ) : (
                   <>
@@ -288,7 +333,10 @@ export default function App() {
                         key={project.id}
                         project={project}
                         revision={revision}
-                        onSettings={() => setPage("settings")}
+                        onSettings={() => {
+                          setReturnPage("processing");
+                          setPage("settings");
+                        }}
                         onLibrary={() => setPage("library")}
                       />
                     )}
@@ -308,9 +356,12 @@ export default function App() {
       </AppShell>
       <Modal
         opened={create}
-        onClose={() => setCreate(false)}
+        onClose={() => !busy && setCreate(false)}
         title="新建产品项目"
         centered
+        closeOnEscape={!busy}
+        closeOnClickOutside={false}
+        withCloseButton={!busy}
       >
         <Stack>
           <TextInput
@@ -327,6 +378,13 @@ export default function App() {
             创建后添加素材目录，在新建视频处理任务时选择成片保存位置。
           </Text>
           <Group justify="flex-end">
+            <Button
+              variant="default"
+              disabled={busy}
+              onClick={() => setCreate(false)}
+            >
+              取消
+            </Button>
             <Button
               onClick={createProject}
               disabled={!name.trim()}

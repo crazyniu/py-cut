@@ -307,6 +307,12 @@ class Store:
                     raise ValueError("素材不属于此项目")
                 query += " AND o.project_id=?"
                 args.append(project_id)
+            item["active_library_ids"] = [row[0] for row in db.execute("""
+                SELECT m.library_id FROM memberships m JOIN libraries l ON l.id=m.library_id
+                WHERE m.asset_id=? AND m.removed=0 AND (? IS NULL OR l.project_id=?) AND EXISTS (
+                    SELECT 1 FROM asset_roots ar JOIN roots r ON r.id=ar.root_id
+                    WHERE ar.asset_id=m.asset_id AND r.library_id=m.library_id)
+            """, (asset_id, project_id, project_id))]
             item["uses"] = [{**dict(row), "details": json.loads(row["details"])}
                             for row in db.execute(query + " ORDER BY o.created_at DESC", args)]
             item["usage_count"] = len({row["output_id"] for row in item["uses"]})

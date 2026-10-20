@@ -85,6 +85,7 @@ export interface Asset {
   height: number | null;
   available: boolean;
   srt_path?: string;
+  active_library_ids?: string[];
   usage_count: number | null;
   removed: boolean;
   error?: string;

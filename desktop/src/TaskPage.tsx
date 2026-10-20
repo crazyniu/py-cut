@@ -23,8 +23,9 @@ import {
   type JobKind,
   type Library,
   type Project,
+  type Agent,
 } from "./api";
-import { report } from "./common";
+import { report, LoadingPage } from "./common";
 
 export default function TaskPage({
   project,
@@ -32,12 +33,16 @@ export default function TaskPage({
   onSettings,
   onLibrary,
   onSubmitted,
+  onCancel,
+  onBusyChange,
 }: {
   project: Project;
   kind: JobKind;
   onSettings: () => void;
   onLibrary: () => void;
   onSubmitted: (job: Job) => void;
+  onCancel: () => void;
+  onBusyChange: (busy: boolean) => void;
 }) {
   const [libraries, setLibraries] = useState<Library[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -52,6 +57,8 @@ export default function TaskPage({
   const [visionReady, setVisionReady] = useState(kind !== "cover");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  const [staleCount, setStaleCount] = useState(0);
   const skipFirstSave = useRef(true);
   const save = useDebouncedCallback(
     (values: Record<string, unknown>) => {
@@ -65,6 +72,7 @@ export default function TaskPage({
   );
   useEffect(() => {
     let disposed = false;
+    setError("");
     Promise.all([
       rpc<Library[]>("libraries.list", { project_id: project.id }),
       rpc<Record<string, unknown>>("workbench.get", {
@@ -72,7 +80,10 @@ export default function TaskPage({
         kind,
       }),
       kind === "cover"
-        ? rpc<Record<string, string>>("settings.get")
+        ? Promise.all([
+            rpc<Record<string, string>>("settings.get"),
+            rpc<Agent[]>("agents.detect"),
+          ])
         : Promise.resolve(null),
     ])
       .then(async ([items, saved, settings]) => {
@@ -104,11 +115,28 @@ export default function TaskPage({
                 ),
               ],
         );
-        setAssets(restored.filter((item): item is Asset => item !== null));
-        setSelection(selected);
+        const references = new Set(
+          items
+            .filter((item) => item.role === "reference")
+            .map((item) => item.id),
+        );
+        const valid = restored.filter(
+          (item): item is Asset =>
+            item !== null &&
+            Boolean(item.active_library_ids?.some((id) => references.has(id))),
+        );
+        setAssets(valid);
+        setSelection(valid.map((item) => item.id));
+        setStaleCount(selected.length - valid.length);
         if (typeof saved.fission === "number") setCount(saved.fission);
         if (typeof saved.out_dir === "string") setOutput(saved.out_dir);
-        if (settings) setVisionReady(Boolean(settings.vision_model));
+        if (settings)
+          setVisionReady(
+            Boolean(settings[0].vision_model) &&
+              settings[1].some(
+                (agent) => agent.id === "codex" && agent.available,
+              ),
+          );
         setReady(true);
       })
       .catch((reason) => {
@@ -117,7 +145,7 @@ export default function TaskPage({
     return () => {
       disposed = true;
     };
-  }, [project.id, kind]);
+  }, [project.id, kind, retry]);
   useEffect(() => {
     if (!ready) return;
     if (skipFirstSave.current) {
@@ -185,7 +213,7 @@ export default function TaskPage({
       disposed = true;
       window.clearTimeout(timeout);
     };
-  }, [ready, libraries, kind, search]);
+  }, [ready, libraries, kind, search, selection]);
   const total = selection.length * Number(count || 0);
   const offline =
     kind === "montage" &&
@@ -193,7 +221,11 @@ export default function TaskPage({
   const backgroundReady = libraries.some(
     (library) => library.role === "background" && library.active_count > 0,
   );
-  const configured = visionReady && (kind !== "montage" || backgroundReady);
+  const referenceReady = libraries.some(
+    (library) => library.role === "reference" && library.active_count > 0,
+  );
+  const configured =
+    visionReady && (kind !== "montage" || (backgroundReady && referenceReady));
   const canSubmit =
     ready &&
     configured &&
@@ -207,7 +239,10 @@ export default function TaskPage({
         Number(count) <= 99
       : folders.length > 0);
   async function submit() {
+    if (!canSubmit) return;
     setSubmitting(true);
+    onBusyChange(true);
+    setError("");
     try {
       const job = await rpc<Job>("jobs.submit", {
         project_id: project.id,
@@ -227,16 +262,34 @@ export default function TaskPage({
       setError(message(reason));
     } finally {
       setSubmitting(false);
+      onBusyChange(false);
     }
   }
   return (
     <Stack gap="md">
-      {error && <Alert color="red">{error}</Alert>}
+      {error && (
+        <Alert color="red" title="任务暂时无法开始">
+          {error}
+          {!ready && (
+            <Button
+              variant="subtle"
+              onClick={() => setRetry((value) => value + 1)}
+            >
+              重新读取
+            </Button>
+          )}
+        </Alert>
+      )}
+      {!ready && !error && <LoadingPage label="正在读取任务配置…" />}
       {ready && !configured && (
         <Alert color="yellow">
           {!visionReady
-            ? "先在设置中选择 Codex 模型。"
-            : "先在素材库配置背景切片目录。"}
+            ? "字幕擦除需要已登录的 Codex 和已保存的识别模型。"
+            : !referenceReady
+              ? staleCount
+                ? `原先选择的 ${staleCount} 个话术已不在当前素材库，请先添加话术目录。`
+                : "先在素材库添加话术视频目录。"
+              : "先在素材库配置背景切片目录。"}
           <Button
             variant="subtle"
             size="xs"
@@ -246,120 +299,170 @@ export default function TaskPage({
           </Button>
         </Alert>
       )}
-      {kind === "montage" ? (
+      {ready && (
         <>
-          <MultiSelect
-            label="混剪视频"
-            placeholder="搜索并多选话术视频"
-            data={assets
-              .filter((asset) => asset.kind === "video")
-              .map((asset) => ({
-                value: asset.id,
-                label: asset.path.split(/[\\/]/).slice(-2).join(" / "),
-                disabled: !asset.available,
-              }))}
-            value={selection}
-            onChange={setSelection}
-            searchable
-            searchValue={search}
-            onSearchChange={setSearch}
-            hidePickedOptions
-            maxDropdownHeight={220}
-            rightSection={loading ? <Loader size={14} /> : undefined}
+          {kind === "montage" && referenceReady && staleCount > 0 && (
+            <Alert color="yellow">
+              原先选择的 {staleCount} 个话术已不在当前素材库，请重新选择。
+            </Alert>
+          )}
+          <Text size="sm" c="dimmed">
+            {kind === "montage"
+              ? "选择话术视频，设置每支话术的生成数量，再选择成片保存位置。"
+              : "选择处理文件夹，自动包含所有子文件夹中的 MP4。源视频会保留。"}
+          </Text>
+          {kind === "montage" ? (
+            <>
+              <MultiSelect
+                label="话术视频"
+                disabled={submitting}
+                nothingFoundMessage="未找到视频，请调整搜索或前往素材库添加话术目录。"
+                placeholder="搜索并多选话术视频"
+                data={assets
+                  .filter((asset) => asset.kind === "video")
+                  .map((asset) => ({
+                    value: asset.id,
+                    label: asset.path.split(/[\\/]/).slice(-2).join(" / "),
+                    disabled: !asset.available,
+                  }))}
+                value={selection}
+                onChange={setSelection}
+                searchable
+                searchValue={search}
+                onSearchChange={setSearch}
+                hidePickedOptions
+                maxDropdownHeight={220}
+                rightSection={loading ? <Loader size={14} /> : undefined}
+              />
+              <NumberInput
+                label="每个视频生成数量"
+                description="每支所选话术生成 1–99 支独立成片。"
+                disabled={submitting}
+                min={1}
+                max={99}
+                allowDecimal={false}
+                clampBehavior="strict"
+                value={count}
+                onChange={setCount}
+              />
+              {totalAssets > 100 && (
+                <Text size="xs" c="dimmed">
+                  输入名称查找更多视频。
+                </Text>
+              )}
+              <Text size="xs" c="dimmed">
+                自动使用项目中的背景切片
+                {libraries.some(
+                  (item) => item.role === "pip" && item.active_count,
+                )
+                  ? "、画中画"
+                  : ""}
+                {libraries.some(
+                  (item) => item.role === "intro" && item.active_count,
+                )
+                  ? "、前贴"
+                  : ""}
+                ；素材目录在素材库管理。
+              </Text>
+            </>
+          ) : (
+            <>
+              <MultiSelect
+                label="处理文件夹"
+                disabled={submitting}
+                placeholder="选择已有目录或点击选择文件夹"
+                data={[
+                  ...new Set([
+                    ...libraries
+                      .filter((library) => library.role === "background")
+                      .flatMap((library) => library.roots),
+                    ...folders,
+                  ]),
+                ]}
+                value={folders}
+                onChange={setFolders}
+                searchable
+              />
+              <Group className="task-form-options">
+                <Button
+                  variant="default"
+                  disabled={submitting}
+                  leftSection={<IconFolderOpen size={16} />}
+                  onClick={async () => {
+                    try {
+                      const chosen = await chooseDirectories();
+                      if (chosen.length)
+                        setFolders((previous) => [
+                          ...new Set([...previous, ...chosen]),
+                        ]);
+                    } catch (reason) {
+                      setError(message(reason));
+                    }
+                  }}
+                >
+                  选择文件夹
+                </Button>
+              </Group>
+              <Text size="xs" c="dimmed">
+                {output.trim()
+                  ? "结果保存到下方指定目录。"
+                  : `结果保存到各输入目录同级的“${kind === "cover" ? "字幕查重" : "去重"}”目录。`}
+              </Text>
+            </>
+          )}
+          <TextInput
+            label="成片输出目录"
+            disabled={submitting}
+            description={
+              kind === "montage"
+                ? "本次任务会在此目录内创建独立批次文件夹。"
+                : "可选；留空使用上述默认目录。"
+            }
+            placeholder={
+              kind === "montage" ? "选择成片保存位置" : "留空时保存到源目录同级"
+            }
+            value={output}
+            onChange={(event) => setOutput(event.currentTarget.value)}
+            rightSection={
+              <Button
+                variant="subtle"
+                size="compact-xs"
+                disabled={submitting}
+                aria-label="选择成片输出目录"
+                onClick={async () => {
+                  try {
+                    const path = await chooseDirectory();
+                    if (path) setOutput(path);
+                  } catch (reason) {
+                    setError(message(reason));
+                  }
+                }}
+              >
+                <IconFolderOpen size={16} />
+              </Button>
+            }
           />
-          <NumberInput
-            label="每个视频生成数量"
-            min={1}
-            max={99}
-            allowDecimal={false}
-            clampBehavior="strict"
-            value={count}
-            onChange={setCount}
-          />
-          {totalAssets > 100 && (
-            <Text size="xs" c="dimmed">
-              输入名称查找更多视频。
+          {offline && (
+            <Text c="red" size="sm">
+              所选视频已离线，请重新选择。
             </Text>
           )}
         </>
-      ) : (
-        <>
-          <MultiSelect
-            label="处理文件夹"
-            placeholder="选择已有目录或点击选择文件夹"
-            data={[
-              ...new Set([
-                ...libraries
-                  .filter((library) => library.role === "background")
-                  .flatMap((library) => library.roots),
-                ...folders,
-              ]),
-            ]}
-            value={folders}
-            onChange={setFolders}
-            searchable
-          />
-          <Group className="task-form-options">
-            <Button
-              variant="default"
-              leftSection={<IconFolderOpen size={16} />}
-              onClick={async () => {
-                try {
-                  const chosen = await chooseDirectories();
-                  if (chosen.length)
-                    setFolders((previous) => [
-                      ...new Set([...previous, ...chosen]),
-                    ]);
-                } catch (reason) {
-                  setError(message(reason));
-                }
-              }}
-            >
-              选择文件夹
-            </Button>
-          </Group>
-          <Text size="xs" c="dimmed">
-            递归处理所选文件夹中的全部 MP4。结果保存到各输入目录同级的“
-            {kind === "cover" ? "字幕查重" : "去重"}”目录，保留源视频。
-          </Text>
-        </>
       )}
-      <TextInput
-        label="成片输出目录"
-        placeholder={
-          kind === "montage" ? "选择成片保存位置" : "留空时保存到源目录同级"
-        }
-        value={output}
-        onChange={(event) => setOutput(event.currentTarget.value)}
-        rightSection={
-          <Button
-            variant="subtle"
-            size="compact-xs"
-            aria-label="选择成片输出目录"
-            onClick={async () => {
-              try {
-                const path = await chooseDirectory();
-                if (path) setOutput(path);
-              } catch (reason) {
-                setError(message(reason));
-              }
-            }}
-          >
-            <IconFolderOpen size={16} />
-          </Button>
-        }
-      />
-      {offline && (
-        <Text c="red" size="sm">
-          所选视频已离线，请重新选择。
-        </Text>
-      )}
-      <Group justify="space-between" gap="sm" mt="sm">
-        <Text size="sm" c="dimmed">
-          {kind === "montage"
-            ? `已选 ${selection.length} 个视频 · 共生成 ${total} 支`
-            : `已选 ${folders.length} 个文件夹`}
-        </Text>
+      <Group justify="flex-end" gap="sm" mt="sm" className="task-form-footer">
+        {ready && (
+          <>
+            {" "}
+            <Text size="sm" c="dimmed" mr="auto">
+              {kind === "montage"
+                ? `已选 ${selection.length} 个视频 · 共生成 ${total} 支`
+                : `已选 ${folders.length} 个文件夹`}
+            </Text>
+          </>
+        )}
+        <Button variant="default" disabled={submitting} onClick={onCancel}>
+          取消
+        </Button>
         <Button
           leftSection={<IconPlayerPlay size={16} />}
           disabled={!canSubmit}

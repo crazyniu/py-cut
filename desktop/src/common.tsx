@@ -90,8 +90,14 @@ export function PageHeading({
   actions?: ReactNode;
 }) {
   return (
-    <Stack gap="md" mb="lg">
-      <Box>
+    <Group
+      gap="md"
+      mb="lg"
+      justify="space-between"
+      align="center"
+      className="page-heading"
+    >
+      <Box miw={0}>
         <Title order={2} size="h3">
           {title}
         </Title>
@@ -102,11 +108,11 @@ export function PageHeading({
         )}
       </Box>
       {actions && (
-        <Group gap="xs" align="flex-end">
+        <Group gap="xs" align="center">
           {actions}
         </Group>
       )}
-    </Stack>
+    </Group>
   );
 }
 export function Status({ value }: { value: string }) {
@@ -182,12 +188,12 @@ export function MediaCard({
             </Box>
           )}
           {overlay}
-          <Box className="media-card-caption">
-            <Text size="sm" fw={600} lineClamp={1} title={title}>
-              {title}
-            </Text>
-            {children}
-          </Box>
+        </Box>
+        <Box className="media-card-caption">
+          <Text size="sm" fw={600} lineClamp={2} title={title}>
+            {title}
+          </Text>
+          {children}
         </Box>
       </button>
       {selection && <Box className="thumb-select">{selection}</Box>}

@@ -8,11 +8,14 @@ import "./styles.css";
 import App from "./App";
 const theme = createTheme({
   primaryColor: "cyan",
-  primaryShade: 6,
+  primaryShade: 9,
   defaultRadius: "sm",
   components: {
     Modal: Modal.extend({
-      defaultProps: { overlayProps: { backgroundOpacity: 0.5, blur: 5 } },
+      defaultProps: {
+        overlayProps: { backgroundOpacity: 0.5, blur: 5 },
+        closeButtonProps: { "aria-label": "关闭对话框" },
+      },
     }),
   },
   fontFamily:

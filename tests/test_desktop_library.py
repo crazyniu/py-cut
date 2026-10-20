@@ -58,6 +58,25 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.update_project(other["id"], unknown=True)
 
+    def test_detail_reports_only_current_active_library_associations(self):
+        self.file()
+        self.scan()
+        asset = self.assets()["items"][0]
+        other = self.store.create_project("Other project")
+        other_library = self.store.libraries(other["id"])[0]
+        self.store.add_roots(other_library["id"], [str(self.root)])
+        self.indexer.scan(other_library["id"])
+        detail = lambda: self.store.asset_detail(asset["id"], self.project["id"])
+        self.assertEqual(detail()["active_library_ids"], [self.library["id"]])
+        self.store.set_removed(self.library["id"], [asset["id"]], True)
+        self.assertEqual(detail()["active_library_ids"], [])
+        self.store.set_removed(self.library["id"], [asset["id"]], False)
+        self.assertEqual(detail()["active_library_ids"], [self.library["id"]])
+        self.store.remove_root(self.library["id"], str(self.root))
+        self.assertEqual(detail()["active_library_ids"], [])
+        self.assertTrue(self.store.asset_detail(asset["id"], other["id"])["active_library_ids"])
+        self.assertTrue((self.root / "video.mp4").exists())
+
     def test_fixed_types_migrate_legacy_groups_without_losing_roots_removals_or_usage(self):
         self.file()
         self.scan()

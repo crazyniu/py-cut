@@ -8,17 +8,13 @@ import {
   Loader,
   Modal,
   Pagination,
+  Paper,
   Progress,
   Select,
   Stack,
   Text,
 } from "@mantine/core";
-import {
-  IconCheck,
-  IconClock,
-  IconFolderOpen,
-  IconMovie,
-} from "@tabler/icons-react";
+import { IconFolderOpen } from "@tabler/icons-react";
 import {
   type Job,
   type Output,
@@ -128,66 +124,60 @@ export default function TaskProgress({ job }: { job: Job }) {
   const shownPage = Math.min(page, pages);
   const processed =
     job.completed + job.failed + job.review + (job.skipped || 0);
-  const active = items.filter((item) => item.status === "running");
   const hasError = !!job.error || job.failed > 0 || job.status === "failed";
   return (
     <Stack gap="md">
-      <div className="processing-journey" aria-label="整批处理状态">
-        <div>
-          <IconClock size={20} />
-          <Text size="sm">等待处理</Text>
-          <Text size="xs" c="dimmed">
-            {items.filter((item) => item.status === "queued").length} 个
-          </Text>
-        </div>
-        <span
-          className={
-            active.length ? "processing-link active" : "processing-link"
-          }
-        />
-        <div>
-          {!terminal(job) && job.status !== "queued" ? (
-            <Loader size={20} />
-          ) : (
-            <IconMovie size={20} />
+      <Paper withBorder p="lg" className="batch-summary">
+        <Group justify="space-between" align="flex-start" gap="md">
+          <Stack gap={8}>
+            <Group gap="sm">
+              <Status value={job.status} />
+              <Text size="sm" fw={500}>
+                {job.status === "queued"
+                  ? "任务已加入队列，将按顺序处理"
+                  : job.status === "cancelling"
+                    ? "正在停止，请等待当前处理退出"
+                    : !terminal(job)
+                      ? job.stage || "正在准备素材…"
+                      : `本批任务已结束 · 已处理 ${processed} / ${job.planned} 个视频`}
+              </Text>
+            </Group>
+            <Text size="sm" c="dimmed">
+              完成 {job.completed} · 待复查 {job.review} · 失败 {job.failed}
+              {!!job.skipped && ` · 跳过 ${job.skipped}`}
+              {terminal(job) &&
+                processed < job.planned &&
+                ` · 未完成 ${job.planned - processed}`}
+            </Text>
+          </Stack>
+          {!terminal(job) && (
+            <Group gap="xs">
+              <Loader size="xs" />
+              <Text size="sm">
+                已处理 {processed} / {job.planned}
+              </Text>
+            </Group>
           )}
-          <Text size="sm">正在处理</Text>
-          <Text size="xs" c="dimmed">
-            {active.length
-              ? `${active.length} 个视频`
-              : job.status === "running"
-                ? "正在准备素材"
-                : "—"}
-          </Text>
-        </div>
-        <span
-          className={
-            active.length ? "processing-link active" : "processing-link"
+        </Group>
+        <Progress
+          mt="md"
+          value={job.planned ? (processed / job.planned) * 100 : 0}
+          color={
+            job.status === "failed"
+              ? "red"
+              : job.status === "completed"
+                ? "teal"
+                : "cyan"
           }
+          animated={job.status === "running"}
+          aria-label="整批视频进度"
         />
-        <div>
-          <IconCheck size={20} />
-          <Text size="sm">处理结果</Text>
-          <Text size="xs" c="dimmed">
-            完成 {job.completed} · 待复查 {job.review} · 失败 {job.failed}
-          </Text>
-        </div>
-      </div>
-      <Group justify="space-between">
-        <Text size="sm">
-          已处理 {processed} / {job.planned} 个视频
-        </Text>
-        {!!job.skipped && (
-          <Text size="xs" c="dimmed">
-            跳过 {job.skipped} 个已有结果
-          </Text>
-        )}
-      </Group>
-      <Progress
-        value={job.planned ? (processed / job.planned) * 100 : 0}
-        animated={!terminal(job)}
-        aria-label="整批视频进度"
-      />
+      </Paper>
+      {job.review > 0 && (
+        <Alert color="yellow" title="有视频需要复查">
+          待复查结果需要检查后再使用，请查看对应视频与处理提示。
+        </Alert>
+      )}
       {hasError && (
         <Alert color="red" title="处理遇到问题">
           <Text size="sm">

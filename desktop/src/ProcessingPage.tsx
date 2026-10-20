@@ -4,9 +4,10 @@ import {
   Button,
   Group,
   Modal,
+  Pagination,
+  Table,
   Progress,
   Select,
-  Stack,
   Text,
 } from "@mantine/core";
 import { IconArrowLeft, IconPlus, IconRefresh } from "@tabler/icons-react";
@@ -20,13 +21,7 @@ import {
   type JobKind,
   type Project,
 } from "./api";
-import {
-  Empty,
-  LoadingPage,
-  PageHeading,
-  MediaCard,
-  VideoThumbnail,
-} from "./common";
+import { Empty, LoadingPage, PageHeading, Status } from "./common";
 import TaskPage from "./TaskPage";
 import TaskProgress, { TaskActions } from "./TaskProgress";
 
@@ -48,6 +43,8 @@ export default function ProcessingPage({
   const [state, setState] = useState("all");
   const [selectedId, setSelectedId] = useState<string>();
   const [create, setCreate] = useState(false);
+  const [page, setPage] = useState(1);
+  const [submitting, setSubmitting] = useState(false);
   const [kind, setKind] = useState<JobKind>("montage");
   const request = useRef(0);
   const load = useCallback(() => {
@@ -81,16 +78,25 @@ export default function ProcessingPage({
         (state === "active" ? !terminal(job) : terminal(job))),
   );
   const active = jobs.filter((job) => !terminal(job)).length;
+  useEffect(() => setPage(1), [filter, state]);
+  const pages = Math.max(1, Math.ceil(visible.length / 12));
+  const shownPage = Math.min(page, pages);
   return (
     <>
       <PageHeading
-        title={
-          selected
-            ? `${kinds[selected.kind]} · ${dateTime(selected.created_at)}`
-            : "视频处理"
-        }
+        title={selected ? `${kinds[selected.kind]}任务` : "视频处理"}
         description={
-          selected ? undefined : "统一查看混剪、字幕擦除和视频去重任务。"
+          selected
+            ? dateTime(selected.created_at)
+            : "创建处理任务，查看进度与结果。"
+        }
+        actions={
+          <Button
+            leftSection={<IconPlus size={16} />}
+            onClick={() => setCreate(true)}
+          >
+            新建任务
+          </Button>
         }
       />
       <Group gap="xs" mb="md" className="page-toolbar">
@@ -146,13 +152,6 @@ export default function ProcessingPage({
             {visible.length} 个任务{active ? ` · ${active} 个处理中或排队` : ""}
           </Text>
         )}
-        <Button
-          ml="auto"
-          leftSection={<IconPlus size={16} />}
-          onClick={() => setCreate(true)}
-        >
-          新建任务
-        </Button>
       </Group>
       {error && (
         <Alert color="red" mb="md">
@@ -169,56 +168,106 @@ export default function ProcessingPage({
           description="新建任务后，可在这里同时查看不同类型的处理状态。"
         />
       ) : (
-        <div className="asset-grid">
-          {visible.map((job) => {
-            const processed =
-              job.completed + job.failed + job.review + (job.skipped || 0);
-            const output = job.outputs?.find(
-              (item) => item.available !== false,
-            );
-            return (
-              <MediaCard
-                key={job.id}
-                title={kinds[job.kind]}
-                label={`查看${kinds[job.kind]}任务 ${dateTime(job.created_at)}`}
-                status={job.status}
-                onOpen={() => setSelectedId(job.id)}
-                thumbnail={
-                  <VideoThumbnail
-                    id={output?.id || job.items?.[0]?.id.split(":")[0]}
-                    output={!!output}
-                  />
-                }
-              >
-                <Text size="xs">{dateTime(job.created_at)}</Text>
-                <Text size="xs">
-                  已处理 {processed} / {job.planned} 个视频
-                </Text>
-                {!terminal(job) && (
-                  <Progress
-                    size={4}
-                    mt={5}
-                    value={job.planned ? (processed / job.planned) * 100 : 0}
-                    animated={job.status === "running"}
-                    aria-label={`${kinds[job.kind]}整批进度`}
-                  />
-                )}
-              </MediaCard>
-            );
-          })}
-        </div>
+        <Table.ScrollContainer minWidth={620}>
+          <Table verticalSpacing="md" highlightOnHover className="job-table">
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>处理任务</Table.Th>
+                <Table.Th>状态</Table.Th>
+                <Table.Th>处理进度</Table.Th>
+                <Table.Th>结果</Table.Th>
+                <Table.Th />
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {visible
+                .slice((shownPage - 1) * 12, shownPage * 12)
+                .map((job) => {
+                  const processed =
+                    job.completed +
+                    job.failed +
+                    job.review +
+                    (job.skipped || 0);
+                  return (
+                    <Table.Tr key={job.id}>
+                      <Table.Td>
+                        <button
+                          className="text-button job-name"
+                          onClick={() => setSelectedId(job.id)}
+                        >
+                          {kinds[job.kind]}
+                        </button>
+                        <Text size="xs" c="dimmed" mt={4}>
+                          {dateTime(job.created_at)}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Status value={job.status} />
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="sm">
+                          {processed} / {job.planned} 个视频
+                        </Text>
+                        {!terminal(job) && (
+                          <Progress
+                            size={4}
+                            mt={8}
+                            maw={180}
+                            value={
+                              job.planned ? (processed / job.planned) * 100 : 0
+                            }
+                            animated={job.status === "running"}
+                            aria-label={`${kinds[job.kind]}整批进度`}
+                          />
+                        )}
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="sm">
+                          完成 {job.completed}
+                          {job.review > 0 ? ` · 待复查 ${job.review}` : ""}
+                          {job.failed > 0 ? ` · 失败 ${job.failed}` : ""}
+                        </Text>
+                        {!!job.skipped && (
+                          <Text size="xs" c="dimmed">
+                            跳过 {job.skipped}
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td ta="right">
+                        <Button
+                          variant="default"
+                          size="xs"
+                          onClick={() => setSelectedId(job.id)}
+                        >
+                          查看任务
+                        </Button>
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
+            </Table.Tbody>
+          </Table>
+        </Table.ScrollContainer>
+      )}
+      {!selected && pages > 1 && (
+        <Group justify="center" mt="lg">
+          <Pagination value={shownPage} onChange={setPage} total={pages} />
+        </Group>
       )}
       <Modal
         opened={create}
-        onClose={() => setCreate(false)}
+        onClose={() => !submitting && setCreate(false)}
         title="新建视频处理任务"
-        size={560}
+        size={680}
         centered
         closeOnClickOutside={false}
+        closeOnEscape={!submitting}
+        withCloseButton={!submitting}
         className="task-form"
       >
         <Select
           label="处理类型"
+          disabled={submitting}
           mb="md"
           value={kind}
           allowDeselect={false}
@@ -234,6 +283,8 @@ export default function ProcessingPage({
           kind={kind}
           onSettings={onSettings}
           onLibrary={onLibrary}
+          onCancel={() => setCreate(false)}
+          onBusyChange={setSubmitting}
           onSubmitted={(job) => {
             setJobs((items) => [job, ...items]);
             setSelectedId(job.id);
