@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
+  ActionIcon,
   Button,
   Group,
   Modal,
@@ -11,6 +12,7 @@ import {
 } from "@mantine/core";
 import {
   IconArrowLeft,
+  IconTrash,
   IconFolderOpen,
   IconFolder,
   IconRefresh,
@@ -22,6 +24,7 @@ import {
   message,
   openPath,
   rpc,
+  terminal,
   type Job,
   type Output,
   type Project,
@@ -36,6 +39,7 @@ import {
   VideoThumbnail,
 } from "./common";
 
+import TrashDialog, { type TrashTarget } from "./TrashDialog";
 export default function JobsPage({
   project,
   revision,
@@ -43,6 +47,7 @@ export default function JobsPage({
   project: Project;
   revision: number;
 }) {
+  const [trash, setTrash] = useState<TrashTarget | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
@@ -88,10 +93,10 @@ export default function JobsPage({
   const query = search.trim().toLocaleLowerCase();
   const batches = jobs.filter(
     (job) =>
-      job.outputs?.length &&
+      (job.outputs?.length || job.batch_available) &&
       (filter === "all" || job.kind === filter) &&
       (!query || folderName(job).toLocaleLowerCase().includes(query) ||
-        job.outputs.some((output) =>
+        job.outputs?.some((output) =>
           output.name.toLocaleLowerCase().includes(query),
         )),
   );
@@ -100,9 +105,9 @@ export default function JobsPage({
   );
   const directories = [
     ...new Set(
-      (detail?.outputs || []).map((output) =>
+      [...(detail?.batch_available && detail.batch_dir ? [detail.batch_dir] : []), ...(detail?.outputs || []).map((output) =>
         output.path.replace(/[\\/][^\\/]+$/, ""),
-      ),
+      )],
     ),
   ];
   const target =
@@ -189,6 +194,8 @@ export default function JobsPage({
         >
           刷新
         </Button>
+        {detail && <Button color="red" variant="subtle" leftSection={<IconTrash size={16} />} disabled={!terminal(detail)}
+          onClick={() => setTrash({ kind: "batch", project_id: project.id, job_id: detail.id, label: folderName(detail) })}>删除成片文件夹</Button>}
         <Text size="sm" c="dimmed">
           {selectedId ? `${count} 支成片` : `${count} 个文件夹`}
         </Text>
@@ -214,6 +221,9 @@ export default function JobsPage({
               key={output.id}
               title={output.name}
               label={`预览${output.name}`}
+              selection={<ActionIcon variant="default" size={28} color="red" aria-label={`删除成片 ${output.name}`}
+                disabled={!!detail && !terminal(detail)}
+                onClick={() => setTrash({ kind: "outputs", project_id: project.id, ids: [output.id], label: output.name })}><IconTrash size={16} /></ActionIcon>}
               onOpen={() => setPreview(output)}
               thumbnail={
                 <VideoThumbnail
@@ -231,12 +241,15 @@ export default function JobsPage({
       ) : (
         <div className="batch-grid">
           {batches.slice((shownPage - 1) * 24, shownPage * 24).map((job) => (
-            <button className="batch-folder" key={job.id} onClick={() => openBatch(job)} aria-label={`打开文件夹 ${folderName(job)}`}>
+            <div className="batch-folder-shell" key={job.id}><button className="batch-folder" onClick={() => openBatch(job)} aria-label={`打开文件夹 ${folderName(job)}`}>
               <IconFolder size={46} stroke={1.4} aria-hidden="true" />
               <Text component="span" size="sm" fw={600} lineClamp={2}>{folderName(job)}</Text>
               <Text component="span" size="xs" c="dimmed">{kinds[job.kind]} · {job.outputs?.length} 支成片</Text>
               <Text component="span" size="xs" c="dimmed">{dateTime(job.created_at)}</Text>
             </button>
+            <ActionIcon className="batch-trash" variant="subtle" color="red" aria-label={`删除文件夹 ${folderName(job)}`} disabled={!terminal(job)}
+              onClick={() => setTrash({ kind: "batch", project_id: project.id, job_id: job.id, label: folderName(job) })}><IconTrash size={17} /></ActionIcon>
+            </div>
           ))}
         </div>
       )}
@@ -245,6 +258,9 @@ export default function JobsPage({
           <Pagination value={shownPage} onChange={setPage} total={pages} />
         </Group>
       )}
+      <TrashDialog target={trash} onClose={() => setTrash(null)} onChanged={() => {
+        setPreview(undefined); if (trash?.kind === "batch") setSelectedId(undefined); load();
+      }} />
       <Modal
         opened={!!preview}
         onClose={() => setPreview(undefined)}

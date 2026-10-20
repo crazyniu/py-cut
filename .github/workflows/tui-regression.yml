@@ -84,7 +84,7 @@ jobs:
           tests/test_llm_safety.py tests/test_probe_cache.py -q
           tests/test_desktop_jobs.py tests/test_desktop_service.py
           tests/test_desktop_library.py tests/test_desktop_build.py tests/test_local_vision.py
-          tests/test_desktop_progress.py tests/test_desktop_publication_events.py
+          tests/test_desktop_progress.py tests/test_desktop_publication_events.py tests/test_desktop_deletion.py
       - uses: actions/setup-node@v4
         if: steps.scope.outputs.docs-only != 'true'
         with:

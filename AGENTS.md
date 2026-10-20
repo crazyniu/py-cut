@@ -24,7 +24,7 @@ parent rules assigning Codex only a coordination role; other release/PR rules ap
 - Verify remotes/default branch, fetch, inspect branch/worktrees/dirty files, open
   PRs, reviews, CI, and concurrent work. Preserve unrelated changes; avoid duplicate PRs.
 - This project does **not** use Linear. Do not query, create, claim, or update Linear
-  tasks. Use the current request for scope and `natefox2017/py-cut` for code, commits,
+  tasks. Use the current request for scope and `crazyniu/py-cut` for code, commits,
   branches, PRs, reviews, CI, and merges. Historical issue closure is not implementation proof.
 - Do not create another task-management system proactively.
 - State goal, scope, inputs/outputs, error behavior, constraints, unknowns, and

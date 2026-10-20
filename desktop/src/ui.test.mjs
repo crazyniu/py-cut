@@ -13,14 +13,14 @@ const directory = await mkdtemp(path.resolve('node_modules/.pycut-ui-'));
 try {
   const filename = path.join(directory, 'components.mjs');
   const result = await build({
-    stdin: { contents: `export { default as App } from './src/App'; export { MediaCard, PageHeading } from './src/common'; export { default as TaskProgress } from './src/TaskProgress';`, resolveDir: process.cwd() },
+    stdin: { contents: `export { default as App } from './src/App'; export { MediaCard, PageHeading } from './src/common'; export { default as TaskProgress } from './src/TaskProgress'; export { default as LibraryPage } from './src/LibraryPage';`, resolveDir: process.cwd() },
     bundle: true, platform: 'node', format: 'esm', packages: 'external', write: false,
   });
   await writeFile(filename, result.outputFiles[0].text);
   globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
   globalThis.isTauri = true;
   globalThis.window = { __TAURI_INTERNALS__: {}, matchMedia: () => ({ matches: false }) };
-  const { App, MediaCard, PageHeading, TaskProgress } = await import(pathToFileURL(filename));
+  const { App, MediaCard, PageHeading, TaskProgress, LibraryPage } = await import(pathToFileURL(filename));
   const render = (component, props) => renderToStaticMarkup(createElement(MantineProvider, { forceColorScheme: 'dark' }, createElement(component, props)));
 
   test('native startup reads projects without blocking on Codex authentication', () => {
@@ -29,6 +29,14 @@ try {
     assert.doesNotMatch(html, /正在检查本机 Codex|请先安装并登录 Codex/);
     assert.match(html, /<button[^>]*mantine-NavLink-root/);
     assert.doesNotMatch(html, /<a[^>]*mantine-NavLink-root/);
+  });
+
+  test('grid and list switches share a connected button group', () => {
+    const html = render(LibraryPage, { project: { id: 'project', name: 'Test' } });
+    assert.match(html, /mantine-ButtonGroup-group/);
+    assert.match(html, /aria-label="显示方式"/);
+    assert.match(html, /aria-label="缩略图视图"/);
+    assert.match(html, /aria-label="列表视图"/);
   });
 
   test('all media captions stay inside the portrait image', () => {

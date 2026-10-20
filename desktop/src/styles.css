@@ -416,3 +416,8 @@ textarea {
 .batch-folder > svg { color: var(--mantine-color-cyan-5); margin-bottom: 4px; }
 .batch-folder:hover { background: var(--mantine-color-default-hover); }
 .batch-folder:focus-visible { outline: 2px solid var(--mantine-color-cyan-5); outline-offset: 2px; }
+
+.batch-folder-shell { position: relative; display: flex; }
+.batch-folder-shell > .batch-folder { width: 100%; padding-right: 44px; }
+.batch-trash { position: absolute; top: 10px; right: 10px; }
+.trash-path { overflow-wrap: anywhere; }

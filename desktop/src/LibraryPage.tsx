@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
+  ActionIcon,
   Box,
   Button,
   Checkbox,
@@ -51,7 +52,9 @@ import {
   type Project,
   type Use,
 } from "./api";
+import TrashDialog, { type TrashTarget } from "./TrashDialog";
 export default function LibraryPage({ project }: { project: Project }) {
+  const [trash, setTrash] = useState<TrashTarget | null>(null);
   const [libraries, setLibraries] = useState<Library[]>([]);
   const [libraryId, setLibraryId] = useState<string | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -321,7 +324,7 @@ export default function LibraryPage({ project }: { project: Project }) {
           value={sort || "name"}
           onChange={(value) => setSort(String(value))}
         />
-        <Group gap={6} aria-label="显示方式">
+        <Button.Group aria-label="显示方式">
           <Button
             variant={layout === "grid" ? "light" : "default"}
             w={36}
@@ -348,7 +351,7 @@ export default function LibraryPage({ project }: { project: Project }) {
           >
             <IconList size={17} />
           </Button>
-        </Group>
+        </Button.Group>
         <Button
           variant={filters ? "light" : "default"}
           leftSection={<IconFilter size={16} />}
@@ -471,9 +474,13 @@ export default function LibraryPage({ project }: { project: Project }) {
                       >
                         取消选择
                       </Button>
+                      <Button size="xs" color="red" leftSection={<IconTrash size={14} />}
+                        onClick={() => setTrash({ kind: "assets", library_id: library.id, ids: selected, label: `${selected.length} 个素材文件` })}>
+                        移到废纸篓
+                      </Button>
                       <Button
                         size="xs"
-                        variant="light"
+                        variant="default"
                         color={removed === "active" ? "red" : "cyan"}
                         leftSection={
                           removed === "active" ? (
@@ -491,7 +498,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                           setSelected([]);
                         }}
                       >
-                        {removed === "active" ? "从当前库移除" : "恢复到素材库"}
+                        {removed === "active" ? "仅从当前库移除" : "恢复到素材库"}
                       </Button>
                     </Group>
                   </Group>
@@ -554,11 +561,13 @@ export default function LibraryPage({ project }: { project: Project }) {
                       onOpen={() => setDetailId(asset.id)}
                       thumbnail={<AssetThumb asset={asset} />}
                       selection={
-                        <Checkbox
-                          aria-label={`批量选择 ${asset.name}`}
-                          checked={selected.includes(asset.id)}
-                          onChange={() => toggle(asset.id)}
-                        />
+                        <Group gap={6} wrap="nowrap">
+                          <ActionIcon variant="default" size={28} color="red" aria-label={`删除素材 ${asset.name}`}
+                            onClick={() => setTrash({ kind: "assets", library_id: library.id, ids: [asset.id], label: asset.name })}>
+                            <IconTrash size={15} />
+                          </ActionIcon>
+                          <Checkbox aria-label={`批量选择 ${asset.name}`} checked={selected.includes(asset.id)} onChange={() => toggle(asset.id)} />
+                        </Group>
                       }
                     >
                       {asset.path.split(/[\\/]/).slice(-2, -1)[0] !== asset.name.replace(/\.[^.]+$/, "") && (
@@ -592,6 +601,7 @@ export default function LibraryPage({ project }: { project: Project }) {
                         <Table.Th>时长</Table.Th>
                         <Table.Th>尺寸</Table.Th>
                         <Table.Th>使用</Table.Th>
+                        <Table.Th />
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
@@ -629,6 +639,8 @@ export default function LibraryPage({ project }: { project: Project }) {
                               : "—"}
                           </Table.Td>
                           <Table.Td>{asset.usage_count ?? "未统计"}</Table.Td>
+                          <Table.Td><ActionIcon variant="subtle" color="red" aria-label={`删除素材 ${asset.name}`}
+                            onClick={() => setTrash({ kind: "assets", library_id: library.id, ids: [asset.id], label: asset.name })}><IconTrash size={16} /></ActionIcon></Table.Td>
                         </Table.Tr>
                       ))}
                     </Table.Tbody>
@@ -671,6 +683,9 @@ export default function LibraryPage({ project }: { project: Project }) {
           </Modal>
         )}
       </div>
+      <TrashDialog target={trash} onClose={() => setTrash(null)} onChanged={() => {
+        setSelected([]); setDetailId(null); void loadLibraries(); setRevision((value) => value + 1);
+      }} />
       <Modal
         opened={directories}
         onClose={() => setDirectories(false)}

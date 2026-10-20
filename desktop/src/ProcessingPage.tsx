@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
+  ActionIcon,
   Button,
   Group,
   Modal,
@@ -10,7 +11,7 @@ import {
   Select,
   Text,
 } from "@mantine/core";
-import { IconArrowLeft, IconPlus, IconRefresh } from "@tabler/icons-react";
+import { IconArrowLeft, IconPlus, IconRefresh, IconTrash } from "@tabler/icons-react";
 import {
   dateTime,
   kinds,
@@ -25,6 +26,7 @@ import { Empty, LoadingPage, PageHeading, Status } from "./common";
 import TaskPage from "./TaskPage";
 import TaskProgress, { TaskActions } from "./TaskProgress";
 
+import TrashDialog, { type TrashTarget } from "./TrashDialog";
 export default function ProcessingPage({
   project,
   revision,
@@ -36,6 +38,7 @@ export default function ProcessingPage({
   onSettings: () => void;
   onLibrary: () => void;
 }) {
+  const [trash, setTrash] = useState<TrashTarget | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
@@ -163,6 +166,8 @@ export default function ProcessingPage({
         <TaskProgress key={selected.id} job={selected} actions={<>
           <Button variant="default" leftSection={<IconArrowLeft size={16} />} onClick={() => setSelectedId(undefined)}>全部任务</Button>
           <TaskActions job={selected} />
+          <Button variant="subtle" color="red" leftSection={<IconTrash size={16} />} disabled={selected.status === "running" || selected.status === "cancelling"}
+            onClick={() => setTrash({ kind: "job", project_id: project.id, job_id: selected.id, label: `${kinds[selected.kind]} · ${dateTime(selected.created_at)}` })}>删除任务</Button>
           <Button variant="default" leftSection={<IconRefresh size={16} />} onClick={load}>刷新</Button>
         </>} />
       ) : !visible.length ? (
@@ -237,13 +242,17 @@ export default function ProcessingPage({
                         )}
                       </Table.Td>
                       <Table.Td ta="right">
-                        <Button
+                        <Group gap="xs" justify="flex-end" wrap="nowrap"><Button
                           variant="default"
                           size="xs"
                           onClick={() => setSelectedId(job.id)}
                         >
                           查看任务
                         </Button>
+                        <ActionIcon variant="subtle" color="red" aria-label={`删除任务 ${kinds[job.kind]} ${dateTime(job.created_at)}`}
+                          disabled={job.status === "running" || job.status === "cancelling"}
+                          onClick={() => setTrash({ kind: "job", project_id: project.id, job_id: job.id, label: `${kinds[job.kind]} · ${dateTime(job.created_at)}` })}><IconTrash size={16} /></ActionIcon>
+                        </Group>
                       </Table.Td>
                     </Table.Tr>
                   );
@@ -257,6 +266,7 @@ export default function ProcessingPage({
           <Pagination value={shownPage} onChange={setPage} total={pages} />
         </Group>
       )}
+      <TrashDialog target={trash} onClose={() => setTrash(null)} onChanged={() => { setSelectedId(undefined); load(); }} />
       <Modal
         opened={create}
         onClose={() => !submitting && setCreate(false)}

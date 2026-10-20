@@ -272,6 +272,7 @@ class JobManager:
             job.update(json.loads(job.pop("stats_json")))
             frozen = json.loads(job.pop("request_json"))
             job["batch_dir"] = frozen.get("batch_dir", "")
+            job["batch_available"] = bool(job["batch_dir"] and Path(job["batch_dir"]).is_dir())
             job["items"] = []
             for item in db.execute("SELECT * FROM desktop_items WHERE job_id=? ORDER BY rowid", (job_id,)):
                 value = dict(item)

@@ -25,6 +25,18 @@ command's sibling output root when omitted). CLI output contracts are unchanged.
 The finished-video library presents task folders first; opening a folder shows that
 job's published videos with shared thumbnail previews. Folder actions target actual
 output directories. Historical jobs retain their existing file locations.
+Users can trash individual outputs, whole task folders, or tasks together with their
+outputs. Native Trash is recoverable; it never falls back to permanent deletion.
+Confirmation lists exact paths. Running tasks and queued users of selected files block
+the operation; unused queued tasks can be deleted. New task folders are moved whole;
+legacy shared directories retain other files and only this task's outputs are moved.
+Successful moves update output associations and usage counts. Partial failures keep
+failed records and the task for retry. Missing files are reconciled only when their
+parent directory is available. Queue submission and catalog scans are serialized with
+Trash operations. Deleting an output keeps its task history with an explicit deleted
+item state; deleting the task removes its items, logs and publication recovery journals.
+This implementation uses the macOS Trash API; other systems return an unsupported
+error while preserving files and records.
 The five system material types (reference, background, PiP, intro and sticker) are
 fixed, with one catalog per type in each project. Users associate multiple recursive
 roots per type instead of creating custom groups. Legacy groups of the same role
@@ -41,7 +53,7 @@ with contained pictures and captions over the bottom of the image. Unfinished ta
 states are shown inside previews. Library captions include source folders only when
 the folder name adds information beyond the filename stem.
 Creation actions align to the right edge of their toolbar. Choice sets with at most two options
-use bordered button groups; larger sets use Select inputs.
+use connected bordered button groups, including grid/list view switches; larger sets use Select inputs.
 All application modals share a dimmed, blurred backdrop; system pickers stay native.
 
 ## Data and processing
@@ -56,8 +68,11 @@ and prevent closing or changing type during submission. Native windows support a
 minimum size of 1024 by 680; long task forms scroll with persistent footer actions. The SQLite catalog lives in the platform's
 application data directory. Source media stays in place. Recursive indexing merges
 canonical files, ignores directory symlinks and retains metadata for offline files.
-Removing an asset changes only its library membership; restoring or rescanning
-does not delete or silently reactivate a removed source. Thumbnail and playback
+Removing an association changes only its library membership. The separate Trash
+action moves selected source files from disk through macOS NSFileManager, removes
+their memberships across projects, and retains historical usage references as offline.
+Restoring or rescanning an association never deletes or silently reactivates a source.
+Deleted files restored through the system Trash can be indexed again by refreshing. Thumbnail and playback
 proxies are disposable, stat-and-tool-keyed cache files, never processing inputs.
 
 The Rust bridge communicates with one local JSON-lines service. Media URLs are

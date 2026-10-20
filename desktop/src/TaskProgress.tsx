@@ -32,15 +32,16 @@ const names: Record<string, string> = {
   cancelled: "已取消",
   interrupted: "已中断",
   unprocessed: "未处理",
+  deleted: "已删除",
 };
 export function TaskActions({ job }: { job: Job }) {
   const [directory, setDirectory] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const directories = [
     ...new Set(
-      (job.outputs || []).map((output) =>
+      [...(job.batch_available && job.batch_dir ? [job.batch_dir] : []), ...(job.outputs || []).map((output) =>
         output.path.replace(/[\\/][^\\/]+$/, ""),
-      ),
+      )],
     ),
   ];
   const target =

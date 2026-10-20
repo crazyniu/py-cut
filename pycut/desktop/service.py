@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 import threading
 
+from .deletion import Deletions
 from .engine import option_specs
 from .jobs import JobManager
 from .library import LibraryIndexer
@@ -21,6 +22,7 @@ class Service:
         self.indexer = LibraryIndexer(self.store, lambda value: sink({"event": "library", "payload": value}))
         self.media = MediaCache(self.store)
         self.jobs = JobManager(self.store, sink, start=start_jobs)
+        self.deletions = Deletions(self.store, self.jobs, self.indexer, sink)
         self.closing = threading.Event()
 
     def _libraries(self, project_id):
@@ -36,6 +38,10 @@ class Service:
         if self.closing.is_set() and method != "app.shutdown":
             raise RuntimeError("程序正在退出")
         p = params
+        if method == "trash.preview":
+            return self.deletions.preview(p["target"])
+        if method == "trash.execute":
+            return self.deletions.execute(p["target"])
         if method == "app.ping":
             return {"ready": True, "version": "0.1.0"}
         if method == "projects.list":

@@ -129,7 +129,7 @@ export default function TaskPage({
   );
   const total = referenceCount * Number(count || 0);
   const backgroundReady = libraries.some(
-    (library) => library.role === "background" && library.active_count > 0,
+    (library) => library.role === "background" && library.video_count > 0,
   );
   const referenceReady = referenceCount > 0;
   const configured =

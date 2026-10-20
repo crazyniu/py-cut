@@ -114,6 +114,7 @@ export interface TaskItem {
 export interface Job {
   items?: TaskItem[];
   batch_dir?: string;
+  batch_available?: boolean;
   skipped?: number;
   id: string;
   project_id: string;
@@ -188,6 +189,7 @@ export const statusNames: Record<string, string> = {
   interrupted: "已中断",
   skipped: "已跳过",
   unprocessed: "未处理",
+  deleted: "已删除",
 };
 export const terminal = (job: Job) =>
   !["queued", "running", "cancelling"].includes(job.status);
