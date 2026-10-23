@@ -8,9 +8,8 @@ These requirements apply to all contributors, including the current agent.
 `pycut` is a maintained local short-video toolbox with three public commands:
 `cover` (subtitle coverage), `dedup` (similarity reduction), and `montage` (remixing).
 Users supply clips. Do not restore a public `slice` command or slicing wizard.
-The desktop workbench adapts the same command/core implementations; the maintained
-CLI/TUI continues through `pycut.py` subcommands. See docs/DESKTOP.md for desktop
-data, runtime, packaging and acceptance contracts.
+The TUI is the maintained interactive interface; it uses the existing CLI/core
+implementations through `pycut.py` subcommands.
 
 Codex owns requirements, implementation, review, integration, testing, acceptance,
 commits, and merging. Use native Codex tools or direct CLI for desktop/browser,
