@@ -13,7 +13,6 @@ from typing import Callable
 
 from .. import config
 from ..core.progress import progress
-from ..core.desktop_progress import activity
 from ..core.utils import log
 from ..core.runtime import check_stop
 
@@ -337,7 +336,6 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
             result["error"] = "成片未生成或文件异常"
             return result
 
-        activity("检查中")
         # Burn subtitles before audio attachment because subtitle intermediates use -an.
         if subtitles_combined:
             progress("混剪合成", 3, 5, detail="字幕已与画中画合并编码")
@@ -357,7 +355,6 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
         check_stop()
         # Attach reference audio after all silent picture operations.
         if opts.keep_audio and prof.has_audio:
-            activity("整理成片")
             progress("混剪合成", 4, 5, detail="恢复爆款原声")
             log("--- 步骤E：贴回基准视频音轨（最后一步）---")
             if _attach_audio(working, opts.source, opts.crf):
@@ -435,8 +432,8 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
 def _material_uses(opts, picked, timeline, target, intro_report):
     """Describe actual visible inputs, without changing selection or rendering.
 
-    The desktop persists this only at successful publication. PiP planning may
-    extend beyond the body, so exclude invisible surplus from usage accounting.
+    PiP planning may extend beyond the body, so exclude invisible surplus
+    from usage accounting.
     """
     uses = [{"path": str(opts.source.resolve()), "role": "reference", "start": 0, "duration": target}]
     if opts.srt and Path(opts.srt).is_file():

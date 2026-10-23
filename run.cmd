@@ -58,14 +58,6 @@ if errorlevel 1 (
 echo [pycut] FFmpeg and ffprobe ready.
 "%PYCUT_PY%" -c "from pycut import config; print(config.gateway_summary())"
 if errorlevel 1 exit /b 1
-if /i "%~1"=="desktop-server" (
-    "%PYCUT_PY%" -m pycut.desktop
-    exit /b
-)
-if /i "%~1"=="desktop-worker" (
-    "%PYCUT_PY%" -m pycut.desktop --worker "%~2"
-    exit /b
-)
 "%PYCUT_PY%" pycut.py %*
 exit /b %errorlevel%
 

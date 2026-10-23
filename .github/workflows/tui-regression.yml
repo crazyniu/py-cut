@@ -76,28 +76,15 @@ jobs:
                       continue
                   assert (doc.parent / unquote(url.path)).exists(), f'{doc}: missing {target}'
           PYCODE
-      - name: Lightweight desktop, TUI and core regression tests
+      - name: Lightweight TUI and core regression tests
         if: github.event_name == 'pull_request' && steps.scope.outputs.docs-only != 'true'
         run: >-
           python -m pytest tests/test_task_progress.py tests/test_slice_scope.py
           tests/test_scan_dirs.py tests/test_scan_unicode_search.py
           tests/test_llm_safety.py tests/test_probe_cache.py -q
-          tests/test_desktop_jobs.py tests/test_desktop_service.py
-          tests/test_desktop_library.py tests/test_desktop_build.py tests/test_local_vision.py
-          tests/test_desktop_progress.py tests/test_desktop_publication_events.py tests/test_desktop_deletion.py
-      - uses: actions/setup-node@v4
-        if: steps.scope.outputs.docs-only != 'true'
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
-      - name: Desktop frontend checks
-        if: steps.scope.outputs.docs-only != 'true'
-        working-directory: desktop
-        run: |
-          npm ci
-          npm run build
-          npm test
+          tests/test_launcher_install.py tests/test_tui_integration.py
+          tests/test_tui_runner.py tests/test_tui_navigation.py
+          tests/test_tui_web_config_ui.py
       - name: Full suite (synthetic media only; user media opt-in)
         if: github.event_name == 'workflow_dispatch'
         run: python -m pytest tests/ -q

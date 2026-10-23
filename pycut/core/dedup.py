@@ -24,7 +24,6 @@ from .ffmpeg import FFMPEG, FFPROBE, VideoInfo, probe_scalar, probe_video
 from .fingerprint import compare
 from .runtime import STOP, check_stop
 from .progress import progress
-from .desktop_progress import encoding_progress, activity
 from .utils import fmt_bytes, fmt_dur, log, run_cmd
 
 
@@ -707,9 +706,7 @@ def process_one(src: Path, dst: Path, opts: DedupOptions, *, on_publish=None) ->
         timeout = min(ENC_TIMEOUT_MAX,
                       max(ENC_TIMEOUT_MIN, int(info.duration * ENC_TIMEOUT_PER_SEC)))
         try:
-            with encoding_progress(cmd, info.duration / _speed(params)) as measured_cmd:
-                rc, _out, err = run_cmd(measured_cmd, timeout=timeout)
-            activity("检查中")
+            rc, _out, err = run_cmd(cmd, timeout=timeout)
             check_stop()
 
             if rc != 0 or not tmp.is_file() or tmp.stat().st_size < 1024:

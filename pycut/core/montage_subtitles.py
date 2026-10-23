@@ -365,7 +365,7 @@ def subtitle_tmp_path(out: Path) -> Path:
 
 
 def subtitle_filter(ass_path) -> str:
-    """Use the bundled OFL font directory only in packaged desktop runtimes."""
+    """Build the subtitle filter with an optional configured font directory."""
     result = f"subtitles=filename='{_escape_filter_path(ass_path)}'"
     fonts = os.environ.get("PYCUT_FONT_DIR")
     if fonts:
