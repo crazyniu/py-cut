@@ -29,7 +29,9 @@ runs in PRs. Current source and actual encoding determine support, not old measu
 - Default dynamic backdrop independently draws library footage, preferring sources
   unused by the foreground. Loop it only for the finite body frame budget, apply
   stronger variation and blur, and place the complete normalized foreground at a
-  seeded 82–90% width. Small libraries can reuse a source for this separate layer.
+  seeded 96–98% width. Small libraries can reuse a source for this separate layer.
+  Blend the foreground edges using a smooth alpha ramp across 3.5% of inset width;
+  its centre stays at 92% opacity. Repeat only the static mask for the body frame budget.
   --no-backdrop restores the full-canvas foreground. This layer is silent and is
   completed before PIP/subtitles/reference audio; its selected source/parameters are
   returned in the in-memory pipeline summary, never persisted as task state.

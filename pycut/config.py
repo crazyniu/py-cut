@@ -192,8 +192,10 @@ MONTAGE_TMP = Path("/tmp/pycut_montage")
 # Reference contributes timing, subtitles, and audio; output canvas stays fixed.
 MONTAGE_CANVAS = (720, 1280)
 MONTAGE_FPS = 30
-MONTAGE_INSET_WIDTH_RANGE = (.82, .90)
+MONTAGE_INSET_WIDTH_RANGE = (.96, .98)
 MONTAGE_BACKDROP_BLUR = 4.0
+MONTAGE_BACKDROP_FEATHER = .035  # Foreground edge blend width relative to the inset width.
+MONTAGE_FOREGROUND_OPACITY = .92
 MONTAGE_STICKER_PAIR_SCALE = .75
 
 
