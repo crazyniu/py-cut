@@ -18,7 +18,9 @@ runs in PRs. Current source and actual encoding determine support, not old measu
   feathering, and shadow. Preserve its existing subtitles; never run cover on it.
 - Default stickers are newly downloaded Twemoji PNGs (Twitter/contributors, CC BY 4.0);
   temporary credits.json retains attribution. Explicit --sticker-dir uses local images;
-  --no-sticker disables. Download/selected-image failure rejects publication.
+  --no-sticker disables. Downloads try GitHub Raw and jsDelivr for the same pinned
+  asset in at most two rounds (15 seconds per request), validating every response.
+  Exhausted downloads report host/reason and reject publication, as do selected-image failures.
 - Default seam fade is 0.2 seconds without overlap or duration loss; --seam-fade 0 disables.
 - Reject repeated background material, insufficient coverage, or failed stages. Check
   inputs and plan both pools before encoding. Preserve prior output on failure/interruption.
