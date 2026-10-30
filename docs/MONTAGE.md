@@ -26,6 +26,11 @@ runs in PRs. Current source and actual encoding determine support, not old measu
   inputs and plan both pools before encoding. Preserve prior output on failure/interruption.
 - --fission N produces N independently seeded variants per reference. Share preparation
   only within that command, never random choices or processing-success state.
+- Omitted/zero --seed draws a fresh nonzero random seed on every invocation, including
+  TUI jobs. All variants derive from that invocation's seed. Explicit nonzero --seed
+  reproduces selections and variations for unchanged inputs/settings; actual seeds
+  are logged. Random draws can reuse individual clips across runs; no cross-run
+  selection history is stored.
 - Output is one newly created flat video-only batch for all references/variants. No
   per-video JSON is written; seeds/diagnostics remain in separate logs. Effects do not
   prove embedded-watermark removal or platform acceptance.

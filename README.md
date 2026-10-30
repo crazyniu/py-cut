@@ -132,8 +132,10 @@ until Enter/Esc returns or Q exits. Stage counts are never summed into a false t
 
 A single configured reference can be selected automatically; multiple references
 require explicit `--source` or TUI selection. See each command's `--help` for the
-complete argument contract. Fixed inputs/seed reproduce parameter choices; encoder
-versions and environments can change binary output.
+complete argument contract. Montage draws a fresh seed each run by default (also
+with `--seed 0`); explicit nonzero `--seed` reproduces parameter choices for fixed
+inputs/settings, including variants. Encoder versions and environments can change
+binary output.
 
 ## Processing contracts
 
