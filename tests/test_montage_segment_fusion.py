@@ -5,24 +5,22 @@ from unittest.mock import patch
 import pytest
 
 from pycut.core import montage_clips as clips
-from pycut.core.montage_sticker import build_sticker_cmd
 
 
 def test_effect_order_double_seek_and_frame_budget(tmp_path):
     sticker = tmp_path / 'sticker.png'
     sticker.write_bytes(b'fixture')
-    old, _ = build_sticker_cmd(Path('source.mp4'), [sticker], Path('out.mp4'),
-                               (720, 1280), seed=13)
     cmd = clips._seg_cmd(Path('source.mp4'), .4, 2.3, Path('out.mp4'),
                          (720, 1280), 30, mirror=True, speed=1.15,
                          frames=60, dedup_seed=87, sticker=sticker,
                          sticker_seed=13, seam_fade=.2)
     graph = cmd[cmd.index('-filter_complex') + 1]
-    old_graph = old[old.index('-filter_complex') + 1]
     assert graph.index('setpts=PTS/1.15000') < graph.index('hflip')
     assert 'tpad=' not in graph
     assert graph.index('geq=') < graph.index('fade=')
-    assert old_graph.replace('[0:v]', '[segment]') in graph
+    assert graph.count('overlay=') == 2
+    assert '[stk]split=2' in graph
+    assert '[segment][stk0]' in graph
     assert 'fade=t=in:st=0.347826:d=0.200000' in graph
     assert 'fade=t=out:st=2.147826:d=0.200000' in graph
     assert cmd.count('-ss') == 2

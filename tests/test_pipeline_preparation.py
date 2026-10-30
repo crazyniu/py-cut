@@ -19,7 +19,7 @@ class PreparationTests(unittest.TestCase):
             root = Path(td)
             source = root/'source.mp4';source.touch()
             args = cli.build_parser().parse_args(['montage','--source',str(source),
-                '--no-sub','--no-pip','--step','b','--fission','3','--noise-db','-18',
+                '--no-sub','--no-pip','--no-backdrop','--step','b','--fission','3','--noise-db','-18',
                 '--min-silence','0.3','--out-dir',str(root/'out')])
             profile = SimpleNamespace(duration=2,width=720,height=1280,segments=[],speech_total=0,has_audio=False)
             downloads = []

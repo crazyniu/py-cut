@@ -46,6 +46,7 @@ def register(subparsers) -> None:
     g.add_argument("--pip-slot", type=float, default=2.5,
                    help="步骤C 每个画中画显示几秒")
     g.add_argument("--no-pip", action="store_true", help="不叠画中画（只跑步骤A+B）")
+    g.add_argument("--no-backdrop", action="store_true", help="关闭动态底片，主背景铺满画布")
     g.add_argument("--srt", default="auto",
                    help="字幕文件（步骤D 烧录）。默认 auto=自动找与基准视频同目录同名的 .srt"
                         "（如 1.mp4 → 1.srt）；也可直接指定 .srt 路径；传空串则不烧字幕")
@@ -261,6 +262,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
         speed_range=(1.0, max(1.0, args.speed_max)),
         sticker_dir=args.sticker_dir,
         online_stickers=not args.sticker_dir and not args.no_sticker,
+        dynamic_backdrop=not args.no_backdrop,
         seam_fade=args.seam_fade,
         sticker_chance=0.0 if args.no_sticker else max(0.0, min(1.0, args.sticker_chance)),
         srt=srt,

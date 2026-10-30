@@ -160,7 +160,9 @@ Encoding failures and cancellation return nonzero and stop dependent work.
 
 The body uses a fixed 720x1280 canvas at 30 FPS. Reference video contributes duration,
 rhythm, same-stem SRT, and original audio. Background/PIP selection is independent.
-Both apply standard geometry/pixel variation and silent picture processing. Default
+Displayed dimensions include phone rotation metadata when filtering landscape footage.
+Background/PIP/intro use stronger geometry/pixel variation within the existing bounds.
+Picture processing is silent. Default
 PIP is a 216x384 top-right window with independent mirroring, feathering, and shadow;
 retain source subtitles without running detection/coverage on PIP material.
 
@@ -171,7 +173,11 @@ source tail frames. Original SRT timing is retained; ASS uses a canvas-scaled fo
 encode. Without PIP, use the separate subtitle path.
 
 Default stickers are fresh Twemoji PNG downloads (Twitter/contributors, CC BY 4.0).
-An explicit sticker directory uses local images. Default seam fading is 0.2 seconds;
+An explicit sticker directory uses local images. Every background segment defaults to
+two smaller stickers in opposite corners, with seeded image/placement choices.
+An independently selected moving library video forms a blurred backdrop behind the
+complete inset foreground; `--no-backdrop` restores a full-canvas foreground.
+Default seam fading is 0.2 seconds;
 `--no-sticker` and `--seam-fade 0` disable these effects. Missing requested stickers,
 failed downloads, repeated material, or insufficient footage reject publication.
 

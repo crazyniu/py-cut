@@ -40,6 +40,7 @@ class MontageOptions:
     sticker_dir: str = ""          # Empty selects the configured/default sticker pool.
     sticker_chance: float = 0.0
     online_stickers: bool = False  # CLI/TUI download by default; an explicit directory selects local images.
+    dynamic_backdrop: bool = False  # Public CLI/TUI enables moving library footage behind the inset body.
     seam_fade: float = 0.0
     srt: str = str(config.MONTAGE_SUB_PATH)   # Empty disables subtitle burning.
     crf: str = "20"
@@ -280,6 +281,15 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
         _unlink(base)
         return result
     log(f"  步骤B 产出: {base.name}  {_size(base)}  {base_duration:.3f}s")
+    if opts.dynamic_backdrop:
+        from ..core.montage_backdrop import compose
+        try:
+            result["backdrop"] = compose(base, items, seed=seed, duration=target,
+                excluded={shot["item"].path for shot in picked if shot.get("item")},
+                crf=opts.crf)
+        except (RuntimeError, OSError, ValueError) as exc:
+            result["error"] = str(exc)
+            return result
     result["base"] = str(base)
     result["clips_used"] = len(picked)
     result["clips_reused"] = reused
@@ -402,7 +412,7 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
                 log(f"  [失败] {result['error']}；未发布成片")
                 return result
         check_stop()
-        uses = (_material_uses(opts, picked, timeline, target, intro_report)
+        uses = (_material_uses(opts, picked, timeline, target, intro_report, result.get("backdrop"))
                 if opts.before_publish is not None else [])
         if opts.before_publish is not None:
             try:
@@ -434,7 +444,7 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
         result["base"] = ""
 
 
-def _material_uses(opts, picked, timeline, target, intro_report):
+def _material_uses(opts, picked, timeline, target, intro_report, backdrop_report=None):
     """Describe actual visible inputs, without changing selection or rendering.
 
     PiP planning may extend beyond the body, so exclude invisible surplus
@@ -443,6 +453,9 @@ def _material_uses(opts, picked, timeline, target, intro_report):
     uses = [{"path": str(opts.source.resolve()), "role": "reference", "start": 0, "duration": target}]
     if opts.srt and Path(opts.srt).is_file():
         uses.append({"path": str(Path(opts.srt).resolve()), "role": "subtitle"})
+    if backdrop_report:
+        uses.append({"path": backdrop_report["source"], "role": "backdrop",
+                     "offset": backdrop_report["offset"], "duration": target})
     for shot in picked:
         if shot.get("item") is None or shot.get("take", 0) <= 0:
             continue

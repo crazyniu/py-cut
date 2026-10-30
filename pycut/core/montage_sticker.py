@@ -19,11 +19,13 @@ _ALPHA_VARS = "alpha(X,Y)"
 def sticker_chain(img: Path, canvas: tuple[int, int],
                   scale_ratio: float = 0.28, margin_ratio: float = 0.04,
                   opacity: float = 0.55, pos: str = "br",
-                  fps: int | None = None, video_label: str = "0:v") -> list[str] | None:
+                  fps: int | None = None, video_label: str = "0:v",
+                  double: bool = False) -> list[str] | None:
     """Return [filter graph, output label], or None for invalid image/canvas inputs.
 
     scale_ratio and margin_ratio use canvas width. opacity caps source alpha;
-    pos selects tl/tr/bl/br. video_label identifies the main video stream."""
+    pos selects tl/tr/bl/br. video_label identifies the main video stream.
+    double uses two smaller copies in opposite corners, retaining one image input."""
     img = Path(img)
     if not img.is_file():
         return None
@@ -32,7 +34,8 @@ def sticker_chain(img: Path, canvas: tuple[int, int],
         return None
     opacity = max(0.05, min(1.0, float(opacity)))
 
-    sw = max(16, int(round(w * float(scale_ratio))))
+    pair_scale = config.MONTAGE_STICKER_PAIR_SCALE if double else 1
+    sw = max(16, int(round(w * float(scale_ratio) * pair_scale)))
     margin = max(0, int(round(w * float(margin_ratio))))
 
     if pos == "tl":
@@ -59,6 +62,12 @@ def sticker_chain(img: Path, canvas: tuple[int, int],
         f"{ch};"
         f"[{video_label}][stk]overlay={off}:format=auto:shortest=0[vstk]"
     )
+    if double:
+        opposite = {"tl": "W-w-{m}:H-h-{m}", "tr": "{m}:H-h-{m}",
+                    "bl": "W-w-{m}:{m}", "br": "{m}:{m}"}[pos].format(m=margin)
+        chain = (f"{ch};[stk]split=2[stk0][stk1];"
+                 f"[{video_label}][stk0]overlay={off}:format=auto:shortest=0[marked];"
+                 f"[marked][stk1]overlay={opposite}:format=auto:shortest=0[vstk]")
     return [chain, "vstk"]
 
 
