@@ -5,6 +5,7 @@ only after all required stages succeed; report stage failures to the command lay
 from __future__ import annotations
 
 import os
+import secrets
 import tempfile
 import threading
 from dataclasses import dataclass, field
@@ -52,6 +53,11 @@ class MontageOptions:
     out_name: str = ""
 
 
+def resolve_seed(seed: int | None) -> int:
+    """Use explicit nonzero seeds; draw fresh entropy for automatic montage runs."""
+    return seed if seed else secrets.randbelow(2**64 - 1) + 1
+
+
 def run_pipeline(opts: MontageOptions) -> dict:
     """Run a/b/c/all and return summary fields or an error/cancelled result.
 
@@ -72,7 +78,6 @@ def run_pipeline(opts: MontageOptions) -> dict:
 
 
 def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
-    from ..core.dedup_presets import derive_seed  # noqa: PLC0415
     from ..core.montage_clips import (concat_clips,  # noqa: PLC0415
                                       pick_clips, scan_library)
     from ..core.montage_pip import (build_pip_cmd,  # noqa: PLC0415
@@ -80,7 +85,7 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
     from ..core.montage_source import (plan_clip_slots,  # noqa: PLC0415
                                        probe_source)
 
-    seed = opts.seed if opts.seed else derive_seed(opts.source)
+    seed = resolve_seed(opts.seed)
     log(f"[seed] {seed}")
 
     tmp = Path(config.MONTAGE_TMP)

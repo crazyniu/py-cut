@@ -40,7 +40,7 @@ def register(subparsers) -> None:
 
     g = p.add_argument_group("混剪参数")
     g.add_argument("--seed", type=int, default=0,
-                   help="随机种子（0=按基准视频路径自动派生；同 seed 选片结果可复现）")
+                   help="随机种子（0=每次重新随机；指定非零 seed 可复现选片和扰动）")
     g.add_argument("--allow-landscape", action="store_true",
                    help="允许横屏素材（默认只吃竖屏 9:16，横屏一律排除）")
     g.add_argument("--pip-slot", type=float, default=2.5,
@@ -240,6 +240,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
 
     from . import montage_pipeline  # noqa: PLC0415
 
+    base_seed = montage_pipeline.resolve_seed(args.seed)
     intro_dir = intro_dir[0] if len(intro_dir) == 1 else intro_dir
     opts = montage_pipeline.MontageOptions(
         prepared=prepared,
@@ -250,7 +251,7 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
         clip_dir=clip_dir,
         dedup_dir=dedup_dir,
         out_dir=out_dir,
-        seed=(args.seed or None),
+        seed=base_seed,
         allow_landscape=args.allow_landscape,
         pip_slot=args.pip_slot,
         use_pip=not args.no_pip and bool(dedup_dir),
@@ -306,8 +307,6 @@ def _run(args: argparse.Namespace, prepared: dict) -> int:
     fission = max(1, int(getattr(args, "fission", 1) or 1))
     failed_fissions = 0
     if fission > 1 and args.step != "a":
-        from ..core.dedup_presets import derive_seed  # noqa: PLC0415
-        base_seed = args.seed if args.seed else derive_seed(source)
         for i in range(2, fission + 1):
             if STOP.flag:
                 log("[中断] 已停止后续裂变（退出码 130）")
