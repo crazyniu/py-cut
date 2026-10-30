@@ -8,7 +8,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import random
+import sys
 import tempfile
+import time
 
 from .. import config
 from .dedup import montage_variation, _video_duration
@@ -36,9 +38,9 @@ def compose(body: Path, pool: list, *, seed: int, duration: float,
     # Decode surplus real backdrop frames so framesync cannot end one frame early.
     # The output cap alone defines the body budget; never repeat a foreground tail.
     graph = (
-        f"[1:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"[1:v]fps={fps},scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height},setsar=1,{variation},setsar=1,gblur=sigma={config.MONTAGE_BACKDROP_BLUR},"
-        f"fps={fps},trim=end_frame={frames + 2},setpts=N/({fps}*TB)[back];"
+        f"trim=end_frame={frames + 2},setpts=N/({fps}*TB)[back];"
         f"[0:v]scale={inset_width}:{inset_height},setsar=1,format=rgba,setpts=N/({fps}*TB)[front];"
         f"color=white:s={inset_width}x{inset_height}:r={fps}:d={1/fps:.9f},"
         f"format=gray,geq=lum='{alpha}',loop=loop={frames-1}:size=1:start=0,"
@@ -54,6 +56,8 @@ def compose(body: Path, pool: list, *, seed: int, duration: float,
                "-threads", "2", "-i", str(body),
                "-stream_loop", "-1", "-ss", f"{offset:.6f}",
                "-t", f"{duration + 1:.6f}", "-threads", "2",
+               # FFmpeg auto selects VideoToolbox when supported and otherwise uses software.
+               *(["-hwaccel", "auto"] if sys.platform == "darwin" else []),
                "-i", str(source.path), "-filter_complex", graph,
                "-map", "[out]", "-an", "-frames:v", str(frames),
                "-fps_mode", "cfr", "-c:v", "libx264", "-preset", "veryfast",
@@ -61,6 +65,7 @@ def compose(body: Path, pool: list, *, seed: int, duration: float,
     try:
         check_stop()
         log(f"  [动态底片] {source.path.name} · 起点 {offset:.3f}s · 主画面 {inset_width}x{inset_height}")
+        started = time.monotonic()
         rc, _, error = run_cmd(command, timeout=3600)
         check_stop()
         if rc or not target.is_file() or target.stat().st_size < 1024:
@@ -68,6 +73,7 @@ def compose(body: Path, pool: list, *, seed: int, duration: float,
         if abs(_video_duration(target) - frames / fps) > .5 / fps:
             raise RuntimeError("动态底片合成时长校验失败")
         os.replace(target, body)
+        log(f"  [动态底片] 合成完成 · 用时 {time.monotonic() - started:.1f}秒")
         return {"source": str(source.path), "offset": offset,
                 "inset": [inset_width, inset_height], "seed": variation_seed,
                 "params": params}

@@ -35,6 +35,8 @@ runs in PRs. Current source and actual encoding determine support, not old measu
   --no-backdrop restores the full-canvas foreground. This layer is silent and is
   completed before PIP/subtitles/reference audio; its selected source/parameters are
   returned in the in-memory pipeline summary, never persisted as task state.
+  On macOS the backdrop library input uses FFmpeg automatic hardware decoding.
+  Normalize FPS before its spatial/pixel filters; keep the output encoder and effects.
 - Default seam fade is 0.2 seconds without overlap or duration loss; --seam-fade 0 disables.
 - Reject repeated background material, insufficient coverage, or failed stages. Check
   inputs and plan both pools before encoding. Preserve prior output on failure/interruption.
