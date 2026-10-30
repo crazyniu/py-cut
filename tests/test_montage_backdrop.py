@@ -64,7 +64,9 @@ def test_real_launcher_backdrop_keeps_the_entire_body_frame_budget(tmp_path):
     reference = tmp_path/'reference.mp4'
     subprocess.run([config.FFMPEG,'-v','error','-y','-f','lavfi','-i',
         'testsrc2=size=160x284:rate=30:duration=3.2','-c:v','libx264',str(reference)],check=True)
-    shutil.copy2(reference,clips/'clip.mp4')
+    # Exercise a higher-rate library source without extending the 30 fps body.
+    subprocess.run([config.FFMPEG,'-v','error','-y','-f','lavfi','-i',
+        'testsrc2=size=160x284:rate=60:duration=3.2','-c:v','libx264',str(clips/'clip.mp4')],check=True)
     invocation=subprocess.run(['./run.sh','montage','--source',str(reference),
         '--clip-dir',str(clips),'--out-dir',str(tmp_path/'out'),
         '--intro-dir','','--no-pip','--no-sub','--no-sticker','--no-audio',

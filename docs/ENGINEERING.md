@@ -65,7 +65,10 @@ encode. Offset fades along the same pre-output-seek timeline so fine seek does n
 cut them off. Normalize dimensions, FPS, SAR, pixel format, and codec before concat;
 then stream-copy their concatenation. The optional dynamic-backdrop composition
 adds one bounded full-body encode before PIP/subtitles/audio, preserving the body
-frame budget. Validate every
+frame budget. Normalize backdrop FPS before spatial/pixel filters, and let FFmpeg
+auto-select hardware decoding for its library input on macOS; repeated software
+decoding of 4K/60fps HEVC can dominate this stage. Keep libx264/CRF and output geometry.
+Validate every
 selected segment and final duration before atomic publication.
 
 Compare filled/required frame budgets at target FPS. Once the budget is covered, do
