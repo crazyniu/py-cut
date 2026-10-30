@@ -32,7 +32,7 @@ def compose(body: Path, pool: list, *, seed: int, duration: float,
     fps = config.MONTAGE_FPS
     feather = round(inset_width * config.MONTAGE_BACKDROP_FEATHER)
     ramp = f"min(1\\,min(min(X\\,W-1-X)\\,min(Y\\,H-1-Y))/{feather})"
-    alpha = f"255*({ramp})*({ramp})*(3-2*({ramp}))"
+    alpha = f"255*{config.MONTAGE_FOREGROUND_OPACITY}*({ramp})*({ramp})*(3-2*({ramp}))"
     # Decode surplus real backdrop frames so framesync cannot end one frame early.
     # The output cap alone defines the body budget; never repeat a foreground tail.
     graph = (
