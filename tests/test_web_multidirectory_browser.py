@@ -18,7 +18,7 @@ def test_browser_multidirectory_flow(tmp_path):
    url=web_config.start()
    try:
     page.goto(url);page.wait_for_function("()=>!loading")
-    assert page.locator('#PYCUT_SOURCE_DIR').count()==0
+    assert page.locator('#PYCUT_SOURCE_DIR').count()==1
     group=page.locator('.directory-list[data-key=PYCUT_CLIP_DIR]')
     assert group.locator('input').input_value()==str(root/'混剪一')
     page.locator('.add-directory[data-key=PYCUT_CLIP_DIR]').click()

@@ -24,6 +24,8 @@ def page() -> str:
         optional = ('必填' if required else '可选' if key in (
             'PYCUT_PIP_DIR', 'PYCUT_INTRO_DIR', 'PYCUT_OUTPUT_DIR',
             'PYCUT_STICKER_DIR') or key.startswith('PYCUT_BACKUP_') else '')
+        if key == 'PYCUT_SOURCE_DIR':
+            optional = '抖音裂变必填'
         badge_class = 'optional is-required' if required else 'optional'
         input_html = (f'<input id="{key}" name="{key}" type="{kind}" autocomplete="off" '
                       f'spellcheck="false" aria-describedby="{key}-help {key}-error">')

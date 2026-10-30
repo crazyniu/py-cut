@@ -37,7 +37,7 @@ def test_gateways_present():
 
 
 def test_cli_registers_commands():
-    assert set(cli.list_commands()) == {"cover", "dedup", "montage"}
+    assert set(cli.list_commands()) == {"cover", "dedup", "montage", "fission"}
     parser = cli.build_parser()
 
     for mod in (slice_cmd, cover_cmd):
@@ -73,12 +73,12 @@ def test_dedup_registered():
 
 
 def test_tui_wizard_structure():
-    """Check the three public wizards, shared scan helper, and montage variant arguments."""
+    """Check public wizards, the shared scan helper, and montage variant arguments."""
     import pycut.tui as tui  # noqa: PLC0415
     from pycut.core import scan  # noqa: PLC0415
 
     names = [f[1] for f in tui.FEATURES]
-    assert names == ["字幕擦除", "去重", "混剪"]
+    assert names == ["字幕擦除", "去重", "混剪", "抖音裂变"]
 
     assert callable(scan.list_videos_recursive)
     assert hasattr(scan, "list_dirs")

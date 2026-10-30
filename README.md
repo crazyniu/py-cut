@@ -1,7 +1,8 @@
 # pycut — local short-video processing
 
 A local toolbox for supplied video clips: subtitle coverage, similarity reduction,
-and montage generation. Users prepare the clips; there is no public slicing command.
+montage generation, and tail-only copies. Users prepare the clips; there is no public
+slicing command.
 Developer documentation and source annotations use English. The product UI, logs,
 CLI help, and established output-directory names remain Chinese.
 
@@ -12,6 +13,7 @@ CLI help, and established output-directory names remain Chinese.
 | `cover` | Locate subtitles and cover them with one frosted-glass rectangle | Input-root sibling `字幕查重/`; source preserved |
 | `dedup` | Apply seeded video/audio/container variations and measure visual change | Input-root sibling `去重/` plus optional JSON report |
 | `montage` | Assemble library shots around reference rhythm/audio; generate variants | One new flat video-only batch under the output root |
+| `fission` | 抖音裂变: copy original video bytes and append random trailing data | Input-root sibling `抖音裂变/`; extensions/subfolders preserved |
 
 ## Start
 
@@ -21,6 +23,7 @@ CLI help, and established output-directory names remain Chinese.
 ./run.sh cover --help
 ./run.sh dedup --help
 ./run.sh montage --help
+./run.sh fission --help
 ```
 
 On Windows use `run.cmd` with the same arguments. Always run processing through the
@@ -50,6 +53,7 @@ External environment variables take precedence over `.env`.
 
 | Setting | Contract |
 |---|---|
+| `PYCUT_SOURCE_DIR` | Original-video root for fission; recursively listed with an individual copy count per video |
 | `PYCUT_REFERENCE_DIR` | Root with one reference video and same-stem SRT in each subfolder |
 | `PYCUT_CLIP_DIR` | Background clip roots, also used by cover/dedup |
 | `PYCUT_PIP_DIR` | Optional picture-in-picture clip roots |
@@ -88,7 +92,7 @@ automatic failover. `.env` is ignored; never commit real keys.
 
 ## TUI workflow
 
-The home menu contains cover, dedup, and montage. Up/down moves, Right/Enter opens,
+The home menu contains cover, dedup, montage, and 抖音裂变. Up/down moves, Right/Enter opens,
 Esc returns, and only Q exits the home menu. Directory configuration belongs to Web/
 .env. Missing settings lead to configuration instructions. Only Enter on the final
 confirmation starts processing.
@@ -98,6 +102,11 @@ three steps: select reference videos, enter one mandatory variant count (1..99) 
 every selected reference, then confirm the summary. Returning preserves selection
 and counts. Ten references with count five plan fifty final videos. PIP is optional;
 unchecking it avoids reading that material pool.
+
+Fission lists all supported original videos, including nested folders. Set a separate
+0..99 count for every video (0 skips), then confirm the total. Enter/Right edits a
+count; the final confirmation requires Enter. Returning preserves counts. This task
+only needs the original-video setting; montage libraries and LLM keys are independent.
 
 Normal pages share the original five-line PYCUT logo, actual settings URL, copy-to-
 browser instructions, and content divider. Wide terminals show settings beside the
@@ -128,6 +137,10 @@ until Enter/Esc returns or Q exits. Stage counts are never summed into a false t
 ./run.sh montage --probe
 ./run.sh montage --source /media/reference/a/1.mp4 --seed 2026
 ./run.sh montage --no-pip --no-sub --no-sticker --intro-dir ""
+
+# Tail-only copies; a directory applies the count to each video
+./run.sh fission --file /media/original.mp4 --copies 5
+./run.sh fission --src-dir /media/originals --copies 3
 ```
 
 A single configured reference can be selected automatically; multiple references
@@ -138,6 +151,16 @@ inputs/settings, including variants. Encoder versions and environments can chang
 binary output.
 
 ## Processing contracts
+
+### Tail-only fission
+
+Each copy contains the entire original byte sequence followed by 50..500 KiB of
+fresh random data. No re-encoding, resolution/audio changes, or metadata edits occur.
+Keep the original extension and nested relative directory; names are `<stem>_N<ext>`
+with existing numbers skipped. Explicit `--out-dir` overrides the sibling output
+directory. Completed copies remain after a later failure; unfinished temporary copies
+are removed, errors/interruption return nonzero, and original files remain unchanged.
+Changing file bytes/hashes does not establish platform duplicate-detection acceptance.
 
 ### Subtitle coverage
 

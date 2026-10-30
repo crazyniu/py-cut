@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bootstrap dependencies, .env settings, and the unified entry point.
 #
-# Usage: ./run.sh [tui|cover|dedup|montage] [arguments]
+# Usage: ./run.sh [tui|cover|dedup|montage|fission] [arguments]
 # No arguments in an interactive terminal opens the TUI.
 #
 # Keep credentials and material paths in ignored project .env.
@@ -179,7 +179,7 @@ for line in config.gateway_summary().splitlines():
     print('[pycut] ' + line)
 if not config.key_ready():
     print('[pycut] 警告: 主网关未配置密钥（.env 的 PYCUT_MAIN_KEY），LLM 步骤会 401。')
-    print('         字幕擦除需在设置页填写视觉模型和密钥；去重、混剪不依赖此密钥。')
+    print('         字幕擦除需在设置页填写视觉模型和密钥；去重、混剪、抖音裂变不依赖此密钥。')
 " 2>/dev/null || echo "[pycut] 警告: 无法读取网关配置，请检查 .env"
 
 # 6. Delegate to the unified CLI/TUI entry point and preserve its exit status.

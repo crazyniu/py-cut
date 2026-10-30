@@ -5,8 +5,9 @@ These requirements apply to all contributors, including the current agent.
 
 ## 0. Product and execution ownership
 
-`pycut` is a maintained local short-video toolbox with three public commands:
-`cover` (subtitle coverage), `dedup` (similarity reduction), and `montage` (remixing).
+`pycut` is a maintained local short-video toolbox with four public commands:
+`cover` (subtitle coverage), `dedup` (similarity reduction), `montage` (remixing),
+and `fission` (tail-only copies).
 Users supply clips. Do not restore a public `slice` command or slicing wizard.
 The TUI is the maintained interactive interface; it uses the existing CLI/core
 implementations through `pycut.py` subcommands.
@@ -145,8 +146,8 @@ place settings beside the logo; narrow windows stack them. Use compact branding 
 when height is insufficient. W displays manual URL access instructions.
 
 Reload .env and validate task-used directories before each wizard. Missing settings
-lead to Web configuration, not terminal directory selection. Keep only cover/dedup/
-montage. Recursively read material without a three-level limit. Montage selection is:
+lead to Web configuration, not terminal directory selection. Keep cover/dedup/
+montage/fission. Recursively read material without a three-level limit. Montage selection:
 multiple reference videos -> one mandatory count (1..99) for every selected reference
 -> final summary. Returning preserves selections and entered counts.
 
@@ -165,8 +166,8 @@ counts and directories separate rather than adding them into a false video total
 - PYCUT_CLIP_DIR, PYCUT_PIP_DIR, and PYCUT_INTRO_DIR accept a legacy single path or a
   JSON path-array string. Use settings.directories consistently. Web supports row
   addition/removal, native folder selection, cancellation without changes, and manual
-  input on headless hosts. CLI material arguments are repeatable. Retire source-video
-  settings from the public workflow.
+  input on headless hosts. CLI material arguments are repeatable. PYCUT_SOURCE_DIR
+  is a single recursive original-video root used only by fission.
 - Merge recursive roots without duplicate files or following directory symlinks.
   Optional empty PIP/intro pools may be skipped, but real read/probe errors must surface.
 - Each montage invocation creates a batch under explicit --out-dir or configured
@@ -175,6 +176,10 @@ counts and directories separate rather than adding them into a false video total
   complete batch path on completion.
 - Cover/dedup write siblings named `字幕查重`/`去重` for each input root, preserving
   existing groups/numbers. Preflight whole-batch collisions; never overwrite sources.
+- Fission lists original videos and requires a separate 0..99 count for each (0 skips).
+  Copy bytes unchanged and append 50..500 KiB random data; do not re-encode, filter,
+  or alter metadata. Keep extensions/subfolders under a sibling `抖音裂变` directory,
+  number outputs without overwriting, and remove unfinished copies on failure/stop.
 - Within one variant batch, share reference analysis, background/PIP scans, and online
   sticker download. Each final video independently plans randomness and encoding.
   Do not persist random selections, processing results, or preparation/success state.

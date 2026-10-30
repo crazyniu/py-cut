@@ -172,7 +172,7 @@ class TUIIntegrationTests(unittest.TestCase):
     def test_only_processing_features_are_accessible_from_main_menu(self):
         self.assertEqual(
             [key for key, _, _ in tui.FEATURES],
-            ["cover", "dedup", "montage"],
+            ["cover", "dedup", "montage", "fission"],
         )
         # The former search shortcut "5" must not dispatch an unavailable item.
         with mock.patch.object(tui.curses, "curs_set"), \
@@ -185,11 +185,11 @@ class TUIIntegrationTests(unittest.TestCase):
         with mock.patch.object(tui.curses, "curs_set"), \
              mock.patch.object(tui._loop, "_feat_sel", 99), \
              mock.patch.object(tui, "_run_feature_wizard",
-                               return_value=[["montage"]]) as dispatch:
+                               return_value=[["fission"]]) as dispatch:
             result = tui._loop(FakeScreen([10]))
-        self.assertEqual(result, ("run", [["montage"]]))
+        self.assertEqual(result, ("run", [["fission"]]))
         dispatch.assert_called_once()
-        self.assertEqual(dispatch.call_args.args[1], "montage")
+        self.assertEqual(dispatch.call_args.args[1], "fission")
 
     def test_narrow_screen_allows_cancel_without_out_of_bounds(self):
         tiny = (12, 40)

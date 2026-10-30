@@ -85,6 +85,7 @@ jobs:
           tests/test_launcher_install.py tests/test_tui_integration.py
           tests/test_tui_runner.py tests/test_tui_navigation.py
           tests/test_tui_web_config_ui.py
+          tests/test_tail_fission.py tests/test_tui_tail_fission.py
       - name: Full suite (synthetic media only; user media opt-in)
         if: github.event_name == 'workflow_dispatch'
         run: python -m pytest tests/ -q
