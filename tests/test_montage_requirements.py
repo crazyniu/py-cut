@@ -67,7 +67,7 @@ class MontageRequirementsTests(unittest.TestCase):
             self.assertEqual([(c.start, c.end) for c in actual], [(1.2, 1.6), (3.1, 4.0)])
 
     def test_online_download_rejects_non_images_and_oversize_responses(self):
-        for payload in [b"<html>error</html>", b"x" * (online_stickers.MAX_BYTES + 1)]:
+        for payload in [b"", b"<html>error</html>", b"x" * (online_stickers.MAX_BYTES + 1)]:
             with self.subTest(size=len(payload)), tempfile.TemporaryDirectory() as directory:
                 response = mock.MagicMock()
                 response.__enter__.return_value.read.return_value = payload

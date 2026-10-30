@@ -184,7 +184,7 @@ def _run_pipeline(opts: MontageOptions, temporary: list[Path]) -> dict:
                 prepared.setdefault("temporary_dirs", []).append(directory)
                 prepared["stickers"] = download_stickers(Path(directory.name))
             except (OSError, ValueError) as exc:
-                result["error"] = f"在线贴纸下载失败：{type(exc).__name__}"
+                result["error"] = f"在线贴纸下载失败：{exc}"
                 log(f"  [失败] {result['error']}；未发布成片")
                 return result
     stickers = prepared["stickers"]
