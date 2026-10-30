@@ -30,14 +30,21 @@ def compose(body: Path, pool: list, *, seed: int, duration: float,
     params, variation = montage_variation(width, height, variation_seed)
     frames = round(duration * config.MONTAGE_FPS)
     fps = config.MONTAGE_FPS
+    feather = round(inset_width * config.MONTAGE_BACKDROP_FEATHER)
+    ramp = f"min(1\\,min(min(X\\,W-1-X)\\,min(Y\\,H-1-Y))/{feather})"
+    alpha = f"255*({ramp})*({ramp})*(3-2*({ramp}))"
     # Decode surplus real backdrop frames so framesync cannot end one frame early.
     # The output cap alone defines the body budget; never repeat a foreground tail.
     graph = (
         f"[1:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height},setsar=1,{variation},setsar=1,gblur=sigma={config.MONTAGE_BACKDROP_BLUR},"
         f"fps={fps},trim=end_frame={frames + 2},setpts=N/({fps}*TB)[back];"
-        f"[0:v]scale={inset_width}:{inset_height},setsar=1,setpts=N/({fps}*TB)[front];"
-        "[back][front]overlay=(W-w)/2:(H-h)/2:shortest=0:repeatlast=0:eof_action=pass,setsar=1[out]"
+        f"[0:v]scale={inset_width}:{inset_height},setsar=1,format=rgba,setpts=N/({fps}*TB)[front];"
+        f"color=white:s={inset_width}x{inset_height}:r={fps}:d={1/fps:.9f},"
+        f"format=gray,geq=lum='{alpha}',loop=loop={frames-1}:size=1:start=0,"
+        f"setpts=N/({fps}*TB)[mask];"
+        "[front][mask]alphamerge=shortest=1:repeatlast=0[softfront];"
+        "[back][softfront]overlay=(W-w)/2:(H-h)/2:shortest=0:repeatlast=0:eof_action=pass,setsar=1[out]"
     )
     fd, name = tempfile.mkstemp(prefix="backdrop_", suffix=".mp4", dir=body.parent)
     os.close(fd)
