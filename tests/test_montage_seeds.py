@@ -37,7 +37,7 @@ def planning_run(tmp_path, monkeypatch):
     def run(*extra):
         args = cli.build_parser().parse_args([
             "montage", "--source", str(source), "--out-dir", str(tmp_path / "out"),
-            "--step", "b", "--no-sub", "--no-sticker", "--intro-dir", "",
+            "--step", "b", "--no-sub", "--no-sticker", "--no-backdrop", "--intro-dir", "",
             "--min-clip", "2", "--max-clip", "2", *extra])
         assert montage_cmd.run(args) == 0
         return deepcopy(plans)

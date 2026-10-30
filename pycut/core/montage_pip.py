@@ -519,7 +519,7 @@ def build_pip_cmd(base: Path, timeline: list[dict], out: Path,
         # Retain standard segment variation on small windows without per-segment full-canvas effects.
         from .dedup import montage_variation
         from .dedup_presets import derive_seed
-        log(f"  [画中画去重] standard 几何/像素扰动已启用 · {len(entries)} 段（片段独立 seed）")
+        log(f"  [画中画去重] 增强几何/像素扰动已启用 · {len(entries)} 段（片段独立 seed）")
     # Historical PiP feather/shadow values restored; draw them on the PiP-sized
     # stream, never as extra full-screen overlays for every input segment.
     feather = max(6, int(pip_w * config.MONTAGE_PIP_FEATHER))

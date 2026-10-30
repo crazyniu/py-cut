@@ -63,7 +63,9 @@ joining. Empty intro pools skip; genuine read/probe/processing failures must sur
 Fuse segment geometry/pixel effects, mirror/speed, sticker, and seam fades into one
 encode. Offset fades along the same pre-output-seek timeline so fine seek does not
 cut them off. Normalize dimensions, FPS, SAR, pixel format, and codec before concat;
-then stream-copy rather than encode the whole background again. Validate every
+then stream-copy their concatenation. The optional dynamic-backdrop composition
+adds one bounded full-body encode before PIP/subtitles/audio, preserving the body
+frame budget. Validate every
 selected segment and final duration before atomic publication.
 
 Compare filled/required frame budgets at target FPS. Once the budget is covered, do
@@ -78,7 +80,7 @@ clips, then read them through concat demuxer. Final composition has just backgro
 and small-window video inputs regardless of source count. Single-shot/gapped paths
 retain their direct composition.
 
-Scale before applying shared standard geometry/pixel variation with independent
+Scale before applying shared stronger geometry/pixel variation with independent
 segment seeds, retain random mirroring, and restore SAR=1. Compute feather/shadow
 spatial masks once and repeat only these static masks for the finite frame budget.
 Continuous mode overlays the main canvas once; gapped mode precomposes each small
@@ -129,7 +131,8 @@ change while probing. Corruption, permission errors, and lock timeout fall back 
 real probing. Enumerate directories live so additions/deletions remain visible.
 Do not cache random plans, processed results, or success/preparation state.
 
-Default landscape exclusion is `w/h > MONTAGE_MAX_SIDE_RATIO` (1.40). Full-content
+Default landscape exclusion is `w/h > MONTAGE_MAX_SIDE_RATIO` (1.40). Rotation
+metadata determines displayed width/height before this comparison. Full-content
 hash confirmation prevents sampled-signature collisions from removing distinct media.
 Inspect current capacity; never infer it from an old library count.
 
@@ -144,6 +147,9 @@ Inspect current capacity; never infer it from an old library count.
 - Prefer video-stream duration. Container format=duration is the longest stream and
   can hide shortened video behind unchanged audio. Missing values need the existing
   frame-count/rate fallback, with container duration only as the last resort.
+- Request scalar default output for video duration. CSV can append an empty field
+  when the stream carries ambient-viewing side data, making a numeric duration
+  fail float parsing.
 - Direct concat inpoint/outpoint or mixed-format inputs can return rc=0 with shortened
   output. Double-seek/normalize each segment before stream-copy concat.
 - Speed effects need take * speed source time before setpts compresses the interval.

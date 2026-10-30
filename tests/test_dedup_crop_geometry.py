@@ -14,7 +14,10 @@ from pycut.core.utils import run_cmd
 class CropGeometry(unittest.TestCase):
     def test_seed_87_preserves_crop_and_full_frame_budget_for_source_formats(self):
         # 702*1.0138=711.6876: FFmpeg scale truncates to 711, while round incorrectly predicts 712.
-        params, chain = dedup.montage_variation(720, 1280, 87)
+        params = dedup.build_params('standard', 87, has_audio=False, width=720, height=1280)
+        params['fps'] = ''
+        info = dedup.VideoInfo(Path('.'), '', 0, 720, 1280, False, 0, '')
+        chain = ','.join(dedup.build_video_chain(params, info))
         self.assertEqual(params['zoom'], 1.0138)
         self.assertIn('crop=702:1270:', chain)
         self.assertIn('crop=710:1272:', chain)

@@ -12,7 +12,9 @@ runs in PRs. Current source and actual encoding determine support, not old measu
   not a background source. Random library footage need not match the spoken semantics.
 - Body output is fixed 720x1280, 9:16, 30 FPS and retains reference video duration.
   Optional intro increases final duration by its complete length.
-- Independently select background/PIP and apply standard geometry/pixel variation.
+- Independently select background/PIP and apply stronger geometry/pixel variation
+  from the upper half of the existing calibrated magnitude ranges. Preserve random
+  signs, source timing, FPS and reference audio; standalone dedup presets are unchanged.
   Background/PIP picture stages are silent; attach reference audio after subtitles.
 - Default PIP is top-right 216x384 with aspect-preserving fit, random mirroring,
   feathering, and shadow. Preserve its existing subtitles; never run cover on it.
@@ -21,6 +23,16 @@ runs in PRs. Current source and actual encoding determine support, not old measu
   --no-sticker disables. Downloads try GitHub Raw and jsDelivr for the same pinned
   asset in at most two rounds (15 seconds per request), validating every response.
   Exhausted downloads report host/reason and reject publication, as do selected-image failures.
+- By default every background segment receives two smaller stickers in opposite
+  corners. Image and placement follow the segment seed. --sticker-chance and
+  --no-sticker retain explicit control; intros use the same paired overlay.
+- Default dynamic backdrop independently draws library footage, preferring sources
+  unused by the foreground. Loop it only for the finite body frame budget, apply
+  stronger variation and blur, and place the complete normalized foreground at a
+  seeded 82–90% width. Small libraries can reuse a source for this separate layer.
+  --no-backdrop restores the full-canvas foreground. This layer is silent and is
+  completed before PIP/subtitles/reference audio; its selected source/parameters are
+  returned in the in-memory pipeline summary, never persisted as task state.
 - Default seam fade is 0.2 seconds without overlap or duration loss; --seam-fade 0 disables.
 - Reject repeated background material, insufficient coverage, or failed stages. Check
   inputs and plan both pools before encoding. Preserve prior output on failure/interruption.
@@ -60,7 +72,8 @@ separate design and dependency/quality evaluation.
 ## 3. Stage B — background selection and normalization
 
 `core/montage_clips.py` scans supported videos using filesystem traversal, filters
-landscape by width/height <=1.40 unless --allow-landscape is explicit, and retains
+landscape by displayed width/height <=1.40 unless --allow-landscape is explicit,
+accounting for 90/270-degree rotation metadata before filtering, and retains
 real source durations until selection. Concurrent probes carry explicit indices to
 retain stable source order and seeded reproducibility. Per-file invalid metadata
 is skipped; real directory errors surface.

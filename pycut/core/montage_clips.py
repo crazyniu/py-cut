@@ -116,7 +116,7 @@ def _probe_one(path: Path, *, details: dict | None = None) -> ClipItem | None:
     Return None on invalid metadata/probe failure. Cache only read-only metadata."""
     args = [
         FFPROBE, "-v", "error",
-        "-show_entries", "stream=codec_type,width,height,duration,avg_frame_rate",
+        "-show_entries", "stream=codec_type,width,height,duration,avg_frame_rate:stream_side_data=rotation:stream_tags=rotate",
         "-show_entries", "format=duration",
         "-of", "json", str(path),
     ]
@@ -141,6 +141,11 @@ def _probe_one(path: Path, *, details: dict | None = None) -> ClipItem | None:
 
     width = int(_f(vs.get("width")))
     height = int(_f(vs.get("height")))
+    # FFmpeg autorotates phone recordings before filtering; classify their displayed canvas.
+    rotation = next((side["rotation"] for side in vs.get("side_data_list", [])
+                     if "rotation" in side), (vs.get("tags") or {}).get("rotate", 0))
+    if round(_f(rotation)) % 180 == 90:
+        width, height = height, width
     if width <= 0 or height <= 0:
         return None
 
@@ -513,7 +518,7 @@ def _seg_cmd(src: Path, offset: float, take: float, out: Path,
             img, canvas or config.MONTAGE_CANVAS,
             config.MONTAGE_STICKER_SCALE, config.MONTAGE_STICKER_MARGIN,
             config.MONTAGE_STICKER_OPACITY, pos=rng.choice(["br", "bl", "tl"]),
-            fps=fps, video_label="segment")
+            fps=fps, video_label="segment", double=True)
         if part is None:
             raise ValueError(f"已指定贴纸但无法读取: {sticker}")
         inputs += ["-i", str(img)]
@@ -581,7 +586,7 @@ def _normalize_segments(items: list[dict], canvas, fps, crf: str,
             mirror=bool(d.get("mirror")), speed=speed, frames=frames,
             **({"dedup_seed": d["dedup_seed"]} if "dedup_seed" in d else {}),
             sticker=Path(d["sticker"]) if d.get("sticker") else None,
-            sticker_seed=i * 7919 + 13,
+            sticker_seed=d.get("dedup_seed", i * 7919 + 13),
             seam_fade=seam_fade if len(items) > 1 else 0.0,
             first=i == 0, last=i == len(items) - 1)
         jobs.append((i, d, seg, src_take, speed, frames, timeout, cmd))

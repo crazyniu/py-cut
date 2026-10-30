@@ -192,6 +192,9 @@ MONTAGE_TMP = Path("/tmp/pycut_montage")
 # Reference contributes timing, subtitles, and audio; output canvas stays fixed.
 MONTAGE_CANVAS = (720, 1280)
 MONTAGE_FPS = 30
+MONTAGE_INSET_WIDTH_RANGE = (.82, .90)
+MONTAGE_BACKDROP_BLUR = 4.0
+MONTAGE_STICKER_PAIR_SCALE = .75
 
 
 # Reject landscape above this width/height ratio unless explicitly allowed.
@@ -221,7 +224,7 @@ MONTAGE_PIP_SHADOW = 0.035         # Shadow spread as a fraction of small-window
 MONTAGE_PIP_SHADOW_ALPHA = 0.45    # Shadow opacity.
 MONTAGE_STICKER_DIR = _path("PYCUT_STICKER_DIR", DESKTOP / "混剪_贴纸")
 # Stickers retain translucency and feathered edges.
-MONTAGE_STICKER_CHANCE = 0.65
+MONTAGE_STICKER_CHANCE = 1.0
 
 MONTAGE_STICKER_SCALE = 0.28
 MONTAGE_STICKER_OPACITY = 0.55

@@ -173,11 +173,33 @@ def build_video_chain(params: dict, info: VideoInfo) -> list[str] | None:
 
 
 def montage_variation(width: int, height: int, seed: int) -> tuple[dict, str]:
-    """Reuse standard geometry/pixel effects without changing montage timing, FPS, or audio."""
+    """Draw stronger geometry/pixel effects within the existing calibrated bounds.
+
+    Move magnitudes into the upper half of their ranges; preserve random signs and
+    draws. Background, PIP and intro share this policy without changing timing/audio.
+    """
     from .dedup_presets import build_params
 
     params = build_params("standard", seed, has_audio=False,
                           width=width, height=height)
+    for key, upper in (("zoom", config.DEDUP_ZOOM_RANGE[1]),
+                       ("contrast", config.DEDUP_CONTRAST_RANGE[1]),
+                       ("saturation", config.DEDUP_SATURATION_RANGE[1]),
+                       ("sharpen", config.DEDUP_SHARPEN_RANGE[1])):
+        params[key] = round((params[key] + upper) / 2, 4)
+    for key, upper in (("rotate_deg", config.DEDUP_ROTATE_DEG[1]),
+                       ("brightness", config.DEDUP_BRIGHTNESS),
+                       ("hue_deg", config.DEDUP_HUE_DEG)):
+        value = params[key]
+        params[key] = round(math.copysign((abs(value) + upper) / 2, value), 4)
+    cap = min(config.DEDUP_CROP_RANGE[1], max(2, int(min(width, height) * .05)))
+    params["crop_px"] = min(cap, math.ceil((params["crop_px"] + cap) / 4) * 2)
+    params["noise"] = math.ceil((params["noise"] + config.DEDUP_NOISE_RANGE[1]) / 2)
+    params["channel_gains"] = tuple(round(1 + math.copysign(
+        (abs(gain - 1) + config.DEDUP_RGB_DRIFT) / 2, gain - 1), 4)
+        for gain in params["channel_gains"])
+    params["rgb_drift"] = max(abs(gain - 1) for gain in params["channel_gains"])
+    params["preset"] = "montage-strong"
     params["fps"] = ""
     info = VideoInfo(Path("."), "", 0, width, height, False, 0, "")
     chain = ",".join(build_video_chain(params, info))
@@ -779,9 +801,11 @@ def _video_duration(path: Path) -> float:
     Container duration is the longest stream and can hide shortened video behind
     unchanged audio. MKV/FLV may return N/A with rc=0; callers must use the fallback
     rather than treating zero as a measured duration."""
+    # CSV appends an empty field for ambient-viewing side data on phone footage.
+    # Scalar output keeps a numeric duration parseable without discarding metadata.
     rc, out, _err = run_cmd(
         [FFPROBE, "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=duration", "-of", "csv=p=0", str(path)],
+         "-show_entries", "stream=duration", "-of", "default=nw=1:nk=1", str(path)],
         timeout=30)
     if rc != 0:
         return 0.0
