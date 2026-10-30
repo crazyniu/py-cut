@@ -11,10 +11,13 @@ See [ENGINEERING.md](ENGINEERING.md), [DEDUP.md](DEDUP.md), and [MONTAGE.md](MON
 | `cover` | User-supplied recursive multi-root MP4s; vision localization and one full-width Gaussian blur | Separate output, original audio, atomic publication, verified markers; uncertainty requires review |
 | `dedup` | Seeded container/geometry/pixel/time/structure/audio variations with three presets and explicit switches | pHash change, PSNR damage floor, video-duration checks, optional UTF-8 BOM JSON report |
 | `montage` | Reference rhythm/audio/SRT plus independently selected background and optional PIP/intro pools | Fixed body canvas/FPS/duration, original SRT timing/audio, flat video-only variant batch |
+| `fission` | Original-video root or explicit file; append 50..500 KiB random bytes to each exact copy | Preserve source bytes, extensions/subfolders, and existing outputs; no re-encoding or platform acceptance claim |
 
-Users supply clips. Do not restore a public slice command, source-video settings,
-or slicing wizard. cover/dedup use Web/.env roots and preserve sources. Montage TUI
-selects references, requires one shared 1..99 variant count, then confirms. All
+Users supply clips. Do not restore a public slice command or slicing wizard.
+PYCUT_SOURCE_DIR configures originals for tail-only fission, whose TUI requires an
+individual 0..99 count for each video (0 skips). cover/dedup use Web/.env roots and
+preserve sources. Montage TUI selects references, requires one shared 1..99 variant
+count, then confirms. All
 material roots scan recursively with file deduplication and no directory-symlink
 traversal. Explicit CLI arguments remain supported.
 

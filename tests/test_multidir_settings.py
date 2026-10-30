@@ -40,12 +40,12 @@ def test_validation_is_task_specific_and_identifies_bad_row(tmp_path):
     errors = settings.problems(values, keys=('PYCUT_CLIP_DIR',))
     assert len(errors) == 1 and '第 2 项' in errors[0]
     assert settings.problems({'PYCUT_CLIP_DIR': str(valid)}, keys=('PYCUT_CLIP_DIR',)) == []
-    assert 'PYCUT_SOURCE_DIR' not in settings.FIELDS
+    assert settings.FIELDS['PYCUT_SOURCE_DIR'][0] == '原视频目录'
     assert settings.FIELDS['PYCUT_REFERENCE_DIR'][0] == '话术目录'
 
 
-def test_public_commands_and_menu_have_three_tasks_only():
-    assert cli.list_commands() == ['cover', 'dedup', 'montage']
+def test_public_commands_and_menu_have_four_tasks_without_slice():
+    assert cli.list_commands() == ['cover', 'dedup', 'montage', 'fission']
     assert [item[0] for item in tui.FEATURES] == cli.list_commands()
     with pytest.raises(SystemExit): cli.build_parser().parse_args(['slice'])
     assert not hasattr(tui, '_wizard_slice')

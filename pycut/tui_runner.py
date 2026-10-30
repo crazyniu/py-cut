@@ -104,7 +104,7 @@ def _draw_results(stdscr, results: list[dict], total: int, status: str,
     tui._safe_add(stdscr, header, 1, "━━ " + labels[status] + " ━━", w, color, curses.A_BOLD)
     tui._safe_add(stdscr, header + 1, 1, f"已结束 · 完成流程 {completed}/{total} · 已运行 {len(results)} · 未执行 {total - len(results)}", w, color)
     tui._safe_add(stdscr, header + 2, 1, "Enter/Esc 确认返回 · Q 退出 · ↑↓滚动 · L 日志", w, "accent")
-    names = {"slice": "切片", "cover": "字幕擦除", "dedup": "去重", "montage": "混剪"}
+    names = {"slice": "切片", "cover": "字幕擦除", "dedup": "去重", "montage": "混剪", "fission": "抖音裂变"}
     rows = []
     for i, result in enumerate(results, 1):
         events = result["events"]
@@ -380,7 +380,7 @@ def _draw(stdscr, argv: list[str], index: int, total: int,
     if tui._small_screen(stdscr):
         return
     stdscr.erase()
-    names = {"slice": "切片", "cover": "字幕擦除", "dedup": "去重", "montage": "混剪"}
+    names = {"slice": "切片", "cover": "字幕擦除", "dedup": "去重", "montage": "混剪", "fission": "抖音裂变"}
     body = tui._frame(stdscr, "任务进度" if status in ("running", "stopping") else "处理结果",
                f"{names.get(argv[0], '视频处理')} · 流程 {index}/{total}")
     color = ("info" if status == "running" else "warn" if status == "stopping"

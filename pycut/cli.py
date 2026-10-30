@@ -1,4 +1,4 @@
-"""CLI routing for the public cover, dedup, and montage commands.
+"""CLI routing for the public cover, dedup, montage, and fission commands.
 
 COMMANDS maps names to modules exposing register(subparsers) and run(args).
 The TUI launches these same commands through tui_runner."""
@@ -8,7 +8,7 @@ import argparse
 import sys
 
 from . import __version__
-from .commands import cover_cmd, dedup_cmd, montage_cmd
+from .commands import cover_cmd, dedup_cmd, montage_cmd, fission_cmd
 from .core.utils import log
 
 # Public command registry: each module provides register and run.
@@ -16,13 +16,14 @@ COMMANDS = {
     "cover": cover_cmd,
     "dedup": dedup_cmd,
     "montage": montage_cmd,
+    "fission": fission_cmd,
 }
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pycut",
-        description="短视频处理工具箱（字幕擦除 / 去重 / 混剪；切片由用户提供）",
+        description="短视频处理工具箱（字幕擦除 / 去重 / 混剪 / 抖音裂变；切片由用户提供）",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--version", action="version", version=f"pycut {__version__}")
     sub = p.add_subparsers(dest="command", metavar="<command>")
@@ -60,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
     use_configured_clips = args.command in ('cover', 'dedup') and not (args.file or args.src_dir)
     if use_configured_clips:
         keys.append('PYCUT_CLIP_DIR')
+    if args.command == 'fission' and not (args.file or args.src_dir):
+        keys.append('PYCUT_SOURCE_DIR')
     if args.command == 'montage':
         probe = bool(args.probe)
         if not args.source and not probe:

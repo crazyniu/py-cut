@@ -9,9 +9,9 @@ import pytest
 from pycut import config, settings, web_config
 
 
-def test_multi_groups_keep_named_string_values_and_remove_source():
+def test_multi_groups_keep_named_string_values_and_fission_source():
     page=web_config.page()
-    assert 'PYCUT_SOURCE_DIR' not in page
+    assert 'id="PYCUT_SOURCE_DIR"' in page
     assert '话术目录' in page and '同名 SRT' in page
     for key in settings.MULTI_DIRECTORIES:
         assert f'<fieldset class="field multi-directory" data-key="{key}"' in page

@@ -12,6 +12,7 @@ def _root() -> Path:
 
 
 FIELDS = {
+    'PYCUT_SOURCE_DIR': ('原视频目录', '用于抖音裂变；递归列出视频并逐个设置数量，仅复制并追加随机字节'),
     'PYCUT_REFERENCE_DIR': ('话术目录', '每个子文件夹放一个话术视频及同名 SRT，例如 a/1.mp4、a/1.srt；递归读取'),
     'PYCUT_CLIP_DIR': ('混剪切片目录', '添加用户已准备的切片目录，递归合并；也用于字幕擦除和去重'),
     'PYCUT_PIP_DIR': ('画中画切片目录', '可添加多个目录，递归读取；留空或关闭画中画时不叠加'),
@@ -131,7 +132,8 @@ def problems(values: dict[str, str], *, require_all: bool = True, keys=None) -> 
             errors.append(f'{label}：{exc}')
             continue
         if not paths:
-            if require_all and key in REQUIRED:
+            # Originals are required only when the fission task validates them.
+            if require_all and (key in REQUIRED or (key == 'PYCUT_SOURCE_DIR' and keys is not None)):
                 errors.append(f'{label}尚未配置')
             continue
         for index, path in enumerate(paths, 1):

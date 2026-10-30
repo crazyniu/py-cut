@@ -86,6 +86,6 @@ def test_slice_output_prefers_pip_and_keeps_explicit_override():
 def test_public_slice_entry_is_removed_but_internal_resume_is_preserved():
     import pytest
     assert not hasattr(tui, '_wizard_slice')
-    assert [key for key, _, _ in tui.FEATURES] == ['cover', 'dedup', 'montage']
+    assert [key for key, _, _ in tui.FEATURES] == ['cover', 'dedup', 'montage', 'fission']
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(['slice'])

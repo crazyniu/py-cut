@@ -1,7 +1,7 @@
 [project]
 name = "pycut"
 version = "0.1.0"
-description = "短视频处理工具箱：字幕擦除 / 去重 / 混剪"
+description = "短视频处理工具箱：字幕擦除 / 去重 / 混剪 / 抖音裂变"
 readme = "README.md"
 requires-python = ">=3.13"
 # Launchers/requirements.txt supply video dependencies; package metadata adds the picker.

@@ -1,4 +1,4 @@
-"""Three processing wizards using Web/.env settings and CLI subprocesses."""
+"""Processing wizards using Web/.env settings and CLI subprocesses."""
 from __future__ import annotations
 
 import curses
@@ -114,12 +114,14 @@ FEATURES = [
     ("cover", "字幕擦除", "擦除画面中的字幕"),
     ("dedup", "去重",    "调整视频画面，降低相似度"),
     ("montage", "混剪",  "组合片段生成新视频（可批量裂变）"),
+    ("fission", "抖音裂变", "逐个设置数量，复制视频并追加尾部随机字节"),
 ]
 
 FEATURE_HINTS = {
     "cover": "读取用户切片 → 单层毛玻璃遮盖字幕",
     "dedup": "读取切片配置 → 画面处理及相似度自检",
     "montage": "读取目录配置 → 选择话术 → 数量 → 确认混剪",
+    "fission": "读取原视频目录 → 逐个设置数量 → 确认裂变",
 }
 
 
@@ -697,7 +699,9 @@ def _run_feature_wizard(stdscr, key: str, w: int) -> list[list[str]] | str | Non
     None cancels; the legacy __BACK__ sentinel returns to the home menu."""
     from . import settings, web_config
     config.refresh()
-    keys = ("PYCUT_CLIP_DIR",) if key in ("cover", "dedup") else ("PYCUT_REFERENCE_DIR", "PYCUT_CLIP_DIR", "PYCUT_OUTPUT_DIR", "PYCUT_INTRO_DIR")
+    keys = (("PYCUT_SOURCE_DIR",) if key == "fission" else
+            ("PYCUT_CLIP_DIR",) if key in ("cover", "dedup") else
+            ("PYCUT_REFERENCE_DIR", "PYCUT_CLIP_DIR", "PYCUT_OUTPUT_DIR", "PYCUT_INTRO_DIR"))
     errors = settings.problems(settings.effective(), keys=keys)
     if errors:
         url = web_config.start()
@@ -706,7 +710,8 @@ def _run_feature_wizard(stdscr, key: str, w: int) -> list[list[str]] | str | Non
     if key == "cover" and not config.key_ready():
         _flash(stdscr, "字幕定位需要配置视觉模型和密钥，请在顶部设置地址填写 LLM 网关", "bad")
         return None
-    wizard = {"cover": _wizard_cover, "dedup": _wizard_dedup, "montage": _wizard_montage}.get(key)
+    wizard = {"cover": _wizard_cover, "dedup": _wizard_dedup,
+              "montage": _wizard_montage, "fission": _wizard_fission}.get(key)
     if wizard:
         try:
             return wizard(stdscr, w)
@@ -820,6 +825,74 @@ def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
                 argv.append("--no-pip")
             argv_list.append(argv)
         return argv_list
+
+
+def _wizard_fission(stdscr, w: int) -> list[list[str]] | None:
+    """List all source videos, require individual counts, and retain edits on Back."""
+    from .core.output_paths import sibling, without_outputs
+    root = config.SRC_DIR.expanduser().resolve()
+    output = sibling(root, "抖音裂变")
+    files = list_videos_recursive(root, max_depth=None, raise_on_error=True)
+    files = without_outputs(files, root, "抖音裂变")
+    if not files:
+        _flash(stdscr, "原视频目录及其子目录没有可处理的视频：" + str(root), "bad")
+        return None
+    counts = {}
+    selected = 0
+    while True:
+        h, w = stdscr.getmaxyx()
+        if _small_screen(stdscr):
+            if stdscr.getch() in (27, ord("q"), ord("Q")):
+                return None
+            continue
+        stdscr.erase()
+        body = _frame(stdscr, "抖音裂变 · 1/2 设置每个视频的数量",
+                      f"共 {len(files)} 个原视频 · 已设置 {len(counts)} 个 · 数量 0～99，0 表示跳过")
+        rows = max(1, h - body - 3)
+        top = max(0, selected - rows + 1)
+        for i in range(top, min(len(files) + 1, top + rows)):
+            if i == len(files):
+                text = "下一步：确认生成"
+            else:
+                label = str(files[i].relative_to(root))
+                number = str(counts[files[i]]) if files[i] in counts else "未设置"
+                text = _ellipsize(label, w - 22) + f"  × {number}"
+            _safe_add(stdscr, body + i - top, 2, ("❯ " if i == selected else "  ") + text,
+                      w, "accent" if i == selected else "text")
+        _footer(stdscr, "↑↓ 移动 · →/Enter 设置数量或进入确认 · Esc 返回",
+                "↑↓移动 · Enter 设置/下一步 · Esc 返回")
+        stdscr.refresh()
+        key = stdscr.getch()
+        if key in (27, curses.KEY_LEFT, ord("q"), ord("Q")):
+            return None
+        if key in (curses.KEY_UP, ord("k")):
+            selected = max(0, selected - 1)
+        elif key in (curses.KEY_DOWN, ord("j")):
+            selected = min(len(files), selected + 1)
+        elif key in (10, 13, curses.KEY_ENTER, curses.KEY_RIGHT, ord("l")):
+            if selected < len(files):
+                source = files[selected]
+                number = _prompt_int(stdscr, h - 4, 2, w, "生成数量（0 跳过）",
+                                     counts.get(source, 1), 0, 99)
+                if number is not None:
+                    counts[source] = number
+                    selected += 1
+                continue
+            if len(counts) != len(files):
+                _flash(stdscr, "请为每个原视频设置数量；不需要生成的视频填 0", "warn")
+                continue
+            chosen = [source for source in files if counts[source]]
+            if not chosen:
+                _flash(stdscr, "请至少为一个视频设置大于 0 的生成数量", "warn")
+                continue
+            lines = [("抖音裂变 · 2/2", f"{len(chosen)} 个原视频，共生成 {sum(counts.values())} 个副本"),
+                     ("处理方式", "仅在副本尾部追加 50～500KB 随机字节"),
+                     ("原视频目录", str(root)), ("输出目录", str(output))]
+            lines += [(str(source.relative_to(root)), f"{counts[source]} 个副本") for source in chosen]
+            if _confirm(stdscr, lines):
+                return [["fission", "--file", str(source), "--copies", str(counts[source]),
+                         "--out-dir", str(output / source.relative_to(root).parent)]
+                        for source in chosen]
 
 
 def _flash(stdscr, msg: str, color: str = "bad") -> None:
