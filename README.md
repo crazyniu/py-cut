@@ -60,6 +60,7 @@ External environment variables take precedence over `.env`.
 | `PYCUT_INTRO_DIR` | Optional intro roots; no videos means skip |
 | `PYCUT_OUTPUT_DIR` | Montage output root; created when necessary |
 | `PYCUT_STICKER_DIR` | Optional local stickers; otherwise use online defaults |
+| `PYCUT_AB_AUDIO_DIR` | Optional recursive audio-material root for AB mislead mode |
 
 CLIP/PIP/INTRO accept a single path or a JSON array string, for example:
 
@@ -97,7 +98,12 @@ Esc returns, and only Q exits the home menu. Directory configuration belongs to 
 .env. Missing settings lead to configuration instructions. Only Enter on the final
 confirmation starts processing.
 
-Cover/dedup preview the configured MP4 scope and output locations. Montage follows
+Cover/dedup preview the configured MP4 scope and output locations. Dedup selects
+light/standard/aggressive strength and a shared 1..99 copies per input (defaults:
+standard, one copy). Each run creates independently seeded, numbered variants;
+returning from confirmation preserves the choices. Its sound row selects off,
+tone adjustment, AB hidden, or AB mislead. Only mislead needs the optional AB audio
+material directory from Web settings. Montage follows
 three steps: select reference videos, enter one mandatory variant count (1..99) for
 every selected reference, then confirm the summary. Returning preserves selection
 and counts. Ten references with count five plan fifty final videos. PIP is optional;
@@ -129,6 +135,8 @@ until Enter/Esc returns or Q exits. Stage counts are never summed into a false t
 
 # Seeded deduplication, optional effects, or verification only
 ./run.sh dedup --all --preset standard
+./run.sh dedup --src-dir /media/clips-a --preset standard --copies 5
+./run.sh dedup --src-dir /media/clips-a --copies 1 --voice-shift -1
 ./run.sh dedup --file /media/clip.mp4 --preset aggressive --border --badge
 ./run.sh dedup --src-dir /media/clips-a --check
 
@@ -149,6 +157,12 @@ complete argument contract. Montage draws a fresh seed each run by default (also
 with `--seed 0`); explicit nonzero `--seed` reproduces parameter choices for fixed
 inputs/settings, including variants. Encoder versions and environments can change
 binary output.
+
+Dedup `--copies 1..99` also draws a fresh batch seed by default and derives each
+variant's seed from the batch seed, resolved source path, and within-run copy index.
+Use a nonzero `--seed` to reproduce those choices; existing output numbers do not
+affect them. Omitting `--copies` retains legacy single-output naming and path-based
+default seeds. `--copies` cannot be combined with `--check`, `--force`, or `--in-place`.
 
 ## Processing contracts
 
@@ -226,6 +240,9 @@ plans are never cached. Clean downloaded sticker directories after the batch.
 Cover/dedup default to `字幕查重`/`去重` beside each input root, retaining groups/numbers.
 Preflight collisions across the whole batch and preserve source files. Explicit
 `--out-dir` wins. Dedup reports remain optional JSON.
+Dedup variants add `_变体_N` to the usual output stem, skipping occupied filenames
+across the whole batch. Existing outputs and sources are retained. Progress counts
+final variants, not just input files.
 
 Montage creates one `混剪-YYYYMMDD-HHMMSS-<unique>/` batch below explicit/configured
 output root (fallback: `混剪/` beside the reference root). All selected references and

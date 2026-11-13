@@ -66,6 +66,7 @@ CLIP_DIR = CLIP_DIRS[0] if CLIP_DIRS else PROJECT_ROOT / "materials" / "backgrou
 PIP_DIR = PIP_DIRS[0] if PIP_DIRS else SRC_DIR.parent / "切片"
 REFERENCE_DIR = _path("PYCUT_REFERENCE_DIR", PROJECT_ROOT / "materials" / "reference")
 OUTPUT_DIR = _path("PYCUT_OUTPUT_DIR", PROJECT_ROOT / "output")
+AB_AUDIO_DIR = _path("PYCUT_AB_AUDIO_DIR", PROJECT_ROOT) if os.environ.get("PYCUT_AB_AUDIO_DIR", "").strip() else None
 DESKTOP = Path.home() / "Desktop"
 OUT_FACE = PIP_DIR / "有人脸"
 OUT_NOFACE = PIP_DIR / "无人脸"

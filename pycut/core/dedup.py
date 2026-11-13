@@ -9,10 +9,12 @@ from __future__ import annotations
 import json
 import math
 import os
+import secrets
 import threading
 import time
+import unicodedata
 from concurrent import futures
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -69,6 +71,7 @@ class DedupOptions:
     psnr_min: float = config.DEDUP_MIN_PSNR   # Damage floor only; not a perceptual quality score.
     check_only: bool = False
     force: bool = False
+    copies: int = 0                   # Zero retains the legacy single-output naming/seed contract.
 
 
 @dataclass
@@ -743,7 +746,7 @@ def process_one(src: Path, dst: Path, opts: DedupOptions, *, on_publish=None) ->
                 checked = mix_audio_file(
                     tmp, opts.audio_mix,
                     abitrate=str(params.get("abitrate") or "128k"),
-                    timeout=timeout)
+                    timeout=timeout, seed=seed)
                 params["audio_mix"]["verified_output"] = checked
 
             check_stop()
@@ -888,20 +891,59 @@ def _check_only(item: _Report, src: Path, dst: Path, opts: DedupOptions,
     return item
 
 
+def _variant_outputs(pairs: list[tuple[Path, Path]], copies: int) -> list[tuple[Path, Path]]:
+    """Reserve numbered destinations for the whole batch without replacing existing files."""
+    def key(path):
+        return unicodedata.normalize("NFC", str(path.resolve())).casefold()
+
+    used = {key(src) for src, _ in pairs}
+    for directory in {dst.parent for _, dst in pairs}:
+        if directory.exists():
+            used.update(key(path) for path in directory.iterdir())
+    outputs = []
+    for src, base in pairs:
+        number = 1
+        for _ in range(copies):
+            dst = base.with_name(f"{base.stem}_变体_{number}.mp4")
+            while key(dst) in used:
+                number += 1
+                dst = base.with_name(f"{base.stem}_变体_{number}.mp4")
+            used.add(key(dst))
+            outputs.append((src, dst))
+            number += 1
+    return outputs
+
+
 def process_batch(srcs: list[Path], opts: DedupOptions,
-                  workers: int = 0, *, on_start=None, on_result=None, on_publish=None) -> list[dict]:
-    """Process concurrently, isolate per-file failures, and return rows in input order."""
+                  workers: int = 0, *, output_paths: list[Path] | None = None,
+                  on_start=None, on_result=None, on_publish=None) -> list[dict]:
+    """Process sources/variants concurrently and return rows in source/variant order.
+
+    output_paths supplies base destinations across input roots. Variant filenames
+    skip existing numbers; seeds use the within-invocation index, not those filenames.
+    """
     srcs = [Path(s) for s in srcs]
     if not srcs:
         return []
+
+    paths = output_paths if output_paths is not None else [resolve_output_path(s, opts) for s in srcs]
+    pairs = list(zip(srcs, paths, strict=True))
+    batch_seed = None
+    if opts.copies:
+        if not 1 <= opts.copies <= 99 or opts.in_place or opts.force or opts.check_only:
+            raise ValueError("批量变体数量须为 1～99，不能与原地覆盖、强制覆盖或只自检合用")
+        pairs = _variant_outputs(pairs, opts.copies)
+        batch_seed = opts.seed or secrets.randbits(64) or 1
+        log(f"[随机种子] {batch_seed}")
+    srcs = [src for src, _ in pairs]
 
     n = workers if workers and workers > 0 else config.DEDUP_WORKERS
     n = max(1, min(n, len(srcs)))
 
     # Preflight every destination: distinct inputs can otherwise overwrite a shared output.
     destinations: dict[Path, list[int]] = {}
-    for i, src in enumerate(srcs):
-        dst = resolve_output_path(src, opts).expanduser().resolve()
+    for i, (_src, path) in enumerate(pairs):
+        dst = path.expanduser().resolve()
         destinations.setdefault(dst, []).append(i)
     collided = {
         i: dst
@@ -921,10 +963,18 @@ def process_batch(srcs: list[Path], opts: DedupOptions,
                         timespec="seconds")}
         if on_start is not None:
             on_start(s)
-        dst = resolve_output_path(s, opts)
+        dst = pairs[idx][1]
         log(f"  [{idx + 1}/{len(srcs)}] {s.name} -> {dst.name}")
         try:
-            return process_one(s, dst, opts, **({"on_publish": on_publish} if on_publish is not None else {}))
+            task_opts = opts
+            if batch_seed is not None:
+                variant = idx % opts.copies + 1
+                seed = derive_seed(batch_seed, s.resolve(), variant) or 1
+                task_opts = replace(opts, seed=seed)
+            result = process_one(s, dst, task_opts, **({"on_publish": on_publish} if on_publish is not None else {}))
+            if batch_seed is not None:
+                result.update(batch_seed=batch_seed, variant=variant)
+            return result
         except Exception as e:  # noqa: BLE001 - process_one normally converts per-file exceptions into report rows.
             log(f"  [异常] {s.name}: {type(e).__name__} {e}")
             return {"src": str(s), "dst": str(dst), "ok": False, "seed": 0,
@@ -971,7 +1021,7 @@ def process_batch(srcs: list[Path], opts: DedupOptions,
                       ("自检达标：" if out[i].get("ok") else "处理或自检失败：") + metrics)
             if out[i].get("gates", {}).get("over_modified"):
                 detail = "变化偏大，请目检；" + metrics
-            progress("去重", completed, len(srcs), success=good, failed=failed, skipped=sum(bool(item.get("skipped")) for item in out if item), detail=detail, output=str(resolve_output_path(srcs[i], opts).parent))
+            progress("去重", completed, len(srcs), success=good, failed=failed, skipped=sum(bool(item.get("skipped")) for item in out if item), detail=detail, output=str(pairs[i][1].parent))
     return out
 
 

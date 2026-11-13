@@ -119,7 +119,7 @@ FEATURES = [
 
 FEATURE_HINTS = {
     "cover": "读取用户切片 → 单层毛玻璃遮盖字幕",
-    "dedup": "读取切片配置 → 画面处理及相似度自检",
+    "dedup": "选择强度 → 设置份数和声音 → 确认去重",
     "montage": "读取目录配置 → 选择话术 → 数量 → 确认混剪",
     "fission": "读取原视频目录 → 逐个设置数量 → 确认裂变",
 }
@@ -751,10 +751,80 @@ def _wizard_dedup(stdscr, w: int) -> list[list[str]] | None:
     if not files:
         _flash(stdscr, "混剪切片目录及其子目录没有 MP4：" + _library_summary(paths), "bad")
         return None
-    if _confirm(stdscr, [("用户切片目录", _library_summary(paths)), ("MP4 数量", str(len(files))),
-                        ("输出", "各输入目录同级的去重目录")]):
-        return [["dedup", "--src-dir", settings.encoded_directories(paths)]]
-    return None
+    presets = [("light", "轻度"), ("standard", "标准"), ("aggressive", "激进")]
+    preset = next(i for i, (name, _) in enumerate(presets) if name == config.DEDUP_DEFAULT_PRESET)
+    copies, selected = 1, preset
+    audio_modes = [("off", "关闭"), ("voice", "音色调整"),
+                   ("hidden", "频谱掩蔽"), ("mislead", "声纹扰频")]
+    audio_mode = 0
+    while True:
+        h, w = stdscr.getmaxyx()
+        if _small_screen(stdscr):
+            if stdscr.getch() in (27, curses.KEY_LEFT):
+                return None
+            continue
+        stdscr.erase()
+        body = _frame(stdscr, "去重 · 处理设置")
+        rows = [("● " if i == preset else "○ ") + label for i, (_, label) in enumerate(presets)]
+        rows += [f"每条生成：{copies} 份", f"声音处理：{audio_modes[audio_mode][1]}",
+                 "下一步：确认生成"]
+        for i, text in enumerate(rows):
+            _safe_add(stdscr, body + i, 2, ("❯ " if i == selected else "  ") + text,
+                      w, "accent" if i == selected else "text")
+        _footer(stdscr, "↑↓ 移动 · →/Enter 选择 · Esc 返回", "↑↓移动 · Enter选择 · Esc返回")
+        stdscr.refresh()
+        key = stdscr.getch()
+        if key in (27, curses.KEY_LEFT):
+            return None
+        if key in (curses.KEY_UP, ord("k")):
+            selected = max(0, selected - 1)
+        elif key in (curses.KEY_DOWN, ord("j")):
+            selected = min(len(rows) - 1, selected + 1)
+        elif key in (10, 13, curses.KEY_ENTER, curses.KEY_RIGHT, ord("l")):
+            if selected < len(presets):
+                preset = selected
+                selected = len(presets)
+            elif selected == len(presets):
+                number = _prompt_int(stdscr, h - 4, 2, w, "每条生成份数", copies, 1, 99)
+                if number is not None:
+                    copies = number
+                    selected += 1
+            elif selected == len(presets) + 1:
+                audio_mode = (audio_mode + 1) % len(audio_modes)
+            else:
+                mode, label = audio_modes[audio_mode]
+                config.refresh()
+                if mode == "mislead":
+                    from . import web_config
+                    from .core.ab_audio import list_sources
+                    try:
+                        if config.AB_AUDIO_DIR is None:
+                            raise ValueError("请配置 AB 音频目录")
+                        list_sources(str(config.AB_AUDIO_DIR))
+                    except (ValueError, OSError) as exc:
+                        _flash(stdscr, f"{exc} · 设置：{web_config.start()}", "bad")
+                        continue
+                lines = [
+                    ("用户切片目录", _library_summary(paths)), ("原视频数", str(len(files))),
+                    ("处理强度", presets[preset][1]), ("每条生成", f"{copies} 份"),
+                    ("声音处理", label), ("成片总数", str(len(files) * copies)),
+                    ("输出", "各输入目录同级的去重目录"),
+                ]
+                if mode in ("hidden", "mislead"):
+                    lines.append(("声道", "单声道合并可能消音"))
+                if mode == "mislead":
+                    lines.append(("AB 音频目录", str(config.AB_AUDIO_DIR)))
+                if not _confirm(stdscr, lines):
+                    continue
+                argv = ["dedup", "--src-dir", settings.encoded_directories(paths),
+                        "--preset", presets[preset][0], "--copies", str(copies)]
+                if mode == "voice":
+                    argv += ["--voice-shift", "-1"]
+                elif mode != "off":
+                    argv += ["--ab-audio", mode]
+                    if mode == "mislead":
+                        argv += ["--ab-source", str(config.AB_AUDIO_DIR)]
+                return [argv]
 
 
 def _wizard_montage(stdscr, w: int) -> list[list[str]] | None:
