@@ -45,7 +45,9 @@ def register(subparsers) -> None:
                    choices=list(config.DEDUP_PRESETS),
                    help="去重档位：light 轻度 / standard 标准 / aggressive 激进")
     g.add_argument("--seed", type=int, action=ExplicitValue, default=0,
-                   help="随机化种子（0=按文件路径自动派生；同 seed 结果可复现）")
+                   help="随机种子（0=批量变体每次随机，普通单份按路径派生；非 0 可复现参数）")
+    g.add_argument("--copies", type=int, choices=range(1, 100), default=0, metavar="1..99",
+                   help="每条视频生成的独立变体份数，自动编号保留已有文件；省略则使用原单份输出规则")
     g.add_argument("--mirror", action=ExplicitBoolean, default=False,
                    help="允许水平镜像（有人脸朝向/文字的素材慎开，有人工复审风险）")
     g.add_argument("--speed", action=ExplicitBoolean, default=False, help="允许微变速（音画同步微调）")
@@ -72,6 +74,11 @@ def register(subparsers) -> None:
     g.add_argument("--voice-gain", type=float, default=1.0, help="配音增益 0～2")
     g.add_argument("--audio-fade-out", type=float, default=0.0,
                    help="整条混合音轨末尾淡出秒数 0～10")
+    g.add_argument("--voice-shift", type=float, default=0.0,
+                   help="音高与音色调整，-1.5～1.5 半音，保持语速；0 关闭")
+    g.add_argument("--ab-audio", choices=("off", "hidden", "mislead"), default="off",
+                   help="AB 音频：hidden 频谱掩蔽 / mislead 声纹扰频（单声道合并可能消音）")
+    g.add_argument("--ab-source", default="", help="声纹扰频素材：音频文件或目录；省略读取 AB 音频目录配置")
 
     g = p.add_argument_group("输出与自检")
     g.add_argument("--out-dir", default="", help="输出目录（默认源目录同级的去重）")
@@ -203,6 +210,24 @@ def _check_only(srcs: list[Path], args: argparse.Namespace) -> int:
 def run(args: argparse.Namespace) -> int:
     # Extra audio is strictly opt-in. Legacy no-flag requests follow the same
     # existing CLI, encoder, self-check and report path.
+    if args.copies and (args.in_place or args.force or args.check):
+        log("[错误] --copies 不能与 --in-place、--force 或 --check 合用")
+        return 2
+    ab_sources = ()
+    if args.ab_source and args.ab_audio != "mislead":
+        log("[错误] --ab-source 仅用于 --ab-audio mislead")
+        return 2
+    if args.ab_audio == "mislead":
+        from ..core.ab_audio import list_sources
+        material = args.ab_source or (str(config.AB_AUDIO_DIR) if config.AB_AUDIO_DIR else "")
+        if not material:
+            log("[错误] 请配置 AB 音频目录或指定 --ab-source")
+            return 2
+        try:
+            ab_sources = list_sources(material)
+        except (ValueError, OSError) as exc:
+            log(f"[AB 音频错误] {exc}")
+            return 2
     audio_mix = AudioMixOptions(
         bgm=getattr(args, "bgm", ""),
         ambience=getattr(args, "ambience", ""),
@@ -212,6 +237,9 @@ def run(args: argparse.Namespace) -> int:
         ambience_gain=getattr(args, "ambience_gain", 0.30),
         voice_gain=getattr(args, "voice_gain", 1.0),
         fade_out=getattr(args, "audio_fade_out", 0.0),
+        voice_shift=args.voice_shift,
+        ab_mode=args.ab_audio,
+        ab_sources=ab_sources,
     )
     try:
         validate_audio_options(audio_mix, check_only=bool(args.check))
@@ -262,7 +290,9 @@ def run(args: argparse.Namespace) -> int:
         srcs = [p for p in srcs if any(re.fullmatch(re.escape(stem) + r"_[1-9][0-9]*", p.stem)
                                       for stem in args.source_stems)]
     try:
-        if not args.in_place:
+        # Variant batches reserve their actual numbered destinations in core.
+        # Base stems may repeat across sources without sharing an output file.
+        if not args.in_place and not args.copies:
             validate_targets([(p, output_for(p)) for p in srcs])
     except ValueError as exc:
         log(f"[错误] {exc}")
@@ -271,6 +301,8 @@ def run(args: argparse.Namespace) -> int:
         log("[错误] 所选范围没有可处理的视频")
         return 1
     log(f"[范围] {len(srcs)} 个视频   档位 {args.preset}")
+    if args.copies:
+        log(f"[生成] 每条 {args.copies} 份，共 {len(srcs) * args.copies} 份")
     if profile_snapshot is not None:
         log(f"[账号预设] {profile_snapshot['account']} · version={profile_snapshot['version']}")
 
@@ -280,6 +312,7 @@ def run(args: argparse.Namespace) -> int:
     opts = DedupOptions(
         preset=args.preset,
         seed=(args.seed or None),
+        copies=args.copies,
         mirror=args.mirror,
         speed=args.speed,
         vary_bitrate=args.vary_bitrate,
@@ -306,16 +339,20 @@ def run(args: argparse.Namespace) -> int:
     for source in srcs:
         directory = str(output_directory(source))
         groups.setdefault(directory, []).append(source)
+    callbacks = {key: value for key, value in {
+        "on_start": getattr(args, "on_start", None),
+        "on_result": getattr(args, "on_item_result", None),
+        "on_publish": getattr(args, "on_publication", None),
+    }.items() if value is not None}
     items = []
-    for directory, sources in groups.items():
-        if STOP.flag:
-            break
-        callbacks = {key: value for key, value in {
-            "on_start": getattr(args, "on_start", None),
-            "on_result": getattr(args, "on_item_result", None),
-            "on_publish": getattr(args, "on_publication", None),
-        }.items() if value is not None}
-        items.extend(process_batch(sources, replace(opts, out_dir=directory), workers=args.workers, **callbacks))
+    if args.copies:
+        items = process_batch(srcs, opts, workers=args.workers,
+                              output_paths=[output_for(p) for p in srcs], **callbacks)
+    else:
+        for directory, sources in groups.items():
+            if STOP.flag:
+                break
+            items.extend(process_batch(sources, replace(opts, out_dir=directory), workers=args.workers, **callbacks))
 
     ok = sum(1 for i in items if i.get("ok"))
     bad = sum(1 for i in items if not i.get("ok") and not i.get("skipped"))

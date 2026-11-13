@@ -16,7 +16,9 @@ See [ENGINEERING.md](ENGINEERING.md), [DEDUP.md](DEDUP.md), and [MONTAGE.md](MON
 Users supply clips. Do not restore a public slice command or slicing wizard.
 PYCUT_SOURCE_DIR configures originals for tail-only fission, whose TUI requires an
 individual 0..99 count for each video (0 skips). cover/dedup use Web/.env roots and
-preserve sources. Montage TUI selects references, requires one shared 1..99 variant
+preserve sources. Dedup TUI selects strength and a shared 1..99 copies per source;
+each run independently seeds variants and numbers outputs without replacing earlier
+files. Montage TUI selects references, requires one shared 1..99 variant
 count, then confirms. All
 material roots scan recursively with file deduplication and no directory-symlink
 traversal. Explicit CLI arguments remain supported.

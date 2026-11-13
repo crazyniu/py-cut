@@ -68,7 +68,12 @@ stable parameter schema, including inert perspective_px, for existing consumers.
 
 Derive seeds with stable blake2b components, never Python's process-salted hash().
 Fixed path/seed/preset/switches reproduce parameter choices; binary output depends on
-encoder/environment. A zero/unspecified seed retains existing source-path derivation.
+encoder/environment. Without --copies, a zero/unspecified seed retains existing
+source-path derivation. With --copies 1..99, choose one fresh batch seed when zero or
+unspecified, then derive each output seed from the batch seed, resolved source path,
+and one-based within-run copy index. Explicit nonzero --seed reproduces those choices,
+independently of worker completion order and occupied output numbers. Print the batch
+seed and include batch_seed/variant alongside the actual seed in variant report rows.
 Optional bitrate and Ken Burns choices use independent RNG streams so enabling them
 does not shift the existing preset draws.
 
@@ -128,7 +133,16 @@ before touching the source. Cancellation/failure cannot publish incomplete outpu
 overwrite prior media. Existing-output skips are separate from successes/failures.
 
 Default outputs are input-root siblings `去重/`, preserving groups/numbers. Explicit
---out-dir wins. JSON reports use UTF-8 BOM and retain source/output, seed, preset,
+--out-dir wins. --copies appends `_变体_N` to each normal output stem and reserves all
+destinations before starting workers, skipping existing files and planned names.
+Sources with the same output stem share the numbering sequence; base-name collisions
+do not reject a variant batch. Seeds still depend on each source's resolved path.
+It cannot be combined with --check, --force, or --in-place. Without --copies, retain
+existing single-output naming and skip/overwrite behavior. The TUI always uses
+--copies and exposes strength plus a shared 1..99 count, defaulting to standard/one.
+Show the planned final-output count and retain settings when returning from confirmation.
+
+JSON reports use UTF-8 BOM and retain source/output, seed, preset,
 executed parameters, measurements, gates, errors, and timing. --no-report disables.
 Keep reported PSNR finite. Optional fields appear only for enabled operations;
 account reports use aliases and whitelisted preferences, never credentials.
@@ -138,14 +152,16 @@ account reports use aliases and whitelisted preferences, never credentials.
 ```bash
 ./run.sh dedup --file /media/clip.mp4 --preset standard
 ./run.sh dedup --src-dir /media/clips-a --src-dir /media/clips-b
+./run.sh dedup --src-dir /media/clips-a --preset standard --copies 5
 ./run.sh dedup --all --preset aggressive --seed 20261010
 ./run.sh dedup --file /media/clip.mp4 --sticker /media/sticker.png
 ./run.sh dedup --all --check
 ./run.sh dedup --help
 ```
 
-TUI reads Web/.env roots, previews count/output, and requires Enter to confirm.
-Advanced preset/seed/threshold/audio/profile options remain explicit CLI inputs.
+TUI reads Web/.env roots, selects preset/copies and sound mode, previews count/output,
+and requires Enter to confirm. Detailed audio gains, seed, thresholds and profiles
+remain CLI options. See DEDUP_AUDIO.md for voice shift and AB audio semantics.
 Users supply clips; internal legacy slicing is not a public workflow prerequisite.
 
 | Module | Responsibility |

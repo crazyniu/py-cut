@@ -19,6 +19,7 @@ FIELDS = {
     'PYCUT_INTRO_DIR': ('前贴目录', '可添加多个目录，递归读取；留空或没有视频时跳过，保留前贴原声和字幕'),
     'PYCUT_OUTPUT_DIR': ('成片输出目录', '每次混剪在此新建一个批次目录，所有成片集中存放，只输出视频；字幕擦除和去重默认另存输入目录同级'),
     'PYCUT_STICKER_DIR': ('贴纸目录', '可选；留空时使用现有在线贴纸'),
+    'PYCUT_AB_AUDIO_DIR': ('AB 音频目录', '声纹扰频使用的音频素材'),
     'PYCUT_MAIN_URL': ('主网关地址', 'OpenAI 兼容 API 地址'),
     'PYCUT_MAIN_MODEL': ('主模型', '填写支持视觉检测的模型'),
     'PYCUT_MAIN_KEY': ('主网关 API Key', '留空保留已有密钥'),
